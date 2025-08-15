@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "362152912464",
+    "project_id": "muscleshare-b34dd",
+    "storage_bucket": "muscleshare-b34dd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:362152912464:android:d7464f77ec9c472003d355",
+        "android_client_info": {
+          "package_name": "com.example.muscle_share"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDBZJjV-rlL-QbUdjTmoTpQ_Lta52VJE1k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:362152912464:android:e9fd977eebd07ae703d355",
+        "android_client_info": {
+          "package_name": "com.example.yourpay"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDBZJjV-rlL-QbUdjTmoTpQ_Lta52VJE1k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,17 @@
+{
+  "engines": { "node": "20" },        
+  "main": "lib/index.js",                  
+  "scripts": {
+    "build": "tsc",
+    "deploy": "npm run build && firebase deploy --only functions"
+  },
+  "dependencies": {
+    "firebase-admin": "^12",
+    "firebase-functions": "^5",             
+    "stripe": "^14",
+    "dotenv": "^16"
+  },
+  "devDependencies": {
+    "typescript": "^5.4"
+  }
+}
