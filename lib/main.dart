@@ -1,12 +1,16 @@
+import 'dart:ui_web';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:yourpay/StoreListScreen.dart';
-import 'screens/Login_screens.dart';
-import 'screens/store_dashboard_screen.dart';
+import 'package:flutter_web_plugins/flutter_web_plugins.dart';
+import 'package:yourpay/screens/public_store_page.dart';
+import 'package:yourpay/screens/staff_detail_page.dart';
+import 'package:yourpay/screens/store_list_screen.dart';
+import 'screens/login_screens.dart';
+import 'screens/store_detail_screen.dart';
 import 'screens/admin_console_screen.dart';
 import 'screens/payer_landing_screen.dart';
 
@@ -22,6 +26,7 @@ const firebaseOptions = FirebaseOptions(
 );
 
 Future<void> main() async {
+  setUrlStrategy(const HashUrlStrategy());
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: firebaseOptions);
   //await connectToEmulatorsIfDebug(); // ← 追加
@@ -47,22 +52,49 @@ class MyApp extends StatelessWidget {
       title: 'YourPay',
       theme: ThemeData.dark(useMaterial3: true),
       onGenerateRoute: (settings) {
-        // /payer?sid=cs_test_xxx のようなURLを想定
-        if (settings.name?.startsWith('/payer') == true) {
-          final uri = Uri.parse(settings.name!);
+        final name = settings.name ?? '/';
+        final uri = Uri.parse(name);
+
+        // 既存: /payer?sid=...
+        if (uri.path == '/payer') {
           final sid = uri.queryParameters['sid'] ?? '';
           return MaterialPageRoute(
             builder: (_) => PayerLandingScreen(sessionId: sid),
           );
         }
-        return null;
+
+        // ★ 追加: /p?t=... を PublicStorePage へ
+        if (uri.path == '/p') {
+          final tid = uri.queryParameters['t'];
+          return MaterialPageRoute(
+            builder: (_) => const PublicStorePage(),
+            settings: RouteSettings(arguments: {'tenantId': tid}),
+          );
+        }
+
+        // （必要なら）/staff?tid=...&eid=...
+        if (uri.path == '/staff') {
+          return MaterialPageRoute(
+            builder: (_) => const StaffDetailPage(),
+            settings: RouteSettings(
+              arguments: {
+                'tenantId': uri.queryParameters['tid'],
+                'employeeId': uri.queryParameters['eid'],
+              },
+            ),
+          );
+        }
+
+        return null; // ← これで他は routes テーブルにフォールバック
       },
+
       routes: {
         '/': (_) => const Root(),
         '/login': (_) => const LoginScreen(),
         '/stores': (_) => const StoreListScreen(),
-        '/store': (_) => const StoreDashboardScreen(),
-        '/admin': (_) => const AdminConsoleScreen(),
+        '/store': (_) => const StoreDetailScreen(),
+        '/p': (_) => const PublicStorePage(),
+        '/staff': (_) => const StaffDetailPage(), // ← 追加
       },
     );
   }
@@ -120,7 +152,7 @@ class _StoreOrAdminSwitcherState extends State<StoreOrAdminSwitcher> {
     if (_role == 'superadmin') {
       return const AdminConsoleScreen();
     } else {
-      return const StoreDashboardScreen();
+      return const StoreDetailScreen();
     }
   }
 }

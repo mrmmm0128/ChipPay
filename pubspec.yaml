@@ -39,8 +39,12 @@ dependencies:
   firebase_auth: ^5.3.1
   cloud_functions: ^5.1.4
   qr_flutter: ^4.1.0
-  url_launcher: ^6.3.0
+  url_launcher: ^6.3.2
   intl: ^0.19.0
+  firebase_storage: ^12.4.10
+  file_picker: ^10.3.1
+  flutter_web_plugins:
+    sdk: flutter
 
 
 dev_dependencies:

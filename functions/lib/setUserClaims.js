@@ -32,9 +32,6 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
-var __exportStar = (this && this.__exportStar) || function(m, exports) {
-    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.setUserClaims = void 0;
 const functions = __importStar(require("firebase-functions"));
@@ -51,4 +48,3 @@ exports.setUserClaims = functions.https.onCall(async (data, ctx) => {
     await admin.auth().setCustomUserClaims(uid, { tenantId, role });
     return { ok: true };
 });
-__exportStar(require("./setUserClaims"), exports);

@@ -1,15 +1,18 @@
 {
-  "engines": { "node": "20" },        
-  "main": "lib/index.js",                  
+  "engines": {
+    "node": "20"
+  },
+  "main": "lib/index.js",
   "scripts": {
     "build": "tsc",
     "deploy": "npm run build && firebase deploy --only functions"
   },
   "dependencies": {
+    "@sendgrid/mail": "^8.1.5",
+    "dotenv": "^16",
     "firebase-admin": "^12",
-    "firebase-functions": "^5",             
-    "stripe": "^14",
-    "dotenv": "^16"
+    "firebase-functions": "^5",
+    "stripe": "^14"
   },
   "devDependencies": {
     "typescript": "^5.4"
