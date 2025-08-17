@@ -6,6 +6,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:url_launcher/url_launcher_string.dart';
 
 class StoreDetailScreen extends StatefulWidget {
   const StoreDetailScreen({super.key});
@@ -84,6 +85,17 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
     }
   }
 
+  final _functions = FirebaseFunctions.instanceFor(region: 'us-central1');
+
+  Future<void> _openOnboarding() async {
+    if (tenantId == null) return;
+    final res = await _functions
+        .httpsCallable('createAccountOnboardingLink')
+        .call({'tenantId': tenantId});
+    final url = (res.data as Map)['url'] as String;
+    await launchUrlString(url, mode: LaunchMode.externalApplication);
+  }
+
   // ====== 決済：セッション作成 ======
   Future<void> createSession() async {
     setState(() => loading = true);
@@ -110,19 +122,19 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
   }
 
   // ====== スタッフ：追加ダイアログ ======
-  Future<void> _pickEmployeePhoto() async {
-    final res = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      allowMultiple: false,
-      withData: true, // Web対応：bytesを取得
-    );
-    if (res != null && res.files.isNotEmpty) {
-      setState(() {
-        _empPhotoBytes = res.files.single.bytes;
-        _empPhotoName = res.files.single.name;
-      });
-    }
-  }
+  // Future<void> _pickEmployeePhoto() async {
+  //   final res = await FilePicker.platform.pickFiles(
+  //     type: FileType.image,
+  //     allowMultiple: false,
+  //     withData: true, // Web対応：bytesを取得
+  //   );
+  //   if (res != null && res.files.isNotEmpty) {
+  //     setState(() {
+  //       _empPhotoBytes = res.files.single.bytes;
+  //       _empPhotoName = res.files.single.name;
+  //     });
+  //   }
+  // }
 
   void _makeStoreQr() {
     if (tenantId == null) {
@@ -145,67 +157,125 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
   }
 
   Future<void> _openAddEmployeeDialog() async {
-    _empNameCtrl.clear();
-    _empEmailCtrl.clear();
+    // 前回選択のクリア
     _empPhotoBytes = null;
     _empPhotoName = null;
+    _empNameCtrl.clear();
+    _empEmailCtrl.clear();
+    _addingEmp = false;
 
     await showDialog(
       context: context,
       barrierDismissible: false,
       builder: (_) => StatefulBuilder(
         builder: (context, setLocal) {
-          Future<void> localPick() async {
-            final res = await FilePicker.platform.pickFiles(
-              type: FileType.image,
-              allowMultiple: false,
-              withData: true,
-            );
-            if (res != null && res.files.isNotEmpty) {
-              setLocal(() {
-                _empPhotoBytes = res.files.single.bytes;
-                _empPhotoName = res.files.single.name;
-              });
+          // ★ ヘルパー：content-type 判定
+          String _detectContentType(String? filename) {
+            final ext = (filename ?? '').split('.').last.toLowerCase();
+            switch (ext) {
+              case 'jpg':
+              case 'jpeg':
+                return 'image/jpeg';
+              case 'png':
+                return 'image/png';
+              case 'webp':
+                return 'image/webp';
+              case 'gif':
+                return 'image/gif';
+              default:
+                return 'image/jpeg';
             }
+          }
+
+          // ★ ピッカーは同期に起動（awaitしない）
+          void localPick() {
+            if (_addingEmp) return;
+            FilePicker.platform
+                .pickFiles(
+                  type: FileType.image,
+                  allowMultiple: false,
+                  withData: true, // Web でも bytes を取得
+                )
+                .then((res) async {
+                  try {
+                    if (res == null || res.files.isEmpty) return;
+                    final f = res.files.single;
+
+                    Uint8List? bytes = f.bytes;
+                    // 一部環境向けフォールバック（readStream）
+                    if (bytes == null && f.readStream != null) {
+                      final chunks = <int>[];
+                      await for (final c in f.readStream!) {
+                        chunks.addAll(c);
+                      }
+                      bytes = Uint8List.fromList(chunks);
+                    }
+                    if (bytes == null) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('画像の読み込みに失敗しました')),
+                        );
+                      }
+                      return;
+                    }
+
+                    if (context.mounted) {
+                      setLocal(() {
+                        _empPhotoBytes = bytes;
+                        _empPhotoName = f.name;
+                      });
+                    }
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(SnackBar(content: Text('画像選択エラー: $e')));
+                    }
+                  }
+                });
           }
 
           return AlertDialog(
             title: const Text('社員を追加'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                GestureDetector(
-                  onTap: _addingEmp ? null : localPick,
-                  child: CircleAvatar(
-                    radius: 40,
-                    backgroundImage: (_empPhotoBytes != null)
-                        ? MemoryImage(_empPhotoBytes!)
-                        : null,
-                    child: (_empPhotoBytes == null)
-                        ? const Icon(Icons.camera_alt, size: 28)
-                        : null,
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // ★ タップ取りこぼし防止
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _addingEmp ? null : localPick,
+                    child: CircleAvatar(
+                      radius: 40,
+                      backgroundImage: (_empPhotoBytes != null)
+                          ? MemoryImage(_empPhotoBytes!)
+                          : null,
+                      child: (_empPhotoBytes == null)
+                          ? const Icon(Icons.camera_alt, size: 28)
+                          : null,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _empNameCtrl,
-                  decoration: const InputDecoration(labelText: '名前（必須）'),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _empEmailCtrl,
-                  decoration: const InputDecoration(labelText: 'メールアドレス（任意）'),
-                  keyboardType: TextInputType.emailAddress,
-                ),
-                const SizedBox(height: 4),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    '名前は必須。写真とメールは任意です',
-                    style: Theme.of(context).textTheme.bodySmall,
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _empNameCtrl,
+                    decoration: const InputDecoration(labelText: '名前（必須）'),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _empEmailCtrl,
+                    decoration: const InputDecoration(labelText: 'メールアドレス（任意）'),
+                    keyboardType: TextInputType.emailAddress,
+                  ),
+                  const SizedBox(height: 4),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '名前は必須。写真とメールは任意です',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
             ),
             actions: [
               TextButton(
@@ -216,7 +286,6 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
                 onPressed: _addingEmp
                     ? null
                     : () async {
-                        // 必須チェック（名前のみ）
                         final name = _empNameCtrl.text.trim();
                         final email = _empEmailCtrl.text.trim();
                         if (name.isEmpty) {
@@ -225,7 +294,6 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
                           );
                           return;
                         }
-                        // メールは任意だが、入っていれば形式チェック
                         if (email.isNotEmpty && !_validateEmail(email)) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
@@ -248,14 +316,10 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
                           // 写真は任意：あるときだけアップロード
                           String photoUrl = '';
                           if (_empPhotoBytes != null) {
-                            final ext =
-                                (_empPhotoName
-                                    ?.split('.')
-                                    .last
-                                    .toLowerCase()) ??
-                                'jpg';
-                            final contentType =
-                                'image/${ext == 'jpg' ? 'jpeg' : ext}';
+                            final contentType = _detectContentType(
+                              _empPhotoName,
+                            );
+                            final ext = contentType.split('/').last; // jpeg 等
                             final storageRef = FirebaseStorage.instance
                                 .ref()
                                 .child(
@@ -272,8 +336,8 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
                           // Firestore に保存（メール/写真は空でもOK）
                           await empRef.set({
                             'name': name,
-                            'email': email, // 空文字のままでもOK
-                            'photoUrl': photoUrl, // 空文字のままでもOK
+                            'email': email,
+                            'photoUrl': photoUrl,
                             'createdAt': FieldValue.serverTimestamp(),
                             'createdBy': {'uid': user.uid, 'email': user.email},
                           });
@@ -355,34 +419,130 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          children: [
-                            const SizedBox(width: 12),
-                            FilledButton.icon(
-                              onPressed: loading ? null : _makeStoreQr,
-                              icon: const Icon(Icons.qr_code_2),
-                              label: const Text('店舗QRコード発行'),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        const SizedBox(height: 12),
-                        if (publicStoreUrl != null)
-                          Card(
-                            child: Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Column(
-                                children: [
-                                  QrImageView(data: publicStoreUrl!, size: 240),
-                                  const SizedBox(height: 8),
-                                  SelectableText(
-                                    publicStoreUrl!,
-                                    style: const TextStyle(fontSize: 12),
+                        // ※ tenantId が null じゃない前提で呼ばれる位置に置いてください
+                        StreamBuilder<DocumentSnapshot>(
+                          stream: FirebaseFirestore.instance
+                              .collection('tenants')
+                              .doc(tenantId)
+                              .snapshots(),
+                          builder: (context, snap) {
+                            if (snap.connectionState ==
+                                ConnectionState.waiting) {
+                              return const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 12),
+                                child: LinearProgressIndicator(minHeight: 2),
+                              );
+                            }
+                            final data =
+                                snap.data?.data() as Map<String, dynamic>?;
+
+                            final hasAccount =
+                                ((data?['stripeAccountId'] as String?)
+                                    ?.isNotEmpty ??
+                                false);
+                            final connected =
+                                (data?['connect']?['charges_enabled']
+                                    as bool?) ??
+                                false;
+
+                            // 未接続時は既存のQRを消しておく（任意）
+                            if (!connected && publicStoreUrl != null) {
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                if (mounted)
+                                  setState(() => publicStoreUrl = null);
+                              });
+                            }
+
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // ① 接続してない場合は注意カード
+                                if (!connected)
+                                  Card(
+                                    color: Colors.amber.withOpacity(0.15),
+                                    child: ListTile(
+                                      leading: const Icon(Icons.info_outline),
+                                      title: Text(
+                                        hasAccount
+                                            ? 'Stripeオンボーディング未完了のため、QR発行はできません。'
+                                            : 'Stripe未接続のため、QR発行はできません。',
+                                      ),
+                                      subtitle: const Text(
+                                        '決済を受け付けるにはStripeに接続し、オンボーディングを完了してください。',
+                                      ),
+                                      trailing: FilledButton(
+                                        onPressed: _openOnboarding,
+                                        child: Text(
+                                          hasAccount ? '続きから再開' : 'Stripeに接続',
+                                        ),
+                                      ),
+                                    ),
                                   ),
-                                ],
-                              ),
-                            ),
-                          ),
+
+                                // ② QR発行ボタン（接続済みでないと押せない）
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: FilledButton.icon(
+                                        onPressed: (connected && !loading)
+                                            ? _makeStoreQr
+                                            : null,
+                                        icon: const Icon(Icons.qr_code_2),
+                                        label: const Text('店舗QRコード発行'),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+
+                                const SizedBox(height: 12),
+
+                                // ③ 接続済み & URLが生成されたらQRを表示
+                                if (connected && publicStoreUrl != null)
+                                  Card(
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(16),
+                                      child: Column(
+                                        children: [
+                                          QrImageView(
+                                            data: publicStoreUrl!,
+                                            size: 240,
+                                          ),
+                                          const SizedBox(height: 8),
+                                          SelectableText(
+                                            publicStoreUrl!,
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 8),
+                                          Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              OutlinedButton.icon(
+                                                icon: const Icon(
+                                                  Icons.open_in_new,
+                                                ),
+                                                label: const Text('開く'),
+                                                onPressed: () =>
+                                                    launchUrlString(
+                                                      publicStoreUrl!,
+                                                      mode: LaunchMode
+                                                          .externalApplication,
+                                                    ),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            );
+                          },
+                        ),
+
+                        const SizedBox(height: 12),
 
                         const SizedBox(height: 16),
                         const Text('直近セッション'),
@@ -390,14 +550,16 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
                         Expanded(
                           child: StreamBuilder<QuerySnapshot>(
                             stream: FirebaseFirestore.instance
-                                .collection('paymentSessions')
-                                .where('tenantId', isEqualTo: tenantId)
+                                .collection('tenants')
+                                .doc(
+                                  tenantId,
+                                ) // ← ここがポイント：テナント配下の tips サブコレクション
+                                .collection('tips')
                                 .orderBy('createdAt', descending: true)
                                 .limit(50)
                                 .snapshots(),
                             builder: (context, snap) {
                               if (snap.hasError) {
-                                // よくある原因: ルール or インデックス不足
                                 return Center(
                                   child: Padding(
                                     padding: const EdgeInsets.all(16),
@@ -419,8 +581,21 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
                               final docs = snap.data?.docs ?? [];
                               if (docs.isEmpty) {
                                 return const Center(
-                                  child: Text('まだセッションがありません'),
+                                  child: Text('まだチップ履歴がありません'),
                                 );
+                              }
+
+                              String _symbol(String code) {
+                                switch ((code).toUpperCase()) {
+                                  case 'JPY':
+                                    return '¥';
+                                  case 'USD':
+                                    return '\$';
+                                  case 'EUR':
+                                    return '€';
+                                  default:
+                                    return ''; // 記号が不明なら後ろに通貨コードを出す
+                                }
                               }
 
                               return ListView.separated(
@@ -430,20 +605,80 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
                                 itemBuilder: (_, i) {
                                   final d =
                                       docs[i].data() as Map<String, dynamic>;
-                                  final amount = d['amount'];
-                                  final status = d['status'];
-                                  final url = d['stripeCheckoutUrl'] ?? '';
+
+                                  final recipient = (d['recipient'] as Map?)
+                                      ?.cast<String, dynamic>();
+                                  final isEmployee =
+                                      (recipient?['type'] == 'employee') ||
+                                      (d['employeeId'] != null);
+                                  final employeeName =
+                                      recipient?['employeeName'] ??
+                                      d['employeeName'] ??
+                                      'スタッフ';
+                                  final storeName =
+                                      recipient?['storeName'] ??
+                                      d['storeName'] ??
+                                      '店舗';
+
+                                  final targetLabel = isEmployee
+                                      ? 'スタッフ: $employeeName'
+                                      : '店舗: $storeName';
+
+                                  final amountNum = (d['amount'] as num?) ?? 0;
+                                  final currency =
+                                      (d['currency'] as String?)
+                                          ?.toUpperCase() ??
+                                      'JPY';
+                                  final symbol = _symbol(currency);
+                                  final amountText = symbol.isNotEmpty
+                                      ? '$symbol${amountNum.toInt()}'
+                                      : '${amountNum.toInt()} $currency';
+
+                                  final status =
+                                      (d['status'] as String?) ?? 'unknown';
+                                  final ts = d['createdAt'];
+                                  String when = '';
+                                  if (ts is Timestamp) {
+                                    final dt = ts.toDate().toLocal();
+                                    // 見やすい簡易フォーマット（intl なし）
+                                    when =
+                                        '${dt.year}/${dt.month.toString().padLeft(2, '0')}/${dt.day.toString().padLeft(2, '0')} '
+                                        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+                                  }
+
                                   return ListTile(
-                                    leading: const Icon(Icons.receipt_long),
-                                    title: Text('¥$amount  •  $status'),
-                                    subtitle: Text(
-                                      url,
+                                    leading: CircleAvatar(
+                                      child: Icon(
+                                        isEmployee ? Icons.person : Icons.store,
+                                      ),
+                                    ),
+                                    title: Text(
+                                      targetLabel,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                     ),
-                                    trailing: Text(
-                                      (d['currency'] ?? 'JPY').toString(),
+                                    subtitle: Text(
+                                      [
+                                        'ステータス: $status',
+                                        if (when.isNotEmpty) when,
+                                      ].join('  •  '),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
                                     ),
+                                    trailing: Text(
+                                      amountText,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                                    // 必要なら onTap で URL を開く（pending の時など）
+                                    // onTap: () {
+                                    //   final url = d['stripeCheckoutUrl'] as String?;
+                                    //   if (url != null && url.isNotEmpty) {
+                                    //     launchUrlString(url, mode: LaunchMode.externalApplication);
+                                    //   }
+                                    // },
                                   );
                                 },
                               );

@@ -140,6 +140,7 @@ class _PublicStorePageState extends State<PublicStorePage> {
                           '/staff',
                           arguments: {
                             'tenantId': tenantId,
+                            "tenantName": tenantName,
                             'employeeId': id,
                             'name': d['name'],
                             'email': d['email'],

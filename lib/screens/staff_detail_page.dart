@@ -1,7 +1,8 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher_string.dart';
+import 'package:yourpay/screens/tip_waiting_page.dart';
 
 class StaffDetailPage extends StatefulWidget {
   const StaffDetailPage({super.key});
@@ -15,6 +16,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
   String? name;
   String? email;
   String? photoUrl;
+  String? tenantName;
 
   final _amountCtrl = TextEditingController(text: '500');
   bool _loading = false;
@@ -29,7 +31,15 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
       name = args['name'] as String?;
       email = args['email'] as String?;
       photoUrl = args['photoUrl'] as String?;
+      tenantName = args["tenantName"] as String?;
       setState(() {});
+    }
+  }
+
+  Future<void> _ensureAnonSignIn() async {
+    final auth = FirebaseAuth.instance;
+    if (auth.currentUser == null) {
+      await auth.signInAnonymously();
     }
   }
 
@@ -45,7 +55,6 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
 
     setState(() => _loading = true);
     try {
-      // 認証不要のCallableにリクエスト
       final callable = FirebaseFunctions.instance.httpsCallable(
         'createTipSessionPublic',
       );
@@ -56,9 +65,29 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
         'memo': 'Tip to ${name ?? ''}',
       });
 
-      final checkoutUrl = (result.data as Map)['checkoutUrl'] as String;
-      // Stripe Checkout を外部で開く
+      final data = Map<String, dynamic>.from(result.data as Map);
+      final checkoutUrl = data['checkoutUrl'] as String;
+      final sessionId = data['sessionId'] as String;
+
+      // Stripe Checkout を新規タブで開く
       await launchUrlString(checkoutUrl, mode: LaunchMode.externalApplication);
+      await _ensureAnonSignIn();
+
+      if (!mounted) return;
+      // ★ 完了ページには行かず、待機ページへ
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => TipWaitingPage(
+            sessionId: sessionId,
+            tenantId: tenantId!,
+            tenantName: tenantName,
+            amount: amount,
+            employeeName: name,
+            checkoutUrl: checkoutUrl,
+          ),
+        ),
+      );
     } catch (e) {
       ScaffoldMessenger.of(
         context,

@@ -152,7 +152,7 @@ class _StoreOrAdminSwitcherState extends State<StoreOrAdminSwitcher> {
     if (_role == 'superadmin') {
       return const AdminConsoleScreen();
     } else {
-      return const StoreDetailScreen();
+      return const LoginScreen();
     }
   }
 }

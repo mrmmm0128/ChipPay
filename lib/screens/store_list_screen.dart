@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher_string.dart';
 
 class StoreListScreen extends StatefulWidget {
   const StoreListScreen({super.key});
@@ -12,6 +14,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
   final _nameCtrl = TextEditingController();
   bool _creating = false;
   String? _justCreatedId; // 直近に作成したテナントをハイライト
+  final _functions = FirebaseFunctions.instanceFor(region: 'us-central1');
 
   @override
   void dispose() {
@@ -56,6 +59,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('店舗を作成しました')));
+      await _createConnectAndMaybeOnboard(ref.id);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -63,6 +67,79 @@ class _StoreListScreenState extends State<StoreListScreen> {
       ).showSnackBar(SnackBar(content: Text('作成に失敗: $e')));
     } finally {
       if (mounted) setState(() => _creating = false);
+    }
+  }
+
+  Future<void> _createConnectAndMaybeOnboard(String tenantId) async {
+    await showDialog(
+      context: context,
+      barrierDismissible: false, // タップで閉じられないように
+      builder: (_) => WillPopScope(
+        onWillPop: () async => false, // 戻る無効
+        child: const Dialog(
+          child: Padding(
+            padding: EdgeInsets.all(20),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(width: 16),
+                Flexible(child: Text('Stripe接続の準備中…')),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    try {
+      // 1) Connect アカウント作成（複数回呼んでも既存IDを返すよう実装済み想定）
+      await _functions.httpsCallable('createConnectAccountForTenant').call({
+        'tenantId': tenantId,
+      });
+
+      // 2) 今すぐオンボーディングするか確認
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Stripeに接続しますか？'),
+          content: const Text('決済を受け付けるにはStripeアカウントのオンボーディングが必要です。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('あとで'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('今すぐ接続'),
+            ),
+          ],
+        ),
+      );
+
+      if (go == true) {
+        // 3) オンボーディングリンク発行 → 外部ブラウザで開く
+        final res = await _functions
+            .httpsCallable('createAccountOnboardingLink')
+            .call({'tenantId': tenantId});
+        final url = (res.data as Map)['url'] as String;
+        await launchUrlString(url, mode: LaunchMode.externalApplication);
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('後から「Stripeに接続」ボタンから再開できます')),
+          );
+        }
+      }
+    } on FirebaseFunctionsException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Stripe接続の準備に失敗: ${e.code} ${e.message ?? ''}')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Stripe接続の準備に失敗: $e')));
     }
   }
 
@@ -104,7 +181,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
       return const SizedBox.shrink();
     }
 
-    // 複合インデックス不要のため orderBy は外し、クライアント側で並び替えます
+    // 複合インデックス不要のため orderBy は外し、クライアント側で並び替え
     final stream = FirebaseFirestore.instance
         .collection('tenants')
         .where('memberUids', arrayContains: uid)
