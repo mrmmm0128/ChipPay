@@ -71,11 +71,12 @@ class _StoreListScreenState extends State<StoreListScreen> {
   }
 
   Future<void> _createConnectAndMaybeOnboard(String tenantId) async {
-    await showDialog(
+    // 1) ぐるぐる表示（await しない！）
+    showDialog(
       context: context,
-      barrierDismissible: false, // タップで閉じられないように
+      barrierDismissible: false,
       builder: (_) => WillPopScope(
-        onWillPop: () async => false, // 戻る無効
+        onWillPop: () async => false,
         child: const Dialog(
           child: Padding(
             padding: EdgeInsets.all(20),
@@ -91,55 +92,84 @@ class _StoreListScreenState extends State<StoreListScreen> {
         ),
       ),
     );
+
     try {
-      // 1) Connect アカウント作成（複数回呼んでも既存IDを返すよう実装済み想定）
+      // 2) Connect アカウント作成
       await _functions.httpsCallable('createConnectAccountForTenant').call({
         'tenantId': tenantId,
       });
+    } on FirebaseFunctionsException catch (e) {
+      // 失敗時も必ず閉じる
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop(); // ぐるぐる閉じる
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Stripe接続の準備に失敗: ${e.code} ${e.message ?? ''}'),
+          ),
+        );
+      }
+      return;
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Stripe接続の準備に失敗: $e')));
+      }
+      return;
+    }
 
-      // 2) 今すぐオンボーディングするか確認
-      final go = await showDialog<bool>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('Stripeに接続しますか？'),
-          content: const Text('決済を受け付けるにはStripeアカウントのオンボーディングが必要です。'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('あとで'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('今すぐ接続'),
-            ),
-          ],
-        ),
-      );
+    // 3) 成功したので ぐるぐるを閉じる
+    if (mounted) {
+      Navigator.of(context, rootNavigator: true).pop();
+    } else {
+      return;
+    }
 
-      if (go == true) {
-        // 3) オンボーディングリンク発行 → 外部ブラウザで開く
+    // 4) 今すぐオンボーディングするか確認
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Stripeに接続しますか？'),
+        content: const Text('決済を受け付けるにはStripeアカウントのオンボーディングが必要です。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('あとで'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('今すぐ接続'),
+          ),
+        ],
+      ),
+    );
+
+    if (go == true) {
+      try {
         final res = await _functions
             .httpsCallable('createAccountOnboardingLink')
             .call({'tenantId': tenantId});
         final url = (res.data as Map)['url'] as String;
         await launchUrlString(url, mode: LaunchMode.externalApplication);
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('後から「Stripeに接続」ボタンから再開できます')),
-          );
-        }
+      } on FirebaseFunctionsException catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('オンボーディング開始に失敗: ${e.code} ${e.message ?? ''}'),
+          ),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('オンボーディング開始に失敗: $e')));
       }
-    } on FirebaseFunctionsException catch (e) {
+    } else {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Stripe接続の準備に失敗: ${e.code} ${e.message ?? ''}')),
+        const SnackBar(content: Text('後から「Stripeに接続」ボタンから再開できます')),
       );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Stripe接続の準備に失敗: $e')));
     }
   }
 
