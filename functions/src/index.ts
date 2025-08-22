@@ -3,6 +3,8 @@ import * as admin from "firebase-admin";
 import Stripe from "stripe";
 import * as dotenv from "dotenv";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { onDocumentWritten } from "firebase-functions/v2/firestore";
+import { Resend } from "resend";
 dotenv.config();
 
 admin.initializeApp();
@@ -117,6 +119,8 @@ export const createCheckoutSession =
   });
 
 /** Stripe Webhook（rawBody を使って署名検証） */
+// 既存：export const stripeWebhook = functions.region("us-central1")
+// ↓↓↓ こう変える（SENDGRID_API_KEY を secrets に追加）
 export const stripeWebhook =
   functions.region("us-central1")
     .runWith({
@@ -125,9 +129,12 @@ export const stripeWebhook =
         "STRIPE_WEBHOOK_SECRET",
         "STRIPE_CONNECT_WEBHOOK_SECRET",
         "FRONTEND_BASE_URL",
+        "SENDGRID_API_KEY", // ★ ADD
+        // MAIL_FROM / MAIL_FROM_NAME は Secret でも env でもOK。必要ならここに追加。
       ],
       memory: "256MB",
     })
+      // （以下は既存と同じ）
     .https.onRequest(async (req, res): Promise<void> => {
       const sig = req.headers["stripe-signature"] as string | undefined;
       if (!sig) {
@@ -241,6 +248,7 @@ export const stripeWebhook =
       },
       { merge: true }
     );
+
   }
 }
 
@@ -613,6 +621,124 @@ export const createAccountOnboardingLink = onCall(
     return { url: link.url };
   }
 );
+
+/** tips ドキュメントを読んで、宛先と本文を組み立てて Resend で送信 */
+async function sendTipNotificationWithResend(tenantId: string, tipId: string) {
+  const db = admin.firestore();
+  const tipRef = db.collection("tenants").doc(tenantId).collection("tips").doc(tipId);
+  const tipSnap = await tipRef.get();
+  if (!tipSnap.exists) return;
+
+  const tip = tipSnap.data()!;
+  const amount: number = (tip.amount as number) ?? 0;
+  const currency = (tip.currency as string)?.toUpperCase() ?? "JPY";
+  const recipient: any = tip.recipient ?? {};
+  const isEmployee = recipient.type === "employee" || !!tip.employeeId;
+
+  // ---- 宛先を決定 ----
+  const to: string[] = [];
+  if (isEmployee) {
+    const empId = (tip.employeeId as string) ?? recipient.employeeId;
+    if (empId) {
+      const empSnap = await db.collection("tenants").doc(tenantId).collection("employees").doc(empId).get();
+      const empEmail = empSnap.get("email") as string | undefined;
+      if (empEmail) to.push(empEmail);
+    }
+  } else {
+    const tenSnap = await db.collection("tenants").doc(tenantId).get();
+    const notify = tenSnap.get("notificationEmails") as string[] | undefined; // 例: ['owner@ex.com']
+    if (notify?.length) to.push(...notify);
+  }
+  // fallback（tipに直接メールが入っていたら使う）
+  if (to.length === 0) {
+    const fallback =
+      (tip.employeeEmail as string | undefined) ||
+      (recipient.employeeEmail as string | undefined) ||
+      (tip.storeEmail as string | undefined);
+    if (fallback) to.push(fallback);
+  }
+  if (to.length === 0) {
+    console.warn("[Resend] no recipient found", { tenantId, tipId });
+    return;
+  }
+
+  // ---- 表示用 ----
+  const isJPY = currency === "JPY";
+  const money = isJPY ? `¥${amount.toLocaleString("ja-JP")}` : `${amount} ${currency}`;
+  const name = isEmployee
+    ? (tip.employeeName ?? recipient.employeeName ?? "スタッフ")
+    : (tip.storeName ?? recipient.storeName ?? "店舗");
+  const memo = (tip.memo as string) || "";
+  const createdAt: Date = tip.createdAt?.toDate?.() ?? new Date();
+  const subject = isEmployee ? `チップを受け取りました: ${money}` : `店舗宛のチップ: ${money}`;
+  const text = [
+    `受取先: ${name}`,
+    `金額: ${money}`,
+    memo ? `メモ: ${memo}` : "",
+    `日時: ${createdAt.toLocaleString("ja-JP")}`,
+  ].filter(Boolean).join("\n");
+  const html = `
+  <div style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; line-height:1.6; color:#111">
+    <h2 style="margin:0 0 12px">🎉 ${escapeHtml(subject)}</h2>
+    <p style="margin:0 0 6px">受取先：<strong>${escapeHtml(name)}</strong></p>
+    <p style="margin:0 0 6px">金額：<strong>${escapeHtml(money)}</strong></p>
+    ${memo ? `<p style="margin:0 0 6px">メモ：${escapeHtml(memo)}</p>` : ""}
+    <p style="margin:0 0 6px">日時：${createdAt.toLocaleString("ja-JP")}</p>
+  </div>`;
+
+  // ---- Resend 送信 ----
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    console.warn("[Resend] missing RESEND_API_KEY, skip email");
+    return;
+  }
+  const resend = new Resend(apiKey);
+  await resend.emails.send({
+    from: "YourPay 通知 <notify@appfromkomeda.jp>", // ★ Resendで認証済みの差出人に変更
+    to,
+    subject,
+    text,
+    html,
+  });
+
+  await tipRef.set(
+    { notification: { emailedAt: admin.firestore.FieldValue.serverTimestamp(), to } },
+    { merge: true }
+  );
+}
+
+function escapeHtml(s: string) {
+  return s.replace(/[&<>'"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", "\"": "&quot;" }[c]!));
+}
+
+export const onTipSucceededSendMail = onDocumentWritten(
+  {
+    region: "us-central1",
+    document: "tenants/{tenantId}/tips/{tipId}",
+    secrets: ["RESEND_API_KEY"], // ← これでこの関数にだけ秘密が注入される
+  },
+  async (event) => {
+    const before = event.data?.before.data() as any | undefined;
+    const after  = event.data?.after.data()  as any | undefined;
+    if (!after) return;
+
+    const beforeStatus = before?.status;
+    const afterStatus  = after?.status;
+
+    // 「succeeded になった瞬間」だけ送る（重複送信防止）
+    if (afterStatus !== "succeeded" || beforeStatus === "succeeded") return;
+
+    const { tenantId, tipId } = event.params;
+    try {
+      await sendTipNotificationWithResend(tenantId, tipId);
+    } catch (e) {
+      console.error("[Resend] sendTipNotification error", e);
+    }
+  }
+);
+
+
+
 
 
 

@@ -12,6 +12,7 @@
     "dotenv": "^16",
     "firebase-admin": "^12",
     "firebase-functions": "^5",
+    "resend": "^6.0.1",
     "stripe": "^14"
   },
   "devDependencies": {
