@@ -1,13 +1,11 @@
 import * as functions from "firebase-functions";
-import * as admin from "firebase-admin";
+import { admin } from "./admin";
+const db = admin.firestore();
+
 import Stripe from "stripe";
-import * as dotenv from "dotenv";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import * as crypto from 'crypto';
-dotenv.config();
 
-admin.initializeApp();
-const db = admin.firestore();
 
 /** 必須環境変数チェック（未設定ならわかりやすく失敗させる） */
 function requireEnv(name: string): string {

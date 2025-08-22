@@ -38,12 +38,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createStoreTipSessionPublic = exports.createTipSessionPublic = void 0;
 const functions = __importStar(require("firebase-functions"));
-const admin = __importStar(require("firebase-admin"));
 const stripe_1 = __importDefault(require("stripe"));
-const dotenv = __importStar(require("dotenv"));
-dotenv.config();
-admin.initializeApp();
-const db = admin.firestore();
+const admin_1 = require("./admin");
+const db = admin_1.admin.firestore();
 /** 必須環境変数チェック（未設定ならわかりやすく失敗させる） */
 function requireEnv(name) {
     const v = process.env[name];
@@ -117,8 +114,8 @@ exports.createTipSessionPublic = functions.region("us-central1")
         currency: "JPY", // Firestore上の表示用。Stripeには 'jpy' を渡す
         status: "pending",
         recipient: { type: "employee", employeeId, employeeName },
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: admin_1.admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin_1.admin.firestore.FieldValue.serverTimestamp(),
     });
     try {
         // 2) Stripe Checkout セッション作成（metadata に tipDocId 等を付与）
@@ -159,7 +156,7 @@ exports.createTipSessionPublic = functions.region("us-central1")
             stripeSessionId: session.id,
             stripeCheckoutUrl: session.url,
             feeApplied: appFee,
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            createdAt: admin_1.admin.firestore.FieldValue.serverTimestamp(),
         });
         return { checkoutUrl: session.url, sessionId: session.id, tipDocId: tipRef.id };
     }
@@ -240,7 +237,7 @@ exports.createStoreTipSessionPublic = functions.region("us-central1")
         amount: unitAmount,
         currency: currency.toUpperCase(),
         status: "pending",
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: admin_1.admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
     await db
         .collection("tenants").doc(tenantId)
@@ -253,7 +250,7 @@ exports.createStoreTipSessionPublic = functions.region("us-central1")
         kind: "store_tip",
         stripeCheckoutUrl: session.url,
         stripeSessionId: session.id,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: admin_1.admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
     return { checkoutUrl: session.url };
 });

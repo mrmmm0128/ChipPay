@@ -38,14 +38,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.revokeInvite = exports.acceptTenantAdmin = exports.inviteTenantAdmin = exports.createAccountOnboardingLink = exports.createConnectAccountForTenant = exports.stripeWebhook = void 0;
 const functions = __importStar(require("firebase-functions"));
-const admin = __importStar(require("firebase-admin"));
+const admin_1 = require("./admin");
+const db = admin_1.admin.firestore();
 const stripe_1 = __importDefault(require("stripe"));
-const dotenv = __importStar(require("dotenv"));
 const https_1 = require("firebase-functions/v2/https");
 const crypto = __importStar(require("crypto"));
-dotenv.config();
-admin.initializeApp();
-const db = admin.firestore();
 /** 必須環境変数チェック（未設定ならわかりやすく失敗させる） */
 function requireEnv(name) {
     const v = process.env[name];
@@ -182,7 +179,7 @@ exports.stripeWebhook = functions.region("us-central1")
     const docRef = db.collection("webhookEvents").doc(event.id);
     await docRef.set({
         type,
-        receivedAt: admin.firestore.FieldValue.serverTimestamp(),
+        receivedAt: admin_1.admin.firestore.FieldValue.serverTimestamp(),
         handled: false,
     });
     try {
@@ -201,8 +198,8 @@ exports.stripeWebhook = functions.region("us-central1")
                 // ---- 共通: サブコレ tipSessions を paid に ----
                 await tRef.collection("tipSessions").doc(sid).set({
                     status: "paid",
-                    paidAt: admin.firestore.FieldValue.serverTimestamp(),
-                    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                    paidAt: admin_1.admin.firestore.FieldValue.serverTimestamp(),
+                    updatedAt: admin_1.admin.firestore.FieldValue.serverTimestamp(),
                 }, { merge: true });
                 // tips の docId: metadata.tipDocId -> payment_intent -> session.id
                 const tipDocId = session.metadata?.tipDocId ||
@@ -236,20 +233,20 @@ exports.stripeWebhook = functions.region("us-central1")
                     status: "succeeded",
                     stripePaymentIntentId: payIntentId ?? "",
                     recipient,
-                    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                    updatedAt: admin_1.admin.firestore.FieldValue.serverTimestamp(),
                     ...(existingCreatedAt
                         ? { createdAt: existingCreatedAt }
-                        : { createdAt: admin.firestore.FieldValue.serverTimestamp() }),
+                        : { createdAt: admin_1.admin.firestore.FieldValue.serverTimestamp() }),
                 }, { merge: true });
             }
         }
         if (type === 'checkout.session.expired') {
             const session = event.data.object;
-            await db.collection('tipSessions').doc(session.id).set({ status: 'expired', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+            await db.collection('tipSessions').doc(session.id).set({ status: 'expired', updatedAt: admin_1.admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         }
         if (type === 'checkout.session.async_payment_failed') {
             const session = event.data.object;
-            await db.collection('tipSessions').doc(session.id).set({ status: 'failed', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+            await db.collection('tipSessions').doc(session.id).set({ status: 'failed', updatedAt: admin_1.admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         }
         // Connect アカウント状態の同期
         if (type === "account.updated") {
@@ -266,7 +263,7 @@ exports.stripeWebhook = functions.region("us-central1")
                         charges_enabled: !!acct.charges_enabled,
                         payouts_enabled: !!acct.payouts_enabled,
                         details_submitted: !!acct.details_submitted,
-                        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                        updatedAt: admin_1.admin.firestore.FieldValue.serverTimestamp(),
                     },
                 }, { merge: true });
             }
@@ -310,7 +307,7 @@ exports.createConnectAccountForTenant = (0, https_1.onCall)({
             charges_enabled: !!acct.charges_enabled,
             payouts_enabled: !!acct.payouts_enabled,
             details_submitted: !!acct.details_submitted,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin_1.admin.firestore.FieldValue.serverTimestamp(),
         },
     }, { merge: true });
     return { stripeAccountId: acct.id };
@@ -355,7 +352,7 @@ exports.inviteTenantAdmin = functions.https.onCall(async (data, context) => {
     // token作成（メールに入れるのは生token、DBにはhashだけ保存）
     const token = crypto.randomBytes(32).toString('hex');
     const tokenHash = sha256(token);
-    const expiresAt = admin.firestore.Timestamp.fromDate(new Date(Date.now() + 1000 * 60 * 60 * 24 * 7) // 7日
+    const expiresAt = admin_1.admin.firestore.Timestamp.fromDate(new Date(Date.now() + 1000 * 60 * 60 * 24 * 7) // 7日
     );
     const inviteRef = db.collection(`tenants/${tenantId}/invites`).doc();
     await inviteRef.set({
@@ -366,7 +363,7 @@ exports.inviteTenantAdmin = functions.https.onCall(async (data, context) => {
             uid,
             email: context.auth?.token?.email || null,
         },
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: admin_1.admin.firestore.FieldValue.serverTimestamp(),
         expiresAt,
     });
     const acceptUrl = `${APP_ORIGIN}/#/admin-invite?tenantId=${tenantId}&token=${token}`;
@@ -412,7 +409,7 @@ exports.acceptTenantAdmin = functions.https.onCall(async (data, context) => {
     if (inv.status !== 'pending') {
         throw new functions.https.HttpsError('failed-precondition', 'Invite already used/revoked');
     }
-    const now = admin.firestore.Timestamp.now();
+    const now = admin_1.admin.firestore.Timestamp.now();
     if (inv.expiresAt && now.toMillis() > inv.expiresAt.toMillis()) {
         throw new functions.https.HttpsError('deadline-exceeded', 'Invite expired');
     }
@@ -428,18 +425,18 @@ exports.acceptTenantAdmin = functions.https.onCall(async (data, context) => {
             role: 'admin',
             email: userEmail,
             displayName: context.auth?.token?.name || null,
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            createdAt: admin_1.admin.firestore.FieldValue.serverTimestamp(),
         });
         await db.doc(`tenants/${tenantId}`).update({
-            memberUids: admin.firestore.FieldValue.arrayUnion(uid),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            memberUids: admin_1.admin.firestore.FieldValue.arrayUnion(uid),
+            updatedAt: admin_1.admin.firestore.FieldValue.serverTimestamp(),
         });
     }
     // 招待を消費
     await inviteRef.update({
         status: 'accepted',
         acceptedBy: uid,
-        acceptedAt: admin.firestore.FieldValue.serverTimestamp(),
+        acceptedAt: admin_1.admin.firestore.FieldValue.serverTimestamp(),
     });
     return { ok: true };
 });

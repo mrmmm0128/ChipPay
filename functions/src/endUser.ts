@@ -1,11 +1,9 @@
 import * as functions from "firebase-functions";
-import * as admin from "firebase-admin";
 import Stripe from "stripe";
-import * as dotenv from "dotenv";
-dotenv.config();
 
-admin.initializeApp();
+import { admin } from "./admin";
 const db = admin.firestore();
+
 
 /** 必須環境変数チェック（未設定ならわかりやすく失敗させる） */
 function requireEnv(name: string): string {
