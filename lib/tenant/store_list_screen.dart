@@ -3,6 +3,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher_string.dart';
+import 'package:yourpay/tenant/store_list/store_card.dart';
 
 class StoreListScreen extends StatefulWidget {
   const StoreListScreen({super.key});
@@ -211,16 +212,37 @@ class _StoreListScreenState extends State<StoreListScreen> {
       return const SizedBox.shrink();
     }
 
-    // 複合インデックス不要のため orderBy は外し、クライアント側で並び替え
     final stream = FirebaseFirestore.instance
         .collection('tenants')
         .where('memberUids', arrayContains: uid)
         .snapshots();
 
+    // 黒ベースのボタン（空状態用）
+    final primaryBtnStyle = FilledButton.styleFrom(
+      backgroundColor: Colors.black,
+      foregroundColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+    );
+
     return Scaffold(
+      backgroundColor: const Color(0xFFF7F7F7), // やわらかい薄グレー
       appBar: AppBar(
-        title: const Text('店舗を選択'),
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        automaticallyImplyLeading: false,
+        elevation: 0,
+        title: const Text(
+          '店舗を選択',
+          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+        ),
         actions: [
+          // ← 追加：アカウント
+          IconButton(
+            icon: const Icon(Icons.account_circle_outlined),
+            tooltip: 'アカウント',
+            onPressed: () => Navigator.pushNamed(context, '/account'),
+          ),
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: () async {
@@ -228,13 +250,19 @@ class _StoreListScreenState extends State<StoreListScreen> {
               if (!mounted) return;
               Navigator.pushReplacementNamed(context, '/login');
             },
+            tooltip: 'Sign out',
           ),
+          const SizedBox(width: 4),
         ],
       ),
+
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _openCreateDialog,
         icon: const Icon(Icons.add_business),
         label: const Text('新しい店舗'),
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: stream,
@@ -251,7 +279,6 @@ class _StoreListScreenState extends State<StoreListScreen> {
             return const Center(child: CircularProgressIndicator());
           }
 
-          // docs を createdAt 降順でクライアントソート
           final docs = [...(snap.data?.docs ?? [])];
           docs.sort((a, b) {
             final ta = (a['createdAt'] as Timestamp?);
@@ -259,7 +286,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
             if (tb == null && ta == null) return 0;
             if (tb == null) return -1;
             if (ta == null) return 1;
-            return tb.compareTo(ta); // 降順
+            return tb.compareTo(ta);
           });
 
           if (docs.isEmpty) {
@@ -270,8 +297,12 @@ class _StoreListScreenState extends State<StoreListScreen> {
                   const Text('まだ店舗がありません'),
                   const SizedBox(height: 12),
                   FilledButton.icon(
+                    style: primaryBtnStyle,
                     onPressed: _openCreateDialog,
-                    icon: const Icon(Icons.add),
+                    icon: const Padding(
+                      padding: EdgeInsets.only(right: 8),
+                      child: Icon(Icons.add),
+                    ),
                     label: const Text('最初の店舗を作成'),
                   ),
                 ],
@@ -279,24 +310,23 @@ class _StoreListScreenState extends State<StoreListScreen> {
             );
           }
 
-          // 画面幅に応じてカードを並べる（広い画面は2列、狭い画面は1列）
           return LayoutBuilder(
             builder: (context, constraints) {
               final isWide = constraints.maxWidth >= 720;
               if (isWide) {
                 return GridView.builder(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(16),
                   gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: 2,
-                    mainAxisSpacing: 12,
-                    crossAxisSpacing: 12,
+                    mainAxisSpacing: 16,
+                    crossAxisSpacing: 16,
                     childAspectRatio: 3.0,
                   ),
                   itemCount: docs.length,
                   itemBuilder: (_, i) {
                     final d = docs[i].data() as Map<String, dynamic>;
                     final id = docs[i].id;
-                    return _StoreCard(
+                    return StoreCard(
                       id: id,
                       name: d['name'] ?? '(no name)',
                       status: d['status'] ?? 'unknown',
@@ -312,13 +342,13 @@ class _StoreListScreenState extends State<StoreListScreen> {
                 );
               } else {
                 return ListView.separated(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(16),
                   itemCount: docs.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 12),
+                  separatorBuilder: (_, __) => const SizedBox(height: 16),
                   itemBuilder: (_, i) {
                     final d = docs[i].data() as Map<String, dynamic>;
                     final id = docs[i].id;
-                    return _StoreCard(
+                    return StoreCard(
                       id: id,
                       name: d['name'] ?? '(no name)',
                       status: d['status'] ?? 'unknown',
@@ -336,76 +366,6 @@ class _StoreListScreenState extends State<StoreListScreen> {
             },
           );
         },
-      ),
-    );
-  }
-}
-
-class _StoreCard extends StatelessWidget {
-  final String id;
-  final String name;
-  final String status;
-  final String creator; // 追加: 作成者のメールなど
-  final bool isNew;
-  final VoidCallback onTap;
-
-  const _StoreCard({
-    required this.id,
-    required this.name,
-    required this.status,
-    required this.creator,
-    required this.isNew,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final captionStyle = Theme.of(
-      context,
-    ).textTheme.bodySmall?.copyWith(color: Colors.white70);
-    return Card(
-      elevation: 6,
-      shadowColor: Colors.black26,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          child: Row(
-            children: [
-              const Icon(Icons.storefront, size: 28),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      name,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text('ID: $id  •  $status', style: captionStyle),
-                    if (creator.isNotEmpty) ...[
-                      const SizedBox(height: 2),
-                      Text('作成: $creator', style: captionStyle),
-                    ],
-                  ],
-                ),
-              ),
-              if (isNew)
-                const Padding(
-                  padding: EdgeInsets.only(left: 8),
-                  child: Chip(label: Text('NEW')),
-                ),
-              const Icon(Icons.chevron_right),
-            ],
-          ),
-        ),
       ),
     );
   }

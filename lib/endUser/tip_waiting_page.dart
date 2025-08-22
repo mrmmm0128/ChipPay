@@ -2,8 +2,8 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher_string.dart';
-import 'package:yourpay/screens/tip_complete_page.dart';
-import 'package:yourpay/screens/tip_failed_page.dart';
+import 'package:yourpay/endUser/tip_complete_page.dart';
+import 'package:yourpay/endUser/tip_failed_page.dart';
 
 class TipWaitingPage extends StatefulWidget {
   const TipWaitingPage({
@@ -41,7 +41,7 @@ class _TipWaitingPageState extends State<TipWaitingPage> {
         .doc(widget.sessionId);
 
     _sub = ref.snapshots().listen((doc) async {
-      final data = doc.data() as Map<String, dynamic>?;
+      final data = doc.data();
       if (data == null) return;
       final status = (data['status'] as String?) ?? 'pending';
       if (_navigated) return;

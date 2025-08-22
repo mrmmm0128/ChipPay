@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:yourpay/screens/store_tip_page.dart';
+import 'package:yourpay/endUser/store_tip_page.dart';
 
 class TipCompletePage extends StatelessWidget {
   final String tenantId;

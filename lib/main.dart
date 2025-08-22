@@ -6,13 +6,18 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
-import 'package:yourpay/screens/public_store_page.dart';
-import 'package:yourpay/screens/staff_detail_page.dart';
-import 'package:yourpay/screens/store_list_screen.dart';
-import 'screens/login_screens.dart';
-import 'screens/store_detail_screen.dart';
-import 'screens/admin_console_screen.dart';
-import 'screens/payer_landing_screen.dart';
+import 'package:yourpay/admin/admin_dashboard_screen.dart';
+import 'package:yourpay/admin/admin_login_screen.dart';
+import 'package:yourpay/admin/admin_tenant_detrail_screen.dart';
+import 'package:yourpay/tenant/account_detail_screen.dart';
+import 'package:yourpay/endUser/public_store_page.dart';
+import 'package:yourpay/endUser/staff_detail_page.dart';
+import 'package:yourpay/tenant/store_admin_add/accept_invite_screen.dart';
+import 'package:yourpay/tenant/store_list_screen.dart';
+import 'tenant/login_screens.dart';
+import 'tenant/store_detail_screen.dart';
+import 'tenant/admin_console_screen.dart';
+import 'endUser/payer_landing_screen.dart';
 
 // TODO: 生成した Firebase 設定に置き換え
 const firebaseOptions = FirebaseOptions(
@@ -95,6 +100,11 @@ class MyApp extends StatelessWidget {
         '/store': (_) => const StoreDetailScreen(),
         '/p': (_) => const PublicStorePage(),
         '/staff': (_) => const StaffDetailPage(), // ← 追加
+        '/account': (_) => const AccountDetailScreen(),
+        '/admin-login': (_) => const AdminLoginScreen(),
+        '/admin': (_) => const AdminDashboardScreen(), // ← 新ダッシュボード
+        '/admin/tenant': (_) => const AdminTenantDetailScreen(), // ← 店舗の詳細
+        '/admin-invite': (_) => const AcceptInviteScreen(),
       },
     );
   }
@@ -152,6 +162,7 @@ class _StoreOrAdminSwitcherState extends State<StoreOrAdminSwitcher> {
     if (_role == 'superadmin') {
       return const AdminConsoleScreen();
     } else {
+      //return const LoginScreen();
       return const LoginScreen();
     }
   }

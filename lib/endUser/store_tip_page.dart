@@ -1,7 +1,7 @@
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher_string.dart';
-import 'package:yourpay/screens/tip_waiting_page.dart';
+import 'package:yourpay/endUser/tip_waiting_page.dart';
 
 class StoreTipPage extends StatefulWidget {
   final String tenantId;
