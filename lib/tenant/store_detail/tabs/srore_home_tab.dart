@@ -1,15 +1,14 @@
-// tabs/home_tab.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-import 'package:url_launcher/url_launcher_string.dart';
-
+import 'package:yourpay/fonts/jp_font.dart';
 import 'package:yourpay/tenant/store_detail/card_shell.dart';
 import 'package:yourpay/tenant/store_detail/home_metrics.dart';
 import 'package:yourpay/tenant/store_detail/range_pill.dart';
 import 'package:yourpay/tenant/store_detail/rank_entry.dart';
-import 'package:yourpay/tenant/store_detail/tabs/period_payment_page.dart'; // RankEntry
+import 'package:yourpay/tenant/store_detail/tabs/period_payment_page.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:pdf/pdf.dart';
+import 'package:printing/printing.dart';
 
 class StoreHomeTab extends StatefulWidget {
   final String tenantId;
@@ -20,54 +19,74 @@ class StoreHomeTab extends StatefulWidget {
   State<StoreHomeTab> createState() => _StoreHomeTabState();
 }
 
-// ==== 期間フィルタ ====
-enum _RangeFilter { today, last7, last30, all, custom }
+// ==== 期間フィルタ（ダッシュボード表示用：今月/先月/任意月/自由指定）====
+enum _RangeMode { thisMonth, lastMonth, month, custom }
 
 class _StoreHomeTabState extends State<StoreHomeTab> {
-  final _functions = FirebaseFunctions.instanceFor(region: 'us-central1');
-
   bool loading = false;
-  String? publicStoreUrl;
 
-  _RangeFilter _range = _RangeFilter.last30;
-  DateTimeRange? _customRange;
+  // ダッシュボードの期間モード
+  _RangeMode _mode = _RangeMode.thisMonth;
+  DateTime? _selectedMonthStart; // 「月選択」の基準（各月の1日）
+  DateTimeRange? _customRange; // 自由指定の期間
 
+  // ===== ユーティリティ =====
+  DateTime _firstDayOfMonth(DateTime d) => DateTime(d.year, d.month, 1);
+  DateTime _firstDayOfNextMonth(DateTime d) => (d.month == 12)
+      ? DateTime(d.year + 1, 1, 1)
+      : DateTime(d.year, d.month + 1, 1);
+
+  // プルダウン候補：直近24か月
+  List<DateTime> _monthOptions() {
+    final now = DateTime.now();
+    final cur = _firstDayOfMonth(now);
+    return List.generate(24, (i) => DateTime(cur.year, cur.month - i, 1));
+  }
+
+  // ===== 金額計算（パーセント & 固定）=====
+  int _calcFee(int amount, {num? percent, num? fixed}) {
+    final p = ((percent ?? 0)).clamp(0, 100);
+    final f = ((fixed ?? 0)).clamp(0, 1e9);
+    final percentPart = (amount * p / 100).floor();
+    return (percentPart + f.toInt()).clamp(0, amount);
+  }
+
+  // ===== ダッシュボード用：範囲ラベル & 範囲境界 =====
   String _rangeLabel() {
-    switch (_range) {
-      case _RangeFilter.today:
-        return '今日';
-      case _RangeFilter.last7:
-        return '直近7日';
-      case _RangeFilter.last30:
-        return '直近30日';
-      case _RangeFilter.all:
-        return '全期間';
-      case _RangeFilter.custom:
+    String ym(DateTime d) => '${d.year}/${d.month.toString().padLeft(2, '0')}';
+    String ymd(DateTime d) =>
+        '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')}';
+
+    final now = DateTime.now();
+    switch (_mode) {
+      case _RangeMode.thisMonth:
+        final s = _firstDayOfMonth(now);
+        return '今月（${ym(s)}）';
+      case _RangeMode.lastMonth:
+        final s = _firstDayOfMonth(DateTime(now.year, now.month - 1, 1));
+        return '先月（${ym(s)}）';
+      case _RangeMode.month:
+        final s = _selectedMonthStart ?? _firstDayOfMonth(now);
+        return '月選択（${ym(s)}）';
+      case _RangeMode.custom:
         if (_customRange == null) return '期間指定';
-        String f(DateTime d) =>
-            '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')}';
-        return '${f(_customRange!.start)}〜${f(_customRange!.end)}';
+        return '${ymd(_customRange!.start)}〜${ymd(_customRange!.end)}';
     }
   }
 
   ({DateTime? start, DateTime? endExclusive}) _rangeBounds() {
     final now = DateTime.now();
-    DateTime midnight(DateTime t) => DateTime(t.year, t.month, t.day);
-    switch (_range) {
-      case _RangeFilter.today:
-        final s = midnight(now);
-        return (start: s, endExclusive: s.add(const Duration(days: 1)));
-      case _RangeFilter.last7:
-        final e = midnight(now).add(const Duration(days: 1));
-        final s = e.subtract(const Duration(days: 7));
-        return (start: s, endExclusive: e);
-      case _RangeFilter.last30:
-        final e = midnight(now).add(const Duration(days: 1));
-        final s = e.subtract(const Duration(days: 30));
-        return (start: s, endExclusive: e);
-      case _RangeFilter.all:
-        return (start: null, endExclusive: null);
-      case _RangeFilter.custom:
+    switch (_mode) {
+      case _RangeMode.thisMonth:
+        final s = _firstDayOfMonth(now);
+        return (start: s, endExclusive: _firstDayOfNextMonth(s));
+      case _RangeMode.lastMonth:
+        final s = _firstDayOfMonth(DateTime(now.year, now.month - 1, 1));
+        return (start: s, endExclusive: _firstDayOfNextMonth(s));
+      case _RangeMode.month:
+        final s = _selectedMonthStart ?? _firstDayOfMonth(now);
+        return (start: s, endExclusive: _firstDayOfNextMonth(s));
+      case _RangeMode.custom:
         if (_customRange == null) return (start: null, endExclusive: null);
         final s = DateTime(
           _customRange!.start.year,
@@ -83,6 +102,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
     }
   }
 
+  // 自由指定ピッカー
   Future<void> _pickCustomRange() async {
     final now = DateTime.now();
     final picked = await showDateRangePicker(
@@ -91,7 +111,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
       lastDate: DateTime(now.year + 1),
       initialDateRange:
           _customRange ??
-          DateTimeRange(start: now.subtract(const Duration(days: 6)), end: now),
+          DateTimeRange(start: DateTime(now.year, now.month, 1), end: now),
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
           colorScheme: Theme.of(context).colorScheme.copyWith(
@@ -104,15 +124,406 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
     );
     if (picked != null) {
       setState(() {
-        _range = _RangeFilter.custom;
+        _mode = _RangeMode.custom;
         _customRange = picked;
       });
     }
   }
 
-  // 追加: 期間付きの履歴ページへ遷移
+  // 期間に含まれる各「対象月」の翌月25日を列挙
+  List<DateTime> _payoutDatesForRange(DateTime start, DateTime endExclusive) {
+    final dates = <DateTime>[];
+    // start の属する月の1日から、endExclusive の属する月の1日の“手前”まで
+    var cur = DateTime(start.year, start.month, 1);
+    final endMonth = DateTime(endExclusive.year, endExclusive.month, 1);
+    while (cur.isBefore(endMonth)) {
+      final isDec = cur.month == 12;
+      final y = isDec ? cur.year + 1 : cur.year;
+      final m = isDec ? 1 : cur.month + 1;
+      dates.add(DateTime(y, m, 25)); // 翌月25日
+      // 次の月へ
+      cur = DateTime(cur.year, cur.month + 1, 1);
+    }
+    return dates;
+  }
+
+  // ===== PDF：日付フィルターで絞った期間そのままを出力（店舗入金 + スタッフ別）=====
+  Future<void> _exportMonthlyReportPdf() async {
+    try {
+      setState(() => loading = true);
+
+      // 対象期間（フィルターの期間）
+      final b = _rangeBounds();
+      if (b.start == null || b.endExclusive == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('期間を選択してください（今月/先月/月選択/期間指定）')),
+        );
+        return;
+      }
+
+      String ymd(DateTime d) =>
+          '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')}';
+      final periodLabel =
+          '${ymd(b.start!)}〜${ymd(b.endExclusive!.subtract(const Duration(days: 1)))}';
+
+      // 手数料設定
+      final tSnap = await FirebaseFirestore.instance
+          .collection('tenants')
+          .doc(widget.tenantId)
+          .get();
+      final tData = tSnap.data() ?? {};
+      final fee = (tData['fee'] as Map?)?.cast<String, dynamic>() ?? const {};
+      final store =
+          (tData['storeDeduction'] as Map?)?.cast<String, dynamic>() ??
+          const {};
+      final feePercent = fee['percent'] as num?;
+      final feeFixed = fee['fixed'] as num?;
+      final storePercent = store['percent'] as num?;
+      final storeFixed = store['fixed'] as num?;
+      final payoutDates = _payoutDatesForRange(b.start!, b.endExclusive!);
+      String ymdFull(DateTime d) =>
+          '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')}';
+      final payoutDatesLabel = payoutDates.map(ymdFull).join('、');
+
+      // Firestore 取得（期間・JPY・成功）
+      final qs = await FirebaseFirestore.instance
+          .collection('tenants')
+          .doc(widget.tenantId)
+          .collection('tips')
+          .where('status', isEqualTo: 'succeeded')
+          .where(
+            'createdAt',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(b.start!),
+          )
+          .where('createdAt', isLessThan: Timestamp.fromDate(b.endExclusive!))
+          .orderBy('createdAt', descending: false)
+          .limit(5000)
+          .get();
+
+      if (qs.docs.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('対象期間にデータがありません')));
+        return;
+      }
+
+      // 集計：店舗入金（総チップ − 運営手数料）
+      int storeGross = 0, storeFees = 0, storeDeposit = 0;
+
+      // 集計：スタッフ別
+      final byStaff = <String, Map<String, dynamic>>{};
+      int grandGross = 0, grandFee = 0, grandStore = 0, grandNet = 0;
+
+      for (final doc in qs.docs) {
+        final d = doc.data();
+        final currency = (d['currency'] as String?)?.toUpperCase() ?? 'JPY';
+        if (currency != 'JPY') continue;
+
+        final amount = (d['amount'] as num?)?.toInt() ?? 0;
+        if (amount <= 0) continue;
+
+        final appFee = _calcFee(amount, percent: feePercent, fixed: feeFixed);
+        final storeCut = _calcFee(
+          amount,
+          percent: storePercent,
+          fixed: storeFixed,
+        );
+
+        // 店舗入金（すべて対象）
+        storeGross += amount;
+        storeFees += appFee;
+        storeDeposit += (amount - appFee);
+
+        // スタッフ宛のみスタッフ集計へ
+        final rec = (d['recipient'] as Map?)?.cast<String, dynamic>();
+        final staffId =
+            (d['employeeId'] as String?) ?? (rec?['employeeId'] as String?);
+        if (staffId != null && staffId.isNotEmpty) {
+          final staffName =
+              (d['employeeName'] as String?) ??
+              (rec?['employeeName'] as String?) ??
+              'スタッフ';
+
+          final net = (amount - appFee - storeCut).clamp(0, amount);
+          final ts = d['createdAt'];
+          final when = (ts is Timestamp) ? ts.toDate() : DateTime.now();
+          final memo = (d['memo'] as String?) ?? '';
+
+          final bucket = byStaff.putIfAbsent(
+            staffId,
+            () => {
+              'name': staffName,
+              'rows': <Map<String, dynamic>>[],
+              'gross': 0,
+              'fee': 0,
+              'store': 0,
+              'net': 0,
+            },
+          );
+          (bucket['rows'] as List).add({
+            'when': when,
+            'gross': amount,
+            'fee': appFee,
+            'store': storeCut,
+            'net': net,
+            'memo': memo,
+          });
+          bucket['gross'] = (bucket['gross'] as int) + amount;
+          bucket['fee'] = (bucket['fee'] as int) + appFee;
+          bucket['store'] = (bucket['store'] as int) + storeCut;
+          bucket['net'] = (bucket['net'] as int) + net;
+
+          grandGross += amount;
+          grandFee += appFee;
+          grandStore += storeCut;
+          grandNet += net;
+        }
+      }
+
+      // ===== PDF 作成 =====
+      final jpTheme = await JpPdfFont.theme();
+      final pdf = pw.Document(theme: jpTheme);
+
+      final tenant = widget.tenantName ?? widget.tenantId;
+      String yen(int v) => '¥${v.toString()}';
+      String fmtDT(DateTime d) =>
+          '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')} '
+          '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+
+      pdf.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+          header: (ctx) => pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text(
+                '月次チップレポート',
+                style: pw.TextStyle(
+                  fontSize: 16,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+              pw.SizedBox(height: 2),
+              pw.Text(
+                '店舗: $tenant    対象期間: $periodLabel',
+                style: const pw.TextStyle(fontSize: 10),
+              ),
+              pw.Text(
+                '支払予定日: $payoutDatesLabel（毎月25日）',
+                style: const pw.TextStyle(fontSize: 10),
+              ),
+              pw.SizedBox(height: 8),
+              pw.Divider(),
+            ],
+          ),
+          build: (ctx) {
+            final widgets = <pw.Widget>[];
+
+            // ① 店舗入金（振込見込み）
+            widgets.addAll([
+              pw.Text(
+                '① 店舗入金（見込み）',
+                style: pw.TextStyle(
+                  fontSize: 13,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+              pw.SizedBox(height: 6),
+              pw.Table(
+                border: pw.TableBorder.all(
+                  color: PdfColors.grey500,
+                  width: 0.7,
+                ),
+                columnWidths: const {
+                  0: pw.FlexColumnWidth(2),
+                  1: pw.FlexColumnWidth(2),
+                },
+                children: [
+                  _trSummary('対象期間チップ総額', yen(storeGross)),
+                  _trSummary('運営手数料（合計）', yen(storeFees)),
+                  _trSummary('店舗受取見込み（総額 − 手数料）', yen(storeDeposit)),
+                ],
+              ),
+              pw.SizedBox(height: 14),
+              pw.Divider(),
+            ]);
+
+            // ② スタッフ別支払予定
+            if (byStaff.isEmpty) {
+              widgets.add(
+                pw.Padding(
+                  padding: const pw.EdgeInsets.only(top: 8),
+                  child: pw.Text('スタッフ宛のチップは対象期間にありません。'),
+                ),
+              );
+            } else {
+              widgets.addAll([
+                pw.Text(
+                  '② スタッフ別支払予定',
+                  style: pw.TextStyle(
+                    fontSize: 13,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+                pw.SizedBox(height: 6),
+              ]);
+
+              final staffEntries = byStaff.entries.toList()
+                ..sort(
+                  (a, b) =>
+                      (b.value['net'] as int).compareTo(a.value['net'] as int),
+                );
+
+              for (final e in staffEntries) {
+                final name = e.value['name'] as String;
+                final rows = (e.value['rows'] as List)
+                    .cast<Map<String, dynamic>>();
+                rows.sort(
+                  (a, b) =>
+                      (a['when'] as DateTime).compareTo(b['when'] as DateTime),
+                );
+
+                widgets.addAll([
+                  pw.SizedBox(height: 10),
+                  pw.Text(
+                    '■ $name',
+                    style: pw.TextStyle(
+                      fontSize: 12,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                  ),
+                  pw.SizedBox(height: 6),
+                  pw.Table(
+                    border: pw.TableBorder.symmetric(
+                      inside: const pw.BorderSide(
+                        color: PdfColors.grey300,
+                        width: 0.5,
+                      ),
+                      outside: const pw.BorderSide(
+                        color: PdfColors.grey500,
+                        width: 0.7,
+                      ),
+                    ),
+                    columnWidths: const {
+                      0: pw.FlexColumnWidth(2), // 日時
+                      1: pw.FlexColumnWidth(1), // 実額
+                      2: pw.FlexColumnWidth(1), // 運営手数料
+                      3: pw.FlexColumnWidth(1), // 店舗控除
+                      4: pw.FlexColumnWidth(1), // 受取
+                      5: pw.FlexColumnWidth(2), // メモ
+                    },
+                    children: [
+                      pw.TableRow(
+                        decoration: const pw.BoxDecoration(
+                          color: PdfColors.grey200,
+                        ),
+                        children: [
+                          _cell('日時', bold: true),
+                          _cell('実額', bold: true, alignRight: true),
+                          _cell('運営手数料', bold: true, alignRight: true),
+                          _cell('店舗控除', bold: true, alignRight: true),
+                          _cell('受取額', bold: true, alignRight: true),
+                          _cell('メモ', bold: true),
+                        ],
+                      ),
+                      ...rows.map((r) {
+                        final dt = r['when'] as DateTime;
+                        return pw.TableRow(
+                          children: [
+                            _cell(fmtDT(dt)),
+                            _cell(yen(r['gross'] as int), alignRight: true),
+                            _cell(yen(r['fee'] as int), alignRight: true),
+                            _cell(yen(r['store'] as int), alignRight: true),
+                            _cell(yen(r['net'] as int), alignRight: true),
+                            _cell((r['memo'] as String?) ?? ''),
+                          ],
+                        );
+                      }),
+                    ],
+                  ),
+                  pw.Align(
+                    alignment: pw.Alignment.centerRight,
+                    child: pw.Container(
+                      margin: const pw.EdgeInsets.only(top: 6),
+                      padding: const pw.EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: const pw.BoxDecoration(
+                        color: PdfColors.grey200,
+                      ),
+                      child: pw.Text(
+                        '小計  実額: ${yen(e.value['gross'] as int)}   手数料: ${yen(e.value['fee'] as int)}   '
+                        '店舗控除: ${yen(e.value['store'] as int)}   受取額: ${yen(e.value['net'] as int)}',
+                        style: const pw.TextStyle(fontSize: 10),
+                      ),
+                    ),
+                  ),
+                ]);
+              }
+
+              widgets.addAll([
+                pw.SizedBox(height: 14),
+                pw.Divider(),
+                pw.Align(
+                  alignment: pw.Alignment.centerRight,
+                  child: pw.Text(
+                    '（スタッフ宛）総計  実額: ${yen(grandGross)}   手数料: ${yen(grandFee)}   '
+                    '店舗控除: ${yen(grandStore)}   受取額: ${yen(grandNet)}',
+                    style: pw.TextStyle(
+                      fontSize: 12,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ]);
+            }
+
+            return widgets;
+          },
+        ),
+      );
+
+      // 保存（Webはダウンロード、モバイルは共有）
+      String ymdFile(DateTime d) =>
+          '${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}';
+      final fname =
+          'monthly_report_${ymdFile(b.start!)}_to_${ymdFile(b.endExclusive!.subtract(const Duration(days: 1)))}.pdf';
+      await Printing.sharePdf(bytes: await pdf.save(), filename: fname);
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  // ===== PDFセル & サマリー行 =====
+  pw.Widget _cell(String text, {bool bold = false, bool alignRight = false}) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      child: pw.Align(
+        alignment: alignRight
+            ? pw.Alignment.centerRight
+            : pw.Alignment.centerLeft,
+        child: pw.Text(
+          text,
+          style: pw.TextStyle(
+            fontSize: 9,
+            fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+
+  pw.TableRow _trSummary(String left, String right) => pw.TableRow(
+    children: [_cell(left, bold: true), _cell(right, alignRight: true)],
+  );
+
+  // 期間付きの履歴ページへ遷移
   void _openPeriodPayments() {
-    final b = _rangeBounds(); // 現在の期間
+    final b = _rangeBounds();
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => PeriodPaymentsPage(
@@ -125,84 +536,122 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
     );
   }
 
-  Future<void> _openOnboarding() async {
-    final res = await _functions
-        .httpsCallable('createAccountOnboardingLink')
-        .call({'tenantId': widget.tenantId});
-    final url = (res.data as Map)['url'] as String;
-    await launchUrlString(url, mode: LaunchMode.externalApplication);
-  }
-
-  void _makeStoreQr() {
-    final origin = Uri.base.origin;
-    setState(() => publicStoreUrl = '$origin/#/p?t=${widget.tenantId}');
-  }
-
   @override
   Widget build(BuildContext context) {
-    final primaryBtnStyle = FilledButton.styleFrom(
-      backgroundColor: Colors.black,
-      foregroundColor: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      padding: const EdgeInsets.symmetric(vertical: 14),
-    );
-    final outlinedBtnStyle = OutlinedButton.styleFrom(
-      foregroundColor: Colors.black87,
-      side: const BorderSide(color: Colors.black87),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-    );
+    final months = _monthOptions();
+    final monthValue = _selectedMonthStart ?? months.first;
 
-    // フィルタ UI
+    // === フィルタ + PDF をひとつのバーに統合 ===
     final filterBar = Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
-        child: Row(
+        child: Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 8,
+          runSpacing: 8,
           children: [
             RangePill(
-              label: '今日',
-              active: _range == _RangeFilter.today,
-              onTap: () => setState(() => _range = _RangeFilter.today),
+              label: '今月',
+              active: _mode == _RangeMode.thisMonth,
+              onTap: () => setState(() => _mode = _RangeMode.thisMonth),
             ),
-            const SizedBox(width: 8),
             RangePill(
-              label: '7日',
-              active: _range == _RangeFilter.last7,
-              onTap: () => setState(() => _range = _RangeFilter.last7),
+              label: '先月',
+              active: _mode == _RangeMode.lastMonth,
+              onTap: () => setState(() => _mode = _RangeMode.lastMonth),
             ),
-            const SizedBox(width: 8),
-            RangePill(
-              label: '30日',
-              active: _range == _RangeFilter.last30,
-              onTap: () => setState(() => _range = _RangeFilter.last30),
+            // 月選択（黒文字/白背景/表示は常に「月選択」）
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border.all(color: Colors.black26),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<DateTime>(
+                  value: monthValue,
+                  isDense: true,
+                  dropdownColor: Colors.white,
+                  icon: const Icon(
+                    Icons.expand_more,
+                    color: Colors.black87,
+                    size: 18,
+                  ),
+                  style: const TextStyle(color: Colors.black87),
+                  selectedItemBuilder: (context) => months.map((_) {
+                    return const Text(
+                      '月選択',
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.black87,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    );
+                  }).toList(),
+                  items: months.map((m) {
+                    final label =
+                        '${m.year}/${m.month.toString().padLeft(2, '0')}';
+                    return DropdownMenuItem<DateTime>(
+                      value: m,
+                      child: Text(
+                        label,
+                        style: const TextStyle(color: Colors.black87),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (val) {
+                    if (val == null) return;
+                    setState(() {
+                      _mode = _RangeMode.month;
+                      _selectedMonthStart = val;
+                    });
+                  },
+                ),
+              ),
             ),
-            const SizedBox(width: 8),
             RangePill(
-              label: '全期間',
-              active: _range == _RangeFilter.all,
-              onTap: () => setState(() => _range = _RangeFilter.all),
-            ),
-            const SizedBox(width: 8),
-            RangePill(
-              label: _rangeLabel(),
-              active: _range == _RangeFilter.custom,
+              label: _mode == _RangeMode.custom ? _rangeLabel() : '期間指定',
+              active: _mode == _RangeMode.custom,
               icon: Icons.date_range,
               onTap: _pickCustomRange,
+            ),
+            // コンパクトPDFボタン
+            FilledButton.icon(
+              onPressed: loading ? null : _exportMonthlyReportPdf,
+              icon: loading
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.picture_as_pdf, size: 18),
+              label: const Text('明細PDF'),
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                backgroundColor: Colors.black,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
             ),
           ],
         ),
       ),
     );
 
-    // 期間境界で tips クエリ
+    // 期間境界で tips クエリ（ストリーム表示用）
     final bounds = _rangeBounds();
     Query tipsQ = FirebaseFirestore.instance
         .collection('tenants')
         .doc(widget.tenantId)
         .collection('tips')
-        .where('status', isEqualTo: 'succeeded'); // ← 追加
-
+        .where('status', isEqualTo: 'succeeded');
     if (bounds.start != null) {
       tipsQ = tipsQ.where(
         'createdAt',
@@ -222,154 +671,8 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // フィルタ（既存）
-          // Stripe接続状況 + QR発行（既存をそのまま）
-          StreamBuilder<DocumentSnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('tenants')
-                .doc(widget.tenantId)
-                .snapshots(),
-            builder: (context, snap) {
-              if (snap.connectionState == ConnectionState.waiting) {
-                return const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12),
-                  child: LinearProgressIndicator(minHeight: 2),
-                );
-              }
-              final data = snap.data?.data() as Map<String, dynamic>?;
-              final hasAccount =
-                  ((data?['stripeAccountId'] as String?)?.isNotEmpty ?? false);
-              final connected =
-                  (data?['connect']?['charges_enabled'] as bool?) ?? false;
-
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (!connected)
-                    CardShell(
-                      child: ListTile(
-                        leading: const CircleAvatar(
-                          backgroundColor: Colors.amber,
-                          foregroundColor: Colors.black,
-                          child: Icon(Icons.info_outline),
-                        ),
-                        title: Text(
-                          hasAccount
-                              ? 'Stripeオンボーディング未完了のため、QR発行はできません。'
-                              : 'Stripe未接続のため、QR発行はできません。',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                            color: Colors.black87,
-                          ),
-                        ),
-                        subtitle: const Text(
-                          '決済を受け付けるにはStripeに接続し、オンボーディングを完了してください。',
-                          style: TextStyle(color: Colors.black87),
-                        ),
-                        trailing: Padding(
-                          padding: const EdgeInsets.only(
-                            left: 8,
-                            right: 4,
-                          ), // ← 外側の余白
-                          child: FilledButton(
-                            style: primaryBtnStyle.copyWith(
-                              padding: MaterialStateProperty.all(
-                                const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 12,
-                                ), // ← 内側余白
-                              ),
-                              minimumSize: MaterialStateProperty.all(
-                                const Size(0, 44),
-                              ), // ← タッチサイズ
-                              tapTargetSize: MaterialTapTargetSize
-                                  .shrinkWrap, // ← ListTileの高さを過度に広げない
-                              shape: MaterialStateProperty.all(
-                                RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                            ),
-                            onPressed: _openOnboarding,
-                            child: Text(
-                              hasAccount ? '続きから再開' : 'Stripeに接続',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  const SizedBox(height: 12),
-
-                  // QR発行ボタン
-                  CardShell(
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: FilledButton.icon(
-                            style: primaryBtnStyle,
-                            onPressed: (connected && !loading)
-                                ? _makeStoreQr
-                                : null,
-                            icon: const Icon(Icons.qr_code_2),
-                            label: const Text('店舗QRコード発行'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 12),
-
-                  // QR表示：中央寄せ + 余白たっぷり
-                  if (connected && publicStoreUrl != null)
-                    Align(
-                      alignment: Alignment.center,
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 520),
-                        child: CardShell(
-                          child: Padding(
-                            padding: const EdgeInsets.all(24),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                QrImageView(data: publicStoreUrl!, size: 240),
-                                const SizedBox(height: 12),
-                                SelectableText(
-                                  publicStoreUrl!,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.black87,
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                OutlinedButton.icon(
-                                  style: outlinedBtnStyle,
-                                  icon: const Icon(Icons.open_in_new),
-                                  label: const Text('開く'),
-                                  onPressed: () => launchUrlString(
-                                    publicStoreUrl!,
-                                    mode: LaunchMode.externalApplication,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              );
-            },
-          ),
           filterBar,
-
-          const SizedBox(height: 16),
-
-          // 集計 + ランキング（★ここからは Expanded を使わない）
+          // ===== ダッシュボード（合計・分割・ランキング）=====
           StreamBuilder<QuerySnapshot>(
             stream: tipsQ.snapshots(),
             builder: (context, snap) {
@@ -480,7 +783,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                   HomeMetrics(
                     totalYen: totalAll,
                     count: countAll,
-                    onTapTotal: _openPeriodPayments, // ← これで合計タップ→遷移
+                    onTapTotal: _openPeriodPayments,
                   ),
                   const SizedBox(height: 12),
                   SplitMetricsRow(
@@ -498,13 +801,11 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                     ),
                   ),
                   const SizedBox(height: 8),
-
-                  // 親スクロールに委ねる
                   RankingGrid(
                     tenantId: widget.tenantId,
                     entries: entries,
-                    shrinkWrap: true, // ★重要
-                    physics: const NeverScrollableScrollPhysics(), // ★重要
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
                   ),
                 ],
               );

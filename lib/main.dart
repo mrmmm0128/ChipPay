@@ -1,4 +1,3 @@
-import 'dart:ui_web';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -12,6 +11,8 @@ import 'package:yourpay/admin/admin_tenant_detrail_screen.dart';
 import 'package:yourpay/tenant/account_detail_screen.dart';
 import 'package:yourpay/endUser/public_store_page.dart';
 import 'package:yourpay/endUser/staff_detail_page.dart';
+import 'package:yourpay/tenant/public_staff_qr_list_page.dart';
+import 'package:yourpay/tenant/qr_poster_build_page.dart';
 import 'package:yourpay/tenant/store_admin_add/accept_invite_screen.dart';
 import 'package:yourpay/tenant/store_list_screen.dart';
 import 'tenant/login_screens.dart';
@@ -53,35 +54,54 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final Map<String, WidgetBuilder> appRoutes = {
+      '/': (_) => const Root(),
+      '/login': (_) => const LoginScreen(),
+      '/stores': (_) => const StoreListScreen(),
+      '/store': (_) => const StoreDetailScreen(),
+      '/p': (_) => const PublicStorePage(), // 公開
+      '/staff': (_) => const StaffDetailPage(), // 公開
+      '/account': (_) => const AccountDetailScreen(),
+      '/admin-login': (_) => const AdminLoginScreen(),
+      '/admin': (_) => const AdminDashboardScreen(),
+      '/admin/tenant': (_) => const AdminTenantDetailScreen(),
+      '/admin-invite': (_) => const AcceptInviteScreen(),
+      '/qr-all': (_) => const PublicStaffQrListPage(), // 公開
+      '/qr-builder': (_) => const QrPosterBuilderPage(), // 公開
+    };
+
     return MaterialApp(
       title: 'YourPay',
       theme: ThemeData.dark(useMaterial3: true),
+
       onGenerateRoute: (settings) {
         final name = settings.name ?? '/';
         final uri = Uri.parse(name);
 
-        // 既存: /payer?sid=...
+        // クエリ付きを個別処理
         if (uri.path == '/payer') {
           final sid = uri.queryParameters['sid'] ?? '';
           return MaterialPageRoute(
             builder: (_) => PayerLandingScreen(sessionId: sid),
+            settings: settings,
           );
         }
 
-        // ★ 追加: /p?t=... を PublicStorePage へ
         if (uri.path == '/p') {
           final tid = uri.queryParameters['t'];
           return MaterialPageRoute(
             builder: (_) => const PublicStorePage(),
-            settings: RouteSettings(arguments: {'tenantId': tid}),
+            settings: RouteSettings(
+              name: settings.name,
+              arguments: {'tenantId': tid},
+            ),
           );
         }
-
-        // （必要なら）/staff?tid=...&eid=...
         if (uri.path == '/staff') {
           return MaterialPageRoute(
             builder: (_) => const StaffDetailPage(),
             settings: RouteSettings(
+              name: settings.name,
               arguments: {
                 'tenantId': uri.queryParameters['tid'],
                 'employeeId': uri.queryParameters['eid'],
@@ -90,22 +110,21 @@ class MyApp extends StatelessWidget {
           );
         }
 
-        return null; // ← これで他は routes テーブルにフォールバック
+        // ✅ 公開ルートもここで必ず解決（null返し禁止）
+        final builder = appRoutes[uri.path];
+        if (builder != null) {
+          return MaterialPageRoute(builder: builder, settings: settings);
+        }
+
+        // 未知はログインへ（404を作るならそちらへ）
+        return MaterialPageRoute(
+          builder: (_) => const LoginScreen(),
+          settings: settings,
+        );
       },
 
-      routes: {
-        '/': (_) => const Root(),
-        '/login': (_) => const LoginScreen(),
-        '/stores': (_) => const StoreListScreen(),
-        '/store': (_) => const StoreDetailScreen(),
-        '/p': (_) => const PublicStorePage(),
-        '/staff': (_) => const StaffDetailPage(), // ← 追加
-        '/account': (_) => const AccountDetailScreen(),
-        '/admin-login': (_) => const AdminLoginScreen(),
-        '/admin': (_) => const AdminDashboardScreen(), // ← 新ダッシュボード
-        '/admin/tenant': (_) => const AdminTenantDetailScreen(), // ← 店舗の詳細
-        '/admin-invite': (_) => const AcceptInviteScreen(),
-      },
+      // pushNamed 用
+      routes: appRoutes,
     );
   }
 }
@@ -123,7 +142,39 @@ class Root extends StatelessWidget {
             body: Center(child: CircularProgressIndicator()),
           );
         }
+
+        // いまのURLからパス部分だけ取り出す（/#/qr-all?… → /qr-all）
+        String currentPath() {
+          final uri = Uri.base;
+          if (uri.fragment.isNotEmpty) {
+            final frag = uri.fragment; // "/qr-all?t=xxx"
+            final q = frag.indexOf('?');
+            return q >= 0 ? frag.substring(0, q) : frag; // "/qr-all"
+          }
+          return uri.path; // "/qr-all"
+        }
+
+        final path = currentPath();
+        final publicPaths = const {'/qr-all', '/qr-builder', '/staff', '/p'};
+
+        // 未ログインでも公開ページはそのまま表示
+        if (snap.data == null && publicPaths.contains(path)) {
+          switch (path) {
+            case '/qr-all':
+              return const PublicStaffQrListPage();
+            case '/qr-builder':
+              return const QrPosterBuilderPage();
+            case '/staff':
+              return const StaffDetailPage();
+            case '/p':
+              return const PublicStorePage();
+          }
+        }
+
+        // 未ログイン & 非公開ページ → ログイン
         if (snap.data == null) return const LoginScreen();
+
+        // ログイン済み → 従来の管理シェルへ
         return const StoreOrAdminSwitcher();
       },
     );

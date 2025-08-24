@@ -43,15 +43,40 @@ class _PosterOption {
   bool get isAsset => assetPath != null;
 }
 
+// ▼ 用紙定義
+enum _Paper { a4, a3, letter, legal }
+
+class _PaperDef {
+  final String label;
+  final PdfPageFormat format; // PDF用
+  final double widthMm; // プレビュー用
+  final double heightMm;
+  const _PaperDef(this.label, this.format, this.widthMm, this.heightMm);
+}
+
+const Map<_Paper, _PaperDef> _paperDefs = {
+  _Paper.a4: _PaperDef('A4', PdfPageFormat.a4, 210, 297),
+  _Paper.a3: _PaperDef('A3', PdfPageFormat.a3, 297, 420),
+  _Paper.letter: _PaperDef('Letter', PdfPageFormat.letter, 216, 279),
+  _Paper.legal: _PaperDef('Legal', PdfPageFormat.legal, 216, 356),
+};
+
 class _StoreQrTabState extends State<StoreQrTab> {
   final _functions = FirebaseFunctions.instanceFor(region: 'us-central1');
 
   String? _publicStoreUrl;
   String _selectedPosterId = 'asset'; // 既定はアセット
 
+  // ▼ 追加: 表示/出力のカスタム設定
+  bool _putWhiteBg = true; // QRの白背景
+  double _qrScale = 0.35; // 画面/紙の短辺に対する占有率（20%〜60%）
+  double _qrPaddingMm = 6; // QRの外側の白余白（mm）
+  _Paper _paper = _Paper.a4; // 選択用紙
+
   String _buildStoreUrl() {
-    final origin = kIsWeb ? Uri.base.origin : Uri.base.origin;
+    final origin = Uri.base.origin;
     return '$origin/#/p?t=${widget.tenantId}';
+    // HashRouter想定。BrowserRouterなら '/p?t=...' に。
   }
 
   void _makeQr() => setState(() => _publicStoreUrl = _buildStoreUrl());
@@ -77,7 +102,6 @@ class _StoreQrTabState extends State<StoreQrTab> {
       }
       if (bytes == null) throw '画像の読み込みに失敗しました';
 
-      // contentType 推定
       String _detectContentType(String? filename) {
         final ext = (filename ?? '').split('.').last.toLowerCase();
         switch (ext) {
@@ -149,18 +173,45 @@ class _StoreQrTabState extends State<StoreQrTab> {
       final b = await rootBundle.load(selected.assetPath!);
       posterProvider = pw.MemoryImage(Uint8List.view(b.buffer));
     } else {
-      // printing の networkImage を使うと簡単に PDF 用プロバイダが取れます
       posterProvider = await networkImage(selected.url!);
     }
 
+    final pdef = _paperDefs[_paper]!;
     final doc = pw.Document();
+
     doc.addPage(
       pw.Page(
-        pageFormat: PdfPageFormat.a4,
+        pageFormat: pdef.format, // ← 選択用紙を使用
         build: (ctx) {
           final pageW = ctx.page.pageFormat.availableWidth;
           final pageH = ctx.page.pageFormat.availableHeight;
-          final qrSize = (pageW < pageH ? pageW : pageH) * 0.32;
+          final minSide = pageW < pageH ? pageW : pageH;
+
+          // サイズ・余白（pt単位）
+          final qrSidePt = minSide * _qrScale;
+          final padPt = _qrPaddingMm * PdfPageFormat.mm;
+
+          final qr = pw.BarcodeWidget(
+            barcode: Barcode.qrCode(),
+            data: _publicStoreUrl!,
+            width: qrSidePt,
+            height: qrSidePt,
+            drawText: false,
+            color: PdfColors.black,
+          );
+
+          final qrBox = pw.Container(
+            padding: _putWhiteBg
+                ? pw.EdgeInsets.all(padPt)
+                : pw.EdgeInsets.zero,
+            decoration: _putWhiteBg
+                ? pw.BoxDecoration(
+                    color: PdfColors.white,
+                    borderRadius: pw.BorderRadius.circular(8),
+                  )
+                : const pw.BoxDecoration(),
+            child: qr,
+          );
 
           return pw.Center(
             child: pw.Stack(
@@ -170,14 +221,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
                   child: pw.Image(posterProvider),
                   fit: pw.BoxFit.contain,
                 ),
-                pw.SizedBox(
-                  width: qrSize,
-                  height: qrSize,
-                  child: pw.BarcodeWidget(
-                    barcode: Barcode.qrCode(),
-                    data: _publicStoreUrl!,
-                  ),
-                ),
+                qrBox, // 中央に重ねる
               ],
             ),
           );
@@ -185,7 +229,11 @@ class _StoreQrTabState extends State<StoreQrTab> {
       ),
     );
 
-    await Printing.layoutPdf(onLayout: (_) async => doc.save());
+    // 印刷ダイアログを出さずに直接ダウンロード/共有
+    await Printing.sharePdf(
+      bytes: await doc.save(),
+      filename: 'store_qr_${widget.tenantId}.pdf',
+    );
   }
 
   Future<void> _openOnboarding() async {
@@ -212,13 +260,11 @@ class _StoreQrTabState extends State<StoreQrTab> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
     );
 
-    // テナントの Stripe 接続状況
     final tenantDocStream = FirebaseFirestore.instance
         .collection('tenants')
         .doc(widget.tenantId)
         .snapshots();
 
-    // 永続化したポスター一覧
     final postersStream = FirebaseFirestore.instance
         .collection('tenants')
         .doc(widget.tenantId)
@@ -239,7 +285,6 @@ class _StoreQrTabState extends State<StoreQrTab> {
         return StreamBuilder<QuerySnapshot>(
           stream: postersStream,
           builder: (context, postersSnap) {
-            // 一覧のビルド（アセット + リモート）
             final options = <_PosterOption>[
               _PosterOption.asset(widget.posterAssetPath, label: 'テンプレ'),
               ...((postersSnap.data?.docs ?? []).map((d) {
@@ -252,7 +297,6 @@ class _StoreQrTabState extends State<StoreQrTab> {
               })),
             ];
 
-            // 選択IDが無効になった場合のフォールバック
             if (!options.any((o) => o.id == _selectedPosterId)) {
               _selectedPosterId = options.first.id;
             }
@@ -291,11 +335,39 @@ class _StoreQrTabState extends State<StoreQrTab> {
                     ),
                   const SizedBox(height: 12),
 
-                  // アクション
+                  // アクション行
                   Wrap(
                     spacing: 12,
                     runSpacing: 12,
                     children: [
+                      // 用紙選択ドロップダウン
+                      InputDecorator(
+                        decoration: InputDecoration(
+                          labelText: '用紙サイズ',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                        ),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<_Paper>(
+                            value: _paper,
+                            onChanged: (v) => setState(() => _paper = v!),
+                            items: _paperDefs.entries
+                                .map(
+                                  (e) => DropdownMenuItem(
+                                    value: e.key,
+                                    child: Text(e.value.label),
+                                  ),
+                                )
+                                .toList(),
+                          ),
+                        ),
+                      ),
+
                       FilledButton.icon(
                         style: primary,
                         onPressed: connected ? _makeQr : null,
@@ -307,8 +379,8 @@ class _StoreQrTabState extends State<StoreQrTab> {
                         onPressed: (connected && _publicStoreUrl != null)
                             ? () => _exportPdf(options)
                             : null,
-                        icon: const Icon(Icons.picture_as_pdf),
-                        label: const Text('PDFに出力'),
+                        icon: const Icon(Icons.file_download),
+                        label: const Text('PDFをダウンロード'),
                       ),
                       OutlinedButton.icon(
                         onPressed: connected ? _addPosterFromFile : null,
@@ -394,12 +466,27 @@ class _StoreQrTabState extends State<StoreQrTab> {
 
                   const SizedBox(height: 16),
 
-                  // プレビュー（中央にQR）
+                  // ▼ プレビュー（選択した用紙のアスペクト比）
                   AspectRatio(
-                    aspectRatio: 3 / 4,
+                    aspectRatio: () {
+                      final def = _paperDefs[_paper]!;
+                      return def.widthMm / def.heightMm;
+                    }(),
                     child: LayoutBuilder(
                       builder: (context, c) {
-                        final qrSide = c.maxWidth * 0.35;
+                        final w = c.maxWidth;
+                        final h = c.maxHeight;
+                        final minSide = w < h ? w : h;
+
+                        final def = _paperDefs[_paper]!;
+                        // mm → px 変換（幅=用紙幅mmとして換算）
+                        final pxPerMm = w / def.widthMm;
+                        final padPx = _qrPaddingMm * pxPerMm;
+
+                        final qrSidePx = minSide * _qrScale;
+                        final boxSidePx =
+                            qrSidePx + (_putWhiteBg ? padPx * 2 : 0);
+
                         final selected = options.firstWhere(
                           (o) => o.id == _selectedPosterId,
                         );
@@ -420,10 +507,36 @@ class _StoreQrTabState extends State<StoreQrTab> {
                               ),
                             ),
                             if (_publicStoreUrl != null)
-                              SizedBox(
-                                width: qrSide,
-                                height: qrSide,
-                                child: QrImageView(data: _publicStoreUrl!),
+                              Container(
+                                width: boxSidePx,
+                                height: boxSidePx,
+                                decoration: BoxDecoration(
+                                  color: _putWhiteBg
+                                      ? Colors.white
+                                      : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(8),
+                                  boxShadow: _putWhiteBg
+                                      ? const [
+                                          BoxShadow(
+                                            color: Color(0x22000000),
+                                            blurRadius: 6,
+                                            offset: Offset(0, 2),
+                                          ),
+                                        ]
+                                      : null,
+                                ),
+                                alignment: Alignment.center,
+                                child: Padding(
+                                  padding: EdgeInsets.all(
+                                    _putWhiteBg ? padPx : 0,
+                                  ),
+                                  child: QrImageView(
+                                    data: _publicStoreUrl!,
+                                    version: QrVersions.auto,
+                                    gapless: true,
+                                    size: qrSidePx,
+                                  ),
+                                ),
                               ),
                             if (!connected)
                               Container(
@@ -450,12 +563,70 @@ class _StoreQrTabState extends State<StoreQrTab> {
                       ),
                       textAlign: TextAlign.center,
                     ),
+
+                  const SizedBox(height: 16),
+
+                  // ▼ QR見た目コントロール
+                  _SliderTile(
+                    label: 'QRサイズ（%）',
+                    value: _qrScale,
+                    min: 0.20,
+                    max: 0.60,
+                    displayAsPercent: true,
+                    onChanged: (v) => setState(() => _qrScale = v),
+                  ),
+                  _SliderTile(
+                    label: 'QRの余白（mm）',
+                    value: _qrPaddingMm,
+                    min: 0,
+                    max: 20,
+                    onChanged: (v) => setState(() => _qrPaddingMm = v),
+                  ),
+                  SwitchListTile(
+                    title: const Text('QRの背景を白で敷く'),
+                    value: _putWhiteBg,
+                    onChanged: (v) => setState(() => _putWhiteBg = v),
+                    contentPadding: EdgeInsets.zero,
+                  ),
                 ],
               ),
             );
           },
         );
       },
+    );
+  }
+}
+
+class _SliderTile extends StatelessWidget {
+  final String label;
+  final double value;
+  final double min;
+  final double max;
+  final bool displayAsPercent;
+  final ValueChanged<double> onChanged;
+  const _SliderTile({
+    required this.label,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.onChanged,
+    this.displayAsPercent = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final text = displayAsPercent
+        ? '${(value * 100).toStringAsFixed(0)}%'
+        : value.toStringAsFixed(0);
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      title: Text(label),
+      subtitle: Slider(value: value, min: min, max: max, onChanged: onChanged),
+      trailing: SizedBox(
+        width: 56,
+        child: Text(text, textAlign: TextAlign.end),
+      ),
     );
   }
 }

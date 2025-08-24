@@ -2,6 +2,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
 import 'package:yourpay/tenant/store_detail/card_shell.dart';
@@ -23,11 +24,49 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
   bool _updatingPlan = false;
   bool _savingExtras = false;
 
+  final _storePercentCtrl = TextEditingController();
+  final _storeFixedCtrl = TextEditingController();
+  bool _savingStoreCut = false;
+
   @override
   void dispose() {
     _lineUrlCtrl.dispose();
     _reviewUrlCtrl.dispose();
+    _storePercentCtrl.dispose();
+    _storeFixedCtrl.dispose();
+
     super.dispose();
+  }
+
+  Future<void> _saveStoreCut(DocumentReference tenantRef) async {
+    final percentText = _storePercentCtrl.text.trim();
+    final fixedText = _storeFixedCtrl.text.trim();
+
+    double p = double.tryParse(percentText.replaceAll('％', '')) ?? 0.0;
+    int f = int.tryParse(fixedText.replaceAll('円', '')) ?? 0;
+
+    if (p.isNaN || p < 0) p = 0;
+    if (p > 100) p = 100;
+    if (f < 0) f = 0;
+
+    setState(() => _savingStoreCut = true);
+    try {
+      await tenantRef.set({
+        'storeDeduction': {'percent': p, 'fixed': f},
+      }, SetOptions(merge: true));
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('店舗控除を保存しました')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('店舗控除の保存に失敗: $e')));
+    } finally {
+      if (mounted) setState(() => _savingStoreCut = false);
+    }
   }
 
   Future<void> _changePlan(DocumentReference tenantRef, String plan) async {
@@ -82,6 +121,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
           },
         },
       }, SetOptions(merge: true));
+
       if (mounted) {
         ScaffoldMessenger.of(
           context,
@@ -217,6 +257,15 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
             _lineUrlCtrl.text = extras['lineOfficialUrl'] as String? ?? '';
           if (_reviewUrlCtrl.text.isEmpty)
             _reviewUrlCtrl.text = extras['googleReviewUrl'] as String? ?? '';
+          // ▼ 初期反映（店舗控除）
+          final store =
+              (data['storeDeduction'] as Map?)?.cast<String, dynamic>() ?? {};
+          if (_storePercentCtrl.text.isEmpty && store['percent'] != null) {
+            _storePercentCtrl.text = '${store['percent']}';
+          }
+          if (_storeFixedCtrl.text.isEmpty && store['fixed'] != null) {
+            _storeFixedCtrl.text = '${store['fixed']}';
+          }
 
           return ListView(
             children: [
@@ -354,7 +403,98 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                 ),
               ),
               const SizedBox(height: 24),
-
+              const Text(
+                '店舗の控除・手数料',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 8),
+              CardShell(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'チップから店舗が差し引く金額を設定します（スタッフ受取分の計算に使用）。',
+                        style: TextStyle(color: Colors.black87),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          // ％
+                          Expanded(
+                            child: TextField(
+                              controller: _storePercentCtrl,
+                              decoration: const InputDecoration(
+                                labelText: '控除（％）',
+                                hintText: '例: 10 または 12.5',
+                                suffixText: '%',
+                              ),
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    signed: false,
+                                    decimal: true,
+                                  ),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(
+                                  RegExp(r'[0-9.]'),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          // 固定額（円）
+                          Expanded(
+                            child: TextField(
+                              controller: _storeFixedCtrl,
+                              decoration: const InputDecoration(
+                                labelText: '控除（固定額, 円）',
+                                hintText: '例: 50',
+                                suffixText: '円',
+                              ),
+                              keyboardType: TextInputType.number,
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly,
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: FilledButton.icon(
+                          onPressed: _savingStoreCut
+                              ? null
+                              : () => _saveStoreCut(tenantRef),
+                          icon: _savingStoreCut
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.save),
+                          label: const Text('店舗控除を保存'),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: Colors.black,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
               const Text(
                 '管理者一覧',
                 style: TextStyle(

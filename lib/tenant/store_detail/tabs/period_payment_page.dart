@@ -1,8 +1,9 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:yourpay/tenant/store_detail/card_shell.dart';
 
-class PeriodPaymentsPage extends StatelessWidget {
+class PeriodPaymentsPage extends StatefulWidget {
   final String tenantId;
   final String? tenantName;
   final DateTime? start;
@@ -15,6 +16,34 @@ class PeriodPaymentsPage extends StatelessWidget {
     this.start,
     this.endExclusive,
   });
+
+  @override
+  State<PeriodPaymentsPage> createState() => _PeriodPaymentsPageState();
+}
+
+class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
+  final _searchCtrl = TextEditingController();
+  String _search = '';
+  Timer? _debounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchCtrl.addListener(() {
+      // 入力のデバウンス（タイプ中の過剰rebuild防止）
+      _debounce?.cancel();
+      _debounce = Timer(const Duration(milliseconds: 180), () {
+        setState(() => _search = _searchCtrl.text.trim().toLowerCase());
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
 
   String _symbol(String code) {
     switch (code.toUpperCase()) {
@@ -30,40 +59,48 @@ class PeriodPaymentsPage extends StatelessWidget {
   }
 
   String _rangeLabel() {
-    if (start == null && endExclusive == null) return '全期間';
+    if (widget.start == null && widget.endExclusive == null) return '全期間';
     String f(DateTime d) =>
         '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')}';
-    final s = start != null ? f(start!) : '…';
-    final e = (endExclusive != null)
-        ? f(endExclusive!.subtract(const Duration(days: 1)))
+    final s = widget.start != null ? f(widget.start!) : '…';
+    final e = (widget.endExclusive != null)
+        ? f(widget.endExclusive!.subtract(const Duration(days: 1)))
         : '…';
     return '$s 〜 $e';
-    // endExclusive は日付の翌日なので -1day で表示
   }
 
   Query _buildQuery() {
     Query q = FirebaseFirestore.instance
         .collection('tenants')
-        .doc(tenantId)
+        .doc(widget.tenantId)
         .collection('tips')
-        .where('status', isEqualTo: 'succeeded'); // 成功のみ
+        .where('status', isEqualTo: 'succeeded');
 
-    if (start != null) {
+    if (widget.start != null) {
       q = q.where(
         'createdAt',
-        isGreaterThanOrEqualTo: Timestamp.fromDate(start!),
+        isGreaterThanOrEqualTo: Timestamp.fromDate(widget.start!),
       );
     }
-    if (endExclusive != null) {
-      q = q.where('createdAt', isLessThan: Timestamp.fromDate(endExclusive!));
+    if (widget.endExclusive != null) {
+      q = q.where(
+        'createdAt',
+        isLessThan: Timestamp.fromDate(widget.endExclusive!),
+      );
     }
 
-    // createdAt 降順で最新から
-    q = q.orderBy('createdAt', descending: true).limit(500);
+    // createdAt 降順・最大500件
+    return q.orderBy('createdAt', descending: true).limit(500);
+  }
 
-    // ⚠ 初回は「index が必要」リンクが出る場合があります。リンクを押して
-    //   (status Asc/Desc, createdAt Desc) の複合インデックスを作成してください。
-    return q;
+  String _nameFrom(Map<String, dynamic> d) {
+    final rec = (d['recipient'] as Map?)?.cast<String, dynamic>();
+    final isEmp = (rec?['type'] == 'employee') || (d['employeeId'] != null);
+    if (isEmp) {
+      return (rec?['employeeName'] ?? d['employeeName'] ?? 'スタッフ').toString();
+    } else {
+      return (rec?['storeName'] ?? d['storeName'] ?? '店舗').toString();
+    }
   }
 
   @override
@@ -77,19 +114,42 @@ class PeriodPaymentsPage extends StatelessWidget {
         foregroundColor: Colors.black,
         elevation: 0,
         title: Text(
-          tenantName == null ? '決済履歴' : '${tenantName!} の決済履歴',
+          widget.tenantName == null ? '決済履歴' : '${widget.tenantName!} の決済履歴',
           style: const TextStyle(fontWeight: FontWeight.w600),
         ),
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(34),
+          preferredSize: const Size.fromHeight(84),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                _rangeLabel(),
-                style: const TextStyle(color: Colors.black54),
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _rangeLabel(),
+                  style: const TextStyle(color: Colors.black54),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _searchCtrl,
+                  decoration: InputDecoration(
+                    hintText: '名前で検索（スタッフ名 / 店舗名）',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _search.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.clear),
+                            onPressed: () => _searchCtrl.clear(),
+                          ),
+                    isDense: true,
+                    filled: true,
+                    fillColor: const Color(0xFFF0F0F0),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -104,25 +164,34 @@ class PeriodPaymentsPage extends StatelessWidget {
             return const Center(child: CircularProgressIndicator());
           }
           final docs = snap.data!.docs;
-          if (docs.isEmpty) {
-            return const Center(child: Text('この期間のデータはありません'));
+
+          // ★ クライアント側フィルタ（部分一致・大文字小文字無視）
+          final filtered = (() {
+            if (_search.isEmpty) return docs;
+            return docs.where((doc) {
+              final d = doc.data() as Map<String, dynamic>;
+              final name = _nameFrom(d).toLowerCase();
+              return name.contains(_search);
+            }).toList();
+          })();
+
+          if (filtered.isEmpty) {
+            return const Center(child: Text('該当するデータはありません'));
           }
 
           return ListView.separated(
             padding: const EdgeInsets.all(16),
-            itemCount: docs.length,
+            itemCount: filtered.length,
             separatorBuilder: (_, __) => const SizedBox(height: 12),
             itemBuilder: (_, i) {
-              final d = docs[i].data() as Map<String, dynamic>;
-              final recipient = (d['recipient'] as Map?)
-                  ?.cast<String, dynamic>();
+              final d = filtered[i].data() as Map<String, dynamic>;
+              final rec = (d['recipient'] as Map?)?.cast<String, dynamic>();
               final isEmp =
-                  (recipient?['type'] == 'employee') ||
-                  (d['employeeId'] != null);
+                  (rec?['type'] == 'employee') || (d['employeeId'] != null);
 
               final who = isEmp
-                  ? 'スタッフ: ${recipient?['employeeName'] ?? d['employeeName'] ?? 'スタッフ'}'
-                  : '店舗: ${recipient?['storeName'] ?? d['storeName'] ?? '店舗'}';
+                  ? 'スタッフ: ${rec?['employeeName'] ?? d['employeeName'] ?? 'スタッフ'}'
+                  : '店舗: ${rec?['storeName'] ?? d['storeName'] ?? '店舗'}';
 
               final amountNum = (d['amount'] as num?) ?? 0;
               final currency =
