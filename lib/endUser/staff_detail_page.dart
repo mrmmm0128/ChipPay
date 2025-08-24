@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -40,6 +41,12 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    _initFromUrlIfNeeded(); // ← 追加：URL直叩き対応
+  }
+
+  @override
   void dispose() {
     _amountCtrl.dispose();
     super.dispose();
@@ -48,6 +55,75 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
   int _currentAmount() {
     final v = int.tryParse(_amountCtrl.text) ?? 0;
     return v.clamp(0, _maxAmount);
+  }
+
+  void _initFromUrlIfNeeded() {
+    if (tenantId != null && employeeId != null) return;
+
+    final uri = Uri.base;
+
+    // 通常のクエリ（?key=value）
+    final qp1 = uri.queryParameters;
+
+    // ハッシュルーター（/#/staff?key=value）内のクエリも拾う
+    final frag = uri.fragment; // 例: "/staff?t=xxx&e=yyy"
+    Map<String, String> qp2 = {};
+    final qIndex = frag.indexOf('?');
+    if (qIndex >= 0 && qIndex < frag.length - 1) {
+      qp2 = Uri.splitQueryString(frag.substring(qIndex + 1));
+    }
+
+    String? pick(String a, String b) {
+      return qp2[a] ?? qp2[b] ?? qp1[a] ?? qp1[b];
+    }
+
+    tenantId = tenantId ?? pick('t', 'tenantId');
+    employeeId = employeeId ?? pick('e', 'employeeId');
+    name = name ?? pick('name', 'n');
+    email = email ?? pick('email', 'mail');
+    photoUrl = photoUrl ?? pick('photoUrl', 'p');
+    tenantName = tenantName ?? pick('tenantName', 'store');
+
+    // 初期金額（任意）
+    final initAmount = pick('a', 'amount');
+    if (initAmount != null && initAmount.isNotEmpty) {
+      _amountCtrl.text = initAmount;
+    }
+
+    setState(() {});
+    _maybeFetchFromFirestore();
+  }
+
+  Future<void> _maybeFetchFromFirestore() async {
+    if (tenantId == null || employeeId == null) return;
+    // name/photo が無いときだけ取得
+    if (name == null ||
+        name!.isEmpty ||
+        photoUrl == null ||
+        photoUrl!.isEmpty) {
+      final empDoc = await FirebaseFirestore.instance
+          .collection('tenants')
+          .doc(tenantId)
+          .collection('employees')
+          .doc(employeeId)
+          .get();
+      if (empDoc.exists) {
+        final d = empDoc.data()!;
+        name ??= d['name'] as String?;
+        email ??= d['email'] as String?;
+        photoUrl ??= d['photoUrl'] as String?;
+      }
+    }
+    if (tenantName == null || tenantName!.isEmpty) {
+      final tDoc = await FirebaseFirestore.instance
+          .collection('tenants')
+          .doc(tenantId)
+          .get();
+      if (tDoc.exists) {
+        tenantName = tDoc.data()?['name'] as String?;
+      }
+    }
+    if (mounted) setState(() {});
   }
 
   void _setAmount(int v) {
