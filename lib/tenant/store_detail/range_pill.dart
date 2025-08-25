@@ -62,11 +62,19 @@ class SplitMetricsRow extends StatelessWidget {
   final int storeCount;
   final int staffYen;
   final int staffCount;
+
+  // ★ 追加：タップ時のコールバック
+  final VoidCallback? onTapStore;
+  final VoidCallback? onTapStaff;
+
   const SplitMetricsRow({
+    super.key,
     required this.storeYen,
     required this.storeCount,
     required this.staffYen,
     required this.staffCount,
+    this.onTapStore,
+    this.onTapStaff,
   });
 
   @override
@@ -74,20 +82,30 @@ class SplitMetricsRow extends StatelessWidget {
     return Row(
       children: [
         Expanded(
-          child: _MetricCardMini(
-            icon: Icons.store,
-            label: '店舗向け',
-            value: '¥$storeYen',
-            sub: '$storeCount 件',
+          // ★ 追加：タップラップ
+          child: GestureDetector(
+            onTap: onTapStore,
+            behavior: HitTestBehavior.opaque,
+            child: _MetricCardMini(
+              icon: Icons.store,
+              label: '店舗向け',
+              value: '¥$storeYen',
+              sub: '$storeCount 件',
+            ),
           ),
         ),
         const SizedBox(width: 12),
         Expanded(
-          child: _MetricCardMini(
-            icon: Icons.person,
-            label: 'スタッフ向け',
-            value: '¥$staffYen',
-            sub: '$staffCount 件',
+          // ★ 追加：タップラップ
+          child: GestureDetector(
+            onTap: onTapStaff,
+            behavior: HitTestBehavior.opaque,
+            child: _MetricCardMini(
+              icon: Icons.person,
+              label: 'スタッフ向け',
+              value: '¥$staffYen',
+              sub: '$staffCount 件',
+            ),
           ),
         ),
       ],

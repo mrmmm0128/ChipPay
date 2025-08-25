@@ -121,31 +121,49 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
     // 画面タイトルはページごとに出し分け
     final titles = ['ホーム', 'QR', 'スタッフ', '設定'];
     final appTitle = titles[_currentIndex];
-
+    final maxSwitcherW = (MediaQuery.of(context).size.width * 0.7).clamp(
+      320.0,
+      560.0,
+    );
     return Scaffold(
       backgroundColor: const Color(0xFFF7F7F7),
       appBar: AppBar(
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
+        backgroundColor: const Color(0xFFF7F7F7),
+        foregroundColor: Colors.black87,
+        automaticallyImplyLeading: false,
         elevation: 0,
+        toolbarHeight: 60,
+        titleSpacing: 16,
         title: Text(
           appTitle,
-          style: const TextStyle(fontWeight: FontWeight.w600),
+          overflow: TextOverflow.ellipsis, // ← タイトルは省略表示に
+          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.account_circle_outlined),
-            tooltip: 'アカウント',
-            onPressed: () => Navigator.pushNamed(context, '/account'),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: maxSwitcherW), // ← 左へ広げる
+              child: TenantSwitcherBar(
+                currentTenantId: tenantId,
+                currentTenantName: tenantName,
+                onChanged: (id, name) {
+                  if (id == tenantId) return;
+                  setState(() {
+                    tenantId = id;
+                    tenantName = name;
+                  });
+                },
+              ),
+            ),
           ),
           IconButton(
-            onPressed: () async {
-              await FirebaseAuth.instance.signOut();
-              if (!mounted) return;
-              Navigator.pushReplacementNamed(context, '/login');
-            },
-            icon: const Icon(Icons.logout),
-            tooltip: 'Sign out',
+            tooltip: 'お知らせ',
+            onPressed: () => {},
+            icon: const Icon(
+              Icons.notifications_outlined,
+              color: Colors.black87,
+            ),
           ),
           const SizedBox(width: 4),
         ],
@@ -156,21 +174,6 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
-                // ★ 店舗切替バー（常に表示）
-                TenantSwitcherBar(
-                  currentTenantId: tenantId,
-                  currentTenantName: tenantName,
-                  onChanged: (id, name) {
-                    if (id == tenantId) return; // ★ 同じなら何もしない
-                    setState(() {
-                      tenantId = id;
-                      tenantName = name;
-                    });
-                  },
-                ),
-
-                const SizedBox(height: 8),
-
                 // ★ コンテンツ
                 Expanded(
                   child: (tenantId == null)
@@ -204,7 +207,7 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
         onTap: (i) => setState(() => _currentIndex = i),
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'ホーム'),
-          BottomNavigationBarItem(icon: Icon(Icons.qr_code_2), label: 'QR'),
+          BottomNavigationBarItem(icon: Icon(Icons.qr_code_2), label: '印刷'),
           BottomNavigationBarItem(icon: Icon(Icons.group), label: 'スタッフ'),
           BottomNavigationBarItem(icon: Icon(Icons.settings), label: '設定'),
         ],

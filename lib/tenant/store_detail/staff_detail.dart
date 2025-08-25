@@ -95,9 +95,15 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
     final comment = _commentCtrl.text.trim();
 
     if (name.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('名前は必須です')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: Colors.white,
+          content: const Text(
+            '名前は必須です',
+            style: TextStyle(color: Colors.black87),
+          ),
+        ),
+      );
       return;
     }
 
@@ -126,15 +132,24 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
       }, SetOptions(merge: true));
 
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('保存しました')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: Colors.white,
+            content: Text('保存しました', style: TextStyle(color: Colors.black87)),
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('保存に失敗: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: Colors.white,
+            content: Text(
+              '保存に失敗: $e',
+              style: const TextStyle(color: Colors.black87),
+            ),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -163,7 +178,9 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
   InputDecoration _inputDeco(String label, {String? hint}) {
     return InputDecoration(
       labelText: label,
+      labelStyle: const TextStyle(color: Colors.black87), // ★ 統一
       hintText: hint,
+      hintStyle: const TextStyle(color: Colors.black87), // ★ 統一
       filled: true,
       fillColor: Colors.white,
       isDense: true,
@@ -183,9 +200,11 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
         .collection('employees')
         .doc(widget.employeeId);
 
+    // ボタンも黒87テキストに統一（背景は白／枠あり）
     final blackButton = FilledButton.styleFrom(
-      backgroundColor: Colors.black,
-      foregroundColor: Colors.white,
+      backgroundColor: Colors.white,
+      foregroundColor: Colors.black87,
+      side: const BorderSide(color: Colors.black54),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
     );
@@ -205,11 +224,16 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
             backgroundColor: const Color(0xFFF7F7F7),
             appBar: AppBar(
               backgroundColor: Colors.white,
-              foregroundColor: Colors.black,
+              foregroundColor: Colors.black87,
               elevation: 0,
-              title: const Text('スタッフ詳細'),
+              title: const Text(
+                'スタッフ詳細',
+                style: TextStyle(color: Colors.black87),
+              ),
             ),
-            body: Center(child: Text('読み込みエラー: ${snap.error}')),
+            body: const Center(
+              child: Text('読み込みエラー', style: TextStyle(color: Colors.black87)),
+            ),
           );
         }
         if (!snap.hasData) {
@@ -224,11 +248,19 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
             backgroundColor: const Color(0xFFF7F7F7),
             appBar: AppBar(
               backgroundColor: Colors.white,
-              foregroundColor: Colors.black,
+              foregroundColor: Colors.black87,
               elevation: 0,
-              title: const Text('スタッフ詳細'),
+              title: const Text(
+                'スタッフ詳細',
+                style: TextStyle(color: Colors.black87),
+              ),
             ),
-            body: const Center(child: Text('該当データが見つかりません')),
+            body: const Center(
+              child: Text(
+                '該当データが見つかりません',
+                style: TextStyle(color: Colors.black87),
+              ),
+            ),
           );
         }
 
@@ -250,137 +282,167 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
           backgroundColor: const Color(0xFFF7F7F7), // 薄いグレー（白基調）
           appBar: AppBar(
             backgroundColor: Colors.white,
-            foregroundColor: Colors.black,
+            foregroundColor: Colors.black87,
             elevation: 0,
             title: const Text(
               'スタッフ詳細・編集',
-              style: TextStyle(fontWeight: FontWeight.w600),
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 15,
+                color: Colors.black87, // ★ 統一
+              ),
             ),
-            actions: [
-              TextButton(
-                onPressed: _saving ? null : () => _save(empRef, data),
-                child: _saving
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('保存'),
-              ),
-            ],
+            actions: const [],
           ),
-          body: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              // 顔写真 & 基本情報
-              _whiteCard(
-                Column(
-                  children: [
-                    GestureDetector(
-                      onTap: _saving ? null : _pickNewPhoto,
-                      child: CircleAvatar(
-                        radius: 48,
-                        backgroundImage: _newPhotoBytes != null
-                            ? MemoryImage(_newPhotoBytes!)
-                            : (photoUrl.isNotEmpty
-                                      ? NetworkImage(photoUrl)
-                                      : null)
-                                  as ImageProvider<Object>?,
-                        child: (_newPhotoBytes == null && photoUrl.isEmpty)
-                            ? const Icon(Icons.camera_alt, size: 28)
-                            : null,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: _nameCtrl,
-                      decoration: _inputDeco('名前（必須）'),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _emailCtrl,
-                      decoration: _inputDeco('メールアドレス（任意）'),
-                      keyboardType: TextInputType.emailAddress,
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _commentCtrl,
-                      decoration: _inputDeco('コメント（任意）', hint: '得意分野や紹介文など'),
-                      maxLines: 3,
-                    ),
-                    const SizedBox(height: 12),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: FilledButton(
-                        style: blackButton,
-                        onPressed: _saving ? null : () => _save(empRef, data),
-                        child: _saving
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Text('保存する'),
-                      ),
-                    ),
-                  ],
-                ),
+          body: Theme(
+            data: Theme.of(context).copyWith(
+              textTheme: Theme.of(context).textTheme.apply(
+                bodyColor: Colors.black87,
+                displayColor: Colors.black87,
               ),
-
-              const SizedBox(height: 16),
-
-              // QRコードセクション
-              _whiteCard(
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'スタッフ用QRコード',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 8),
-                    Center(child: QrImageView(data: tipUrl, size: 180)),
-                    const SizedBox(height: 8),
-                    SelectableText(
-                      tipUrl,
-                      style: const TextStyle(color: Colors.black54),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
+            ),
+            child: DefaultTextStyle.merge(
+              style: const TextStyle(color: Colors.black87),
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  // 顔写真 & 基本情報
+                  _whiteCard(
+                    Column(
                       children: [
-                        OutlinedButton.icon(
-                          style: outlineButton,
-                          onPressed: () => launchUrlString(
-                            tipUrl,
-                            mode: LaunchMode.externalApplication,
+                        GestureDetector(
+                          onTap: _saving ? null : _pickNewPhoto,
+                          child: CircleAvatar(
+                            radius: 48,
+                            backgroundImage: _newPhotoBytes != null
+                                ? MemoryImage(_newPhotoBytes!)
+                                : (photoUrl.isNotEmpty
+                                          ? NetworkImage(photoUrl)
+                                          : null)
+                                      as ImageProvider<Object>?,
+                            child: (_newPhotoBytes == null && photoUrl.isEmpty)
+                                ? const Icon(Icons.camera_alt, size: 28)
+                                : null,
                           ),
-                          icon: const Icon(Icons.open_in_new),
-                          label: const Text('リンクを開く'),
                         ),
-                        OutlinedButton.icon(
-                          style: outlineButton,
-                          onPressed: () async {
-                            await Clipboard.setData(
-                              ClipboardData(text: tipUrl),
-                            );
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('URLをコピーしました')),
-                              );
-                            }
-                          },
-                          icon: const Icon(Icons.copy),
-                          label: const Text('URLをコピー'),
+                        const SizedBox(height: 16),
+                        TextField(
+                          controller: _nameCtrl,
+                          decoration: _inputDeco('名前（必須）'),
+                          style: const TextStyle(color: Colors.black87),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _emailCtrl,
+                          decoration: _inputDeco('メールアドレス（任意）'),
+                          style: const TextStyle(color: Colors.black87),
+                          keyboardType: TextInputType.emailAddress,
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _commentCtrl,
+                          decoration: _inputDeco(
+                            'コメント（任意）',
+                            hint: '得意分野や紹介文など',
+                          ),
+                          style: const TextStyle(color: Colors.black87),
+                          maxLines: 3,
+                        ),
+                        const SizedBox(height: 12),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: FilledButton(
+                            style: blackButton,
+                            onPressed: _saving
+                                ? null
+                                : () => _save(empRef, data),
+                            child: _saving
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Text(
+                                    '保存する',
+                                    style: TextStyle(color: Colors.black87),
+                                  ),
+                          ),
                         ),
                       ],
                     ),
-                  ],
-                ),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // QRコードセクション
+                  _whiteCard(
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'スタッフ用QRコード',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Center(child: QrImageView(data: tipUrl, size: 180)),
+                        const SizedBox(height: 8),
+                        SelectableText(
+                          tipUrl,
+                          style: const TextStyle(color: Colors.black87),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          children: [
+                            OutlinedButton.icon(
+                              style: outlineButton,
+                              onPressed: () => launchUrlString(
+                                tipUrl,
+                                mode: LaunchMode.externalApplication,
+                              ),
+                              icon: const Icon(Icons.open_in_new),
+                              label: const Text(
+                                'リンクを開く',
+                                style: TextStyle(color: Colors.black87),
+                              ),
+                            ),
+                            OutlinedButton.icon(
+                              style: outlineButton,
+                              onPressed: () async {
+                                await Clipboard.setData(
+                                  ClipboardData(text: tipUrl),
+                                );
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      backgroundColor: Colors.white,
+                                      content: Text(
+                                        'URLをコピーしました',
+                                        style: TextStyle(color: Colors.black87),
+                                      ),
+                                    ),
+                                  );
+                                }
+                              },
+                              icon: const Icon(Icons.copy),
+                              label: const Text(
+                                'URLをコピー',
+                                style: TextStyle(color: Colors.black87),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         );
       },

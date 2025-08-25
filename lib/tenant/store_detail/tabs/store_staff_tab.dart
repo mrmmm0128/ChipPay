@@ -307,7 +307,10 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
         children: [
           const Text(
             '全スタッフQR一覧（共有用URL）',
-            style: TextStyle(fontWeight: FontWeight.w600),
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              color: Colors.black87,
+            ),
           ),
           const SizedBox(height: 8),
           Row(

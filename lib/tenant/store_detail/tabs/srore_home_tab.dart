@@ -1,11 +1,12 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+
 import 'package:yourpay/fonts/jp_font.dart';
 import 'package:yourpay/tenant/store_detail/card_shell.dart';
 import 'package:yourpay/tenant/store_detail/home_metrics.dart';
 import 'package:yourpay/tenant/store_detail/range_pill.dart';
 import 'package:yourpay/tenant/store_detail/rank_entry.dart';
-import 'package:yourpay/tenant/store_detail/tabs/period_payment_page.dart';
+import 'package:yourpay/tenant/store_detail/period_payment_page.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
@@ -19,16 +20,19 @@ class StoreHomeTab extends StatefulWidget {
   State<StoreHomeTab> createState() => _StoreHomeTabState();
 }
 
-// ==== 期間フィルタ（ダッシュボード表示用：今月/先月/任意月/自由指定）====
-enum _RangeMode { thisMonth, lastMonth, month, custom }
+// ==== 期間フィルタ：今日/昨日/今月/先月/任意月/自由指定 ====
+enum _RangeMode { today, yesterday, thisMonth, lastMonth, month, custom }
 
 class _StoreHomeTabState extends State<StoreHomeTab> {
   bool loading = false;
 
-  // ダッシュボードの期間モード
+  // 期間モード
   _RangeMode _mode = _RangeMode.thisMonth;
-  DateTime? _selectedMonthStart; // 「月選択」の基準（各月の1日）
-  DateTimeRange? _customRange; // 自由指定の期間
+  DateTime? _selectedMonthStart; // 「月選択」の各月1日
+  DateTimeRange? _customRange; // 自由指定
+
+  // 除外するスタッフ（チップの集計・ランキング・PDFから外す）
+  final Set<String> _excludedStaff = <String>{};
 
   // ===== ユーティリティ =====
   DateTime _firstDayOfMonth(DateTime d) => DateTime(d.year, d.month, 1);
@@ -36,14 +40,12 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
       ? DateTime(d.year + 1, 1, 1)
       : DateTime(d.year, d.month + 1, 1);
 
-  // プルダウン候補：直近24か月
   List<DateTime> _monthOptions() {
     final now = DateTime.now();
     final cur = _firstDayOfMonth(now);
     return List.generate(24, (i) => DateTime(cur.year, cur.month - i, 1));
   }
 
-  // ===== 金額計算（パーセント & 固定）=====
   int _calcFee(int amount, {num? percent, num? fixed}) {
     final p = ((percent ?? 0)).clamp(0, 100);
     final f = ((fixed ?? 0)).clamp(0, 1e9);
@@ -51,14 +53,19 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
     return (percentPart + f.toInt()).clamp(0, amount);
   }
 
-  // ===== ダッシュボード用：範囲ラベル & 範囲境界 =====
   String _rangeLabel() {
     String ym(DateTime d) => '${d.year}/${d.month.toString().padLeft(2, '0')}';
     String ymd(DateTime d) =>
         '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')}';
 
     final now = DateTime.now();
+    final today0 = DateTime(now.year, now.month, now.day);
     switch (_mode) {
+      case _RangeMode.today:
+        return '今日（${ymd(today0)}）';
+      case _RangeMode.yesterday:
+        final yst = today0.subtract(const Duration(days: 1));
+        return '昨日（${ymd(yst)}）';
       case _RangeMode.thisMonth:
         final s = _firstDayOfMonth(now);
         return '今月（${ym(s)}）';
@@ -76,7 +83,16 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
 
   ({DateTime? start, DateTime? endExclusive}) _rangeBounds() {
     final now = DateTime.now();
+    final today0 = DateTime(now.year, now.month, now.day);
     switch (_mode) {
+      case _RangeMode.today:
+        return (
+          start: today0,
+          endExclusive: today0.add(const Duration(days: 1)),
+        );
+      case _RangeMode.yesterday:
+        final s = today0.subtract(const Duration(days: 1));
+        return (start: s, endExclusive: today0);
       case _RangeMode.thisMonth:
         final s = _firstDayOfMonth(now);
         return (start: s, endExclusive: _firstDayOfNextMonth(s));
@@ -102,7 +118,6 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
     }
   }
 
-  // 自由指定ピッカー
   Future<void> _pickCustomRange() async {
     final now = DateTime.now();
     final picked = await showDateRangePicker(
@@ -133,7 +148,6 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
   // 期間に含まれる各「対象月」の翌月25日を列挙
   List<DateTime> _payoutDatesForRange(DateTime start, DateTime endExclusive) {
     final dates = <DateTime>[];
-    // start の属する月の1日から、endExclusive の属する月の1日の“手前”まで
     var cur = DateTime(start.year, start.month, 1);
     final endMonth = DateTime(endExclusive.year, endExclusive.month, 1);
     while (cur.isBefore(endMonth)) {
@@ -141,23 +155,21 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
       final y = isDec ? cur.year + 1 : cur.year;
       final m = isDec ? 1 : cur.month + 1;
       dates.add(DateTime(y, m, 25)); // 翌月25日
-      // 次の月へ
       cur = DateTime(cur.year, cur.month + 1, 1);
     }
     return dates;
   }
 
-  // ===== PDF：日付フィルターで絞った期間そのままを出力（店舗入金 + スタッフ別）=====
+  // ===== PDF（現在の期間＆“除外されていない”スタッフのみ反映）=====
   Future<void> _exportMonthlyReportPdf() async {
     try {
       setState(() => loading = true);
 
-      // 対象期間（フィルターの期間）
       final b = _rangeBounds();
       if (b.start == null || b.endExclusive == null) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('期間を選択してください（今月/先月/月選択/期間指定）')),
+          const SnackBar(content: Text('期間を選択してください（今日/昨日/今月/先月/月選択/期間指定）')),
         );
         return;
       }
@@ -167,26 +179,28 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
       final periodLabel =
           '${ymd(b.start!)}〜${ymd(b.endExclusive!.subtract(const Duration(days: 1)))}';
 
-      // 手数料設定
+      // 現行の手数料設定（古いレコードのフォールバック用）
       final tSnap = await FirebaseFirestore.instance
           .collection('tenants')
           .doc(widget.tenantId)
           .get();
       final tData = tSnap.data() ?? {};
-      final fee = (tData['fee'] as Map?)?.cast<String, dynamic>() ?? const {};
-      final store =
+      final feeCfg =
+          (tData['fee'] as Map?)?.cast<String, dynamic>() ?? const {};
+      final storeCfg =
           (tData['storeDeduction'] as Map?)?.cast<String, dynamic>() ??
           const {};
-      final feePercent = fee['percent'] as num?;
-      final feeFixed = fee['fixed'] as num?;
-      final storePercent = store['percent'] as num?;
-      final storeFixed = store['fixed'] as num?;
+      final feePercent = feeCfg['percent'] as num?;
+      final feeFixed = feeCfg['fixed'] as num?;
+      final storePercent = storeCfg['percent'] as num?;
+      final storeFixed = storeCfg['fixed'] as num?;
+
       final payoutDates = _payoutDatesForRange(b.start!, b.endExclusive!);
       String ymdFull(DateTime d) =>
           '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')}';
       final payoutDatesLabel = payoutDates.map(ymdFull).join('、');
 
-      // Firestore 取得（期間・JPY・成功）
+      // 期間の Tips を取得
       final qs = await FirebaseFirestore.instance
           .collection('tenants')
           .doc(widget.tenantId)
@@ -209,12 +223,25 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
         return;
       }
 
-      // 集計：店舗入金（総チップ − 運営手数料）
-      int storeGross = 0, storeFees = 0, storeDeposit = 0;
+      // Stripe手数料の推定（保存が無い古いレコード用）
+      int _estimateStripeFee(int v) {
+        // 2.4%（小数切り捨て）
+        return (v * 24) ~/ 1000;
+      }
 
-      // 集計：スタッフ別
+      // 集計
+      int totalGross = 0; // 全体の実額合計
+      int totalAppFee = 0; // プラットフォーム手数料合計
+      int totalStripeFee = 0; // Stripe手数料合計
+      int totalStoreNet = 0; // 店舗受取見込み（net.toStore）の合計
+      bool anyStripeEstimated = false;
+
       final byStaff = <String, Map<String, dynamic>>{};
-      int grandGross = 0, grandFee = 0, grandStore = 0, grandNet = 0;
+      int grandGross = 0,
+          grandAppFee = 0,
+          grandStripe = 0,
+          grandStore = 0,
+          grandNet = 0;
 
       for (final doc in qs.docs) {
         final d = doc.data();
@@ -224,29 +251,75 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
         final amount = (d['amount'] as num?)?.toInt() ?? 0;
         if (amount <= 0) continue;
 
-        final appFee = _calcFee(amount, percent: feePercent, fixed: feeFixed);
-        final storeCut = _calcFee(
-          amount,
-          percent: storePercent,
-          fixed: storeFixed,
-        );
+        // プラットフォーム手数料（保存優先: fees.platform or appFee -> 無ければ現行設定で算出）
+        final feesMap = (d['fees'] as Map?)?.cast<String, dynamic>();
+        final appFeeStored =
+            (feesMap?['platform'] as num?)?.toInt() ??
+            (d['appFee'] as num?)?.toInt();
+        final appFee =
+            appFeeStored ??
+            _calcFee(amount, percent: feePercent, fixed: feeFixed);
 
-        // 店舗入金（すべて対象）
-        storeGross += amount;
-        storeFees += appFee;
-        storeDeposit += (amount - appFee);
+        // Stripe手数料（保存があればそれを使用／無ければ推定2.4%）
+        final stripeFeeStored =
+            ((feesMap?['stripe'] as Map?)?['amount'] as num?)?.toInt();
+        final stripeFee = stripeFeeStored ?? _estimateStripeFee(amount);
+        if (stripeFeeStored == null) anyStripeEstimated = true;
 
-        // スタッフ宛のみスタッフ集計へ
+        // 店舗控除（split.storeAmount -> applied値 -> 現行設定）
+        final split = (d['split'] as Map?)?.cast<String, dynamic>();
+        int storeCut;
+        if (split != null) {
+          final storeAmount = (split['storeAmount'] as num?)?.toInt();
+          if (storeAmount != null) {
+            storeCut = storeAmount;
+          } else {
+            final pApplied = (split['percentApplied'] as num?)?.toDouble();
+            final fApplied = (split['fixedApplied'] as num?)?.toDouble();
+            storeCut = _calcFee(amount, percent: pApplied, fixed: fApplied);
+          }
+        } else {
+          storeCut = _calcFee(amount, percent: storePercent, fixed: storeFixed);
+        }
+
+        // 受取先（スタッフ/店舗）
         final rec = (d['recipient'] as Map?)?.cast<String, dynamic>();
         final staffId =
             (d['employeeId'] as String?) ?? (rec?['employeeId'] as String?);
-        if (staffId != null && staffId.isNotEmpty) {
+        final isStaff = staffId != null && staffId.isNotEmpty;
+
+        // 保存済みのnet（あれば優先）
+        final netMap = (d['net'] as Map?)?.cast<String, dynamic>();
+        final netToStoreSaved = (netMap?['toStore'] as num?)?.toInt();
+        final netToStaffSaved = (netMap?['toStaff'] as num?)?.toInt();
+
+        final netToStore =
+            netToStoreSaved ??
+            (isStaff
+                ? storeCut
+                : (amount - appFee - stripeFee).clamp(0, amount));
+        final netToStaff =
+            netToStaffSaved ??
+            (isStaff
+                ? (amount - appFee - stripeFee - storeCut).clamp(0, amount)
+                : 0);
+
+        // 店舗サマリ（除外スタッフは含めない）
+        final include = !isStaff || !_excludedStaff.contains(staffId);
+        if (include) {
+          totalGross += amount;
+          totalAppFee += appFee;
+          totalStripeFee += stripeFee;
+          totalStoreNet += netToStore;
+        }
+
+        // スタッフ別（スタッフのみ & 除外していない）
+        if (isStaff && !_excludedStaff.contains(staffId)) {
           final staffName =
               (d['employeeName'] as String?) ??
               (rec?['employeeName'] as String?) ??
               'スタッフ';
 
-          final net = (amount - appFee - storeCut).clamp(0, amount);
           final ts = d['createdAt'];
           final when = (ts is Timestamp) ? ts.toDate() : DateTime.now();
           final memo = (d['memo'] as String?) ?? '';
@@ -257,28 +330,34 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
               'name': staffName,
               'rows': <Map<String, dynamic>>[],
               'gross': 0,
-              'fee': 0,
+              'appFee': 0,
+              'stripe': 0,
               'store': 0,
               'net': 0,
             },
           );
+
           (bucket['rows'] as List).add({
             'when': when,
             'gross': amount,
-            'fee': appFee,
+            'appFee': appFee,
+            'stripe': stripeFee,
             'store': storeCut,
-            'net': net,
+            'net': netToStaff,
             'memo': memo,
           });
+
           bucket['gross'] = (bucket['gross'] as int) + amount;
-          bucket['fee'] = (bucket['fee'] as int) + appFee;
+          bucket['appFee'] = (bucket['appFee'] as int) + appFee;
+          bucket['stripe'] = (bucket['stripe'] as int) + stripeFee;
           bucket['store'] = (bucket['store'] as int) + storeCut;
-          bucket['net'] = (bucket['net'] as int) + net;
+          bucket['net'] = (bucket['net'] as int) + netToStaff;
 
           grandGross += amount;
-          grandFee += appFee;
+          grandAppFee += appFee;
+          grandStripe += stripeFee;
           grandStore += storeCut;
-          grandNet += net;
+          grandNet += netToStaff;
         }
       }
 
@@ -315,6 +394,14 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                 '支払予定日: $payoutDatesLabel（毎月25日）',
                 style: const pw.TextStyle(fontSize: 10),
               ),
+              if (anyStripeEstimated)
+                pw.Padding(
+                  padding: const pw.EdgeInsets.only(top: 4),
+                  child: pw.Text(
+                    '※ 一部のStripe手数料は2.4%で推定しています（保存がない決済）。',
+                    style: const pw.TextStyle(fontSize: 9),
+                  ),
+                ),
               pw.SizedBox(height: 8),
               pw.Divider(),
             ],
@@ -322,7 +409,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
           build: (ctx) {
             final widgets = <pw.Widget>[];
 
-            // ① 店舗入金（振込見込み）
+            // ① 店舗入金（見込み）
             widgets.addAll([
               pw.Text(
                 '① 店舗入金（見込み）',
@@ -342,16 +429,17 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                   1: pw.FlexColumnWidth(2),
                 },
                 children: [
-                  _trSummary('対象期間チップ総額', yen(storeGross)),
-                  _trSummary('運営手数料（合計）', yen(storeFees)),
-                  _trSummary('店舗受取見込み（総額 − 手数料）', yen(storeDeposit)),
+                  _trSummary('対象期間チップ総額', yen(totalGross)),
+                  _trSummary('運営手数料（合計）', yen(totalAppFee)),
+                  _trSummary('Stripe手数料（合計）', yen(totalStripeFee)),
+                  _trSummary('店舗受取見込み（合計）', yen(totalStoreNet)),
                 ],
               ),
               pw.SizedBox(height: 14),
               pw.Divider(),
             ]);
 
-            // ② スタッフ別支払予定
+            // ② スタッフ別
             if (byStaff.isEmpty) {
               widgets.add(
                 pw.Padding(
@@ -411,9 +499,10 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                       0: pw.FlexColumnWidth(2), // 日時
                       1: pw.FlexColumnWidth(1), // 実額
                       2: pw.FlexColumnWidth(1), // 運営手数料
-                      3: pw.FlexColumnWidth(1), // 店舗控除
-                      4: pw.FlexColumnWidth(1), // 受取
-                      5: pw.FlexColumnWidth(2), // メモ
+                      3: pw.FlexColumnWidth(1), // Stripe手数料
+                      4: pw.FlexColumnWidth(1), // 店舗控除
+                      5: pw.FlexColumnWidth(1), // 受取
+                      6: pw.FlexColumnWidth(2), // メモ
                     },
                     children: [
                       pw.TableRow(
@@ -424,6 +513,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                           _cell('日時', bold: true),
                           _cell('実額', bold: true, alignRight: true),
                           _cell('運営手数料', bold: true, alignRight: true),
+                          _cell('Stripe手数料', bold: true, alignRight: true),
                           _cell('店舗控除', bold: true, alignRight: true),
                           _cell('受取額', bold: true, alignRight: true),
                           _cell('メモ', bold: true),
@@ -435,7 +525,8 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                           children: [
                             _cell(fmtDT(dt)),
                             _cell(yen(r['gross'] as int), alignRight: true),
-                            _cell(yen(r['fee'] as int), alignRight: true),
+                            _cell(yen(r['appFee'] as int), alignRight: true),
+                            _cell(yen(r['stripe'] as int), alignRight: true),
                             _cell(yen(r['store'] as int), alignRight: true),
                             _cell(yen(r['net'] as int), alignRight: true),
                             _cell((r['memo'] as String?) ?? ''),
@@ -456,8 +547,11 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                         color: PdfColors.grey200,
                       ),
                       child: pw.Text(
-                        '小計  実額: ${yen(e.value['gross'] as int)}   手数料: ${yen(e.value['fee'] as int)}   '
-                        '店舗控除: ${yen(e.value['store'] as int)}   受取額: ${yen(e.value['net'] as int)}',
+                        '小計  実額: ${yen(e.value['gross'] as int)}   '
+                        '運営手数料: ${yen(e.value['appFee'] as int)}   '
+                        'Stripe手数料: ${yen(e.value['stripe'] as int)}   '
+                        '店舗控除: ${yen(e.value['store'] as int)}   '
+                        '受取額: ${yen(e.value['net'] as int)}',
                         style: const pw.TextStyle(fontSize: 10),
                       ),
                     ),
@@ -471,8 +565,11 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                 pw.Align(
                   alignment: pw.Alignment.centerRight,
                   child: pw.Text(
-                    '（スタッフ宛）総計  実額: ${yen(grandGross)}   手数料: ${yen(grandFee)}   '
-                    '店舗控除: ${yen(grandStore)}   受取額: ${yen(grandNet)}',
+                    '（スタッフ宛）総計  実額: ${yen(grandGross)}   '
+                    '運営手数料: ${yen(grandAppFee)}   '
+                    'Stripe手数料: ${yen(grandStripe)}   '
+                    '店舗控除: ${yen(grandStore)}   '
+                    '受取額: ${yen(grandNet)}',
                     style: pw.TextStyle(
                       fontSize: 12,
                       fontWeight: pw.FontWeight.bold,
@@ -521,8 +618,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
     children: [_cell(left, bold: true), _cell(right, alignRight: true)],
   );
 
-  // 期間付きの履歴ページへ遷移
-  void _openPeriodPayments() {
+  void _openPeriodPayments({RecipientFilter filter = RecipientFilter.all}) {
     final b = _rangeBounds();
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -531,6 +627,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
           tenantName: widget.tenantName,
           start: b.start,
           endExclusive: b.endExclusive,
+          recipientFilter: filter, // ★ ここ！
         ),
       ),
     );
@@ -541,7 +638,27 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
     final months = _monthOptions();
     final monthValue = _selectedMonthStart ?? months.first;
 
-    // === フィルタ + PDF をひとつのバーに統合 ===
+    final topCta = Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: SizedBox(
+        width: double.infinity,
+        child: FilledButton.icon(
+          onPressed: _exportMonthlyReportPdf,
+          icon: const Icon(Icons.receipt_long, size: 18),
+          label: const Text('選択された期間・スタッフの明細を確認する'),
+          style: FilledButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            backgroundColor: Colors.black,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // === フィルタバー ===
     final filterBar = Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: SingleChildScrollView(
@@ -552,6 +669,16 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
           runSpacing: 8,
           children: [
             RangePill(
+              label: '今日',
+              active: _mode == _RangeMode.today,
+              onTap: () => setState(() => _mode = _RangeMode.today),
+            ),
+            RangePill(
+              label: '昨日',
+              active: _mode == _RangeMode.yesterday,
+              onTap: () => setState(() => _mode = _RangeMode.yesterday),
+            ),
+            RangePill(
               label: '今月',
               active: _mode == _RangeMode.thisMonth,
               onTap: () => setState(() => _mode = _RangeMode.thisMonth),
@@ -561,7 +688,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
               active: _mode == _RangeMode.lastMonth,
               onTap: () => setState(() => _mode = _RangeMode.lastMonth),
             ),
-            // 月選択（黒文字/白背景/表示は常に「月選択」）
+            // 月選択
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
@@ -580,27 +707,29 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                     size: 18,
                   ),
                   style: const TextStyle(color: Colors.black87),
-                  selectedItemBuilder: (context) => months.map((_) {
-                    return const Text(
-                      '月選択',
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: Colors.black87,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    );
-                  }).toList(),
-                  items: months.map((m) {
-                    final label =
-                        '${m.year}/${m.month.toString().padLeft(2, '0')}';
-                    return DropdownMenuItem<DateTime>(
-                      value: m,
-                      child: Text(
-                        label,
-                        style: const TextStyle(color: Colors.black87),
-                      ),
-                    );
-                  }).toList(),
+                  selectedItemBuilder: (context) => months
+                      .map(
+                        (_) => const Text(
+                          '月選択',
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.black87,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      )
+                      .toList(),
+                  items: months
+                      .map(
+                        (m) => DropdownMenuItem<DateTime>(
+                          value: m,
+                          child: Text(
+                            '${m.year}/${m.month.toString().padLeft(2, '0')}',
+                            style: const TextStyle(color: Colors.black87),
+                          ),
+                        ),
+                      )
+                      .toList(),
                   onChanged: (val) {
                     if (val == null) return;
                     setState(() {
@@ -617,35 +746,12 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
               icon: Icons.date_range,
               onTap: _pickCustomRange,
             ),
-            // コンパクトPDFボタン
-            FilledButton.icon(
-              onPressed: loading ? null : _exportMonthlyReportPdf,
-              icon: loading
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.picture_as_pdf, size: 18),
-              label: const Text('明細PDF'),
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-                backgroundColor: Colors.black,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
           ],
         ),
       ),
     );
 
-    // 期間境界で tips クエリ（ストリーム表示用）
+    // 期間境界で tips クエリ（ストリーム）
     final bounds = _rangeBounds();
     Query tipsQ = FirebaseFirestore.instance
         .collection('tenants')
@@ -671,8 +777,10 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          topCta,
           filterBar,
-          // ===== ダッシュボード（合計・分割・ランキング）=====
+
+          // ===== データ＆UI（スタッフチップ/ランキング/統計） =====
           StreamBuilder<QuerySnapshot>(
             stream: tipsQ.snapshots(),
             builder: (context, snap) {
@@ -691,6 +799,83 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
               }
 
               final docs = snap.data?.docs ?? [];
+
+              // まず「この期間に現れたスタッフ一覧（全員）」を作る（合計額で並び替え）
+              final Map<String, int> staffTotalsAll = {};
+              final Map<String, String> staffNamesAll = {};
+              for (final doc in docs) {
+                final d = doc.data() as Map<String, dynamic>;
+                final recipient = (d['recipient'] as Map?)
+                    ?.cast<String, dynamic>();
+                final employeeId =
+                    (d['employeeId'] as String?) ??
+                    recipient?['employeeId'] as String?;
+                if (employeeId != null && employeeId.isNotEmpty) {
+                  final name =
+                      (d['employeeName'] as String?) ??
+                      (recipient?['employeeName'] as String?) ??
+                      'スタッフ';
+                  staffNamesAll[employeeId] = name;
+                  final amount = (d['amount'] as num?)?.toInt() ?? 0;
+                  staffTotalsAll[employeeId] =
+                      (staffTotalsAll[employeeId] ?? 0) + amount;
+                }
+              }
+              final staffOrder = staffTotalsAll.keys.toList()
+                ..sort(
+                  (a, b) => (staffTotalsAll[b] ?? 0).compareTo(
+                    staffTotalsAll[a] ?? 0,
+                  ),
+                );
+
+              // === スタッフ切替ボタン列（除外は暗く） ===
+              Widget staffChips() {
+                if (staffOrder.isEmpty) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final id in staffOrder)
+                        ChoiceChip(
+                          label: Text(staffNamesAll[id] ?? 'スタッフ'),
+                          selected: _excludedStaff.contains(
+                            id,
+                          ), // selected = 除外中（暗く）
+                          onSelected: (sel) {
+                            setState(() {
+                              if (sel) {
+                                _excludedStaff.add(id);
+                              } else {
+                                _excludedStaff.remove(id);
+                              }
+                            });
+                          },
+                          selectedColor: Colors.black,
+                          labelStyle: TextStyle(
+                            color: _excludedStaff.contains(id)
+                                ? Colors.white
+                                : Colors.black87,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          backgroundColor: Colors.white,
+                          shape: StadiumBorder(
+                            side: BorderSide(color: Colors.black26),
+                          ),
+                        ),
+                      if (_excludedStaff.isNotEmpty)
+                        TextButton(
+                          onPressed: () =>
+                              setState(() => _excludedStaff.clear()),
+                          child: const Text('全員含める'),
+                        ),
+                    ],
+                  ),
+                );
+              }
+
+              // ==== 集計（除外を反映）====
               int totalAll = 0, countAll = 0;
               int totalStore = 0, countStore = 0;
               int totalStaff = 0, countStaff = 0;
@@ -703,15 +888,20 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                 if (currency != 'JPY') continue;
                 final amount = (d['amount'] as num?)?.toInt() ?? 0;
 
-                totalAll += amount;
-                countAll += 1;
-
                 final recipient = (d['recipient'] as Map?)
                     ?.cast<String, dynamic>();
                 final employeeId =
                     (d['employeeId'] as String?) ??
                     recipient?['employeeId'] as String?;
                 final isStaff = (employeeId != null && employeeId.isNotEmpty);
+
+                // 除外ロジック：スタッフ分は除外セットに入っていたらスキップ
+                final include =
+                    !isStaff || !_excludedStaff.contains(employeeId);
+                if (!include) continue;
+
+                totalAll += amount;
+                countAll += 1;
 
                 if (isStaff) {
                   totalStaff += amount;
@@ -732,32 +922,15 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                 }
               }
 
+              // === UI ===
               if (docs.isEmpty) {
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: const [
-                    HomeMetrics(totalYen: 0, count: 0),
-                    SizedBox(height: 12),
-                    SplitMetricsRow(
-                      storeYen: 0,
-                      storeCount: 0,
-                      staffYen: 0,
-                      staffCount: 0,
-                    ),
-                    SizedBox(height: 16),
-                    Text(
-                      'スタッフランキング（上位10）',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: Colors.black87,
-                      ),
-                    ),
                     SizedBox(height: 8),
-                    Center(
-                      child: Text(
-                        'データがありません',
-                        style: TextStyle(color: Colors.black87),
-                      ),
+                    Text(
+                      'この期間のデータがありません',
+                      style: TextStyle(color: Colors.black87),
                     ),
                   ],
                 );
@@ -780,19 +953,31 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  HomeMetrics(
+                  const Text("スタッフ", style: TextStyle(color: Colors.black87)),
+                  const SizedBox(height: 10),
+                  staffChips(),
+                  TotalsCard(
                     totalYen: totalAll,
                     count: countAll,
-                    onTapTotal: _openPeriodPayments,
+                    onTap: _openPeriodPayments,
                   ),
                   const SizedBox(height: 12),
+                  // 例：SplitMetricsRow の配置箇所
                   SplitMetricsRow(
                     storeYen: totalStore,
                     storeCount: countStore,
                     staffYen: totalStaff,
                     staffCount: countStaff,
+                    onTapStore: () => _openPeriodPayments(
+                      filter: RecipientFilter.storeOnly, // ★ 店舗のみ
+                    ),
+                    onTapStaff: () => _openPeriodPayments(
+                      filter: RecipientFilter.staffOnly, // ★ スタッフのみ
+                    ),
                   ),
-                  const SizedBox(height: 16),
+
+                  const SizedBox(height: 12),
+
                   const Text(
                     'スタッフランキング（上位10）',
                     style: TextStyle(
