@@ -172,7 +172,11 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
       final sessionId = data['sessionId'] as String;
 
       // Stripe Checkout へ
-      await launchUrlString(checkoutUrl, mode: LaunchMode.externalApplication);
+      await launchUrlString(
+        checkoutUrl,
+        mode: LaunchMode.platformDefault, // Webは同タブ
+        webOnlyWindowName: '_self', // ★同じタブに強制
+      );
       await _ensureAnonSignIn();
 
       if (!mounted) return;
@@ -363,8 +367,14 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                               const Spacer(),
                               TextButton.icon(
                                 onPressed: () => _setAmount(0),
-                                icon: const Icon(Icons.clear),
-                                label: const Text('クリア'),
+                                icon: const Icon(
+                                  Icons.clear,
+                                  color: Colors.black54,
+                                ),
+                                label: const Text(
+                                  'クリア',
+                                  style: TextStyle(color: Colors.black54),
+                                ),
                               ),
                             ],
                           ),

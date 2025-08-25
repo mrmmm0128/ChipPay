@@ -107,6 +107,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
         title: const Text('チップ'),
         automaticallyImplyLeading: false,
       ),
+      backgroundColor: Colors.white,
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -149,7 +150,10 @@ class _TipCompletePageState extends State<TipCompletePage> {
                   width: double.infinity,
                   child: OutlinedButton.icon(
                     icon: const Icon(Icons.people_alt),
-                    label: const Text('他のスタッフにチップを送る'),
+                    label: const Text(
+                      '他のスタッフにチップを送る',
+                      style: TextStyle(color: Colors.black54),
+                    ),
                     onPressed: _navigatePublicStorePage,
                   ),
                 ),

@@ -600,7 +600,10 @@ class _SectionTitle extends StatelessWidget {
               onPressed: onAction,
               child: Text(
                 actionText!,
-                style: const TextStyle(fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: Colors.black54,
+                ),
               ),
             ),
         ],
