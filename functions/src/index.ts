@@ -12,6 +12,7 @@ const db = admin.firestore();
 
 export const RESEND_API_KEY = defineSecret('RESEND_API_KEY');
 
+
 /** 必須環境変数チェック（未設定ならわかりやすく失敗させる） */
 function requireEnv(name: string): string {
   const v = process.env[name];

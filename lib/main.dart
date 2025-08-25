@@ -71,8 +71,12 @@ class MyApp extends StatelessWidget {
     };
 
     return MaterialApp(
-      title: 'YourPay',
-      theme: ThemeData.dark(useMaterial3: true),
+      theme: ThemeData.dark(useMaterial3: true).copyWith(
+        textTheme: ThemeData.dark().textTheme.apply(
+          bodyColor: Colors.black, // 本文の色
+          displayColor: Colors.black, // 見出しの色
+        ),
+      ),
 
       onGenerateRoute: (settings) {
         final name = settings.name ?? '/';
