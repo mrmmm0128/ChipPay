@@ -16,8 +16,8 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
   // ===== デザイン用の統一カラー・線の太さ =====
   static const Color kBlack = Color(0xFF000000);
   static const Color kWhite = Color(0xFFFFFFFF);
-  static const Color kYellow = Color(0xFFFFD54F); // 黄色
-  static const double kBorderWidth = 2.0;
+  static const Color kYellow = Color(0xFFF1D247); // 黄色
+  static const double kBorderWidth = 7.0;
 
   String? tenantId;
   String? employeeId;
@@ -553,7 +553,7 @@ class _AmountKeypad extends StatelessWidget {
   // デザイン定数（このクラス内でも統一）
   static const Color kBlack = Color(0xFF000000);
   static const Color kWhite = Color(0xFFFFFFFF);
-  static const double kBorderWidth = 2.0;
+  static const double kBorderWidth = 7.0;
 
   final void Function(int digit) onTapDigit;
   final VoidCallback onTapDoubleZero;
