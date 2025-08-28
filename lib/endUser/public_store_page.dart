@@ -216,15 +216,7 @@ class _PublicStorePageState extends State<PublicStorePage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // ===== ヒーロー（LPの顔） =====
-                _HeroSection(
-                  title: tenantName ?? '店舗',
-                  headline: '気持ちが届く、スマートなチップ体験。',
-                  subline: 'スタッフを応援して、もっと良い体験を。1タップで簡単に。', // 文言は適宜
-                  onTapPrimary: _scrollToStaffSection,
-                  onTapSecondary: openStoreTip,
-                ),
-
+                const Text('チップを送りましょう'),
                 // ===== Cタイプ限定：外部リンク群 =====
                 if (isTypeC)
                   _ExternalLinksRow(
@@ -239,23 +231,6 @@ class _PublicStorePageState extends State<PublicStorePage> {
                   ),
 
                 const SizedBox(height: 16),
-
-                // ===== スタッフ抜粋（最新6） =====
-                _SectionTitle(
-                  icon: Icons.people_alt_outlined,
-                  title: 'スタッフ紹介',
-                  actionText: '一覧を見る',
-                  onAction: _scrollToStaffSection,
-                ),
-                _StaffExcerpt(tenantId: tenantId!, limit: 6),
-
-                const SizedBox(height: 12),
-
-                // ===== レビュー抜粋（最新3） =====
-                _SectionTitle(icon: Icons.reviews_outlined, title: 'お客様の声'),
-                _ReviewExcerpt(tenantId: tenantId!, limit: 3),
-
-                const SizedBox(height: 8),
 
                 // ===== スタッフ一覧（アンカー） =====
                 Padding(
@@ -405,6 +380,13 @@ class _PublicStorePageState extends State<PublicStorePage> {
                     );
                   },
                 ),
+                // ===== Googleレビューへの誘導 =====
+                _SectionTitle(
+                  icon: Icons.reviews_outlined,
+                  title: 'Googleレビュー',
+                ),
+
+                //　リンクを貼る
               ],
             ),
           ),
@@ -612,92 +594,6 @@ class _SectionTitle extends StatelessWidget {
   }
 }
 
-class _StaffExcerpt extends StatelessWidget {
-  final String tenantId;
-  final int limit;
-  const _StaffExcerpt({required this.tenantId, this.limit = 6});
-
-  @override
-  Widget build(BuildContext context) {
-    final q = FirebaseFirestore.instance
-        .collection('tenants')
-        .doc(tenantId)
-        .collection('employees')
-        .orderBy('createdAt', descending: true)
-        .limit(limit);
-
-    return StreamBuilder<QuerySnapshot>(
-      stream: q.snapshots(),
-      builder: (context, snap) {
-        if (snap.hasError) {
-          return Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text('読み込みエラー: ${snap.error}'),
-          );
-        }
-        if (!snap.hasData) {
-          return const SizedBox(
-            height: 160,
-            child: Center(child: CircularProgressIndicator()),
-          );
-        }
-
-        final docs = snap.data!.docs;
-        if (docs.isEmpty) {
-          return const Padding(
-            padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Text('スタッフ情報は準備中です'),
-          );
-        }
-
-        return SizedBox(
-          height: 170, // カードが切れない程度に余裕
-          child: ScrollConfiguration(
-            behavior: const _NoGlowScrollBehavior(),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Row(
-                children: List.generate(docs.length, (i) {
-                  final d = docs[i].data() as Map<String, dynamic>;
-                  final id = docs[i].id;
-                  final name = (d['name'] ?? 'スタッフ') as String;
-                  final email = (d['email'] ?? '') as String;
-                  final photoUrl = (d['photoUrl'] ?? '') as String;
-
-                  return Padding(
-                    padding: EdgeInsets.only(
-                      right: i == docs.length - 1 ? 0 : 12,
-                    ),
-                    child: _StaffChip(
-                      name: name,
-                      email: email,
-                      photoUrl: photoUrl,
-                      onTap: () {
-                        Navigator.pushNamed(
-                          context,
-                          '/staff',
-                          arguments: {
-                            'tenantId': tenantId,
-                            'employeeId': id,
-                            'name': name,
-                            'email': email,
-                            'photoUrl': photoUrl,
-                          },
-                        );
-                      },
-                    ),
-                  );
-                }),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
 /// スクロールのオーバーグロー（青い光）を消す・マウス/トラックパッドでもドラッグ可
 class _NoGlowScrollBehavior extends MaterialScrollBehavior {
   const _NoGlowScrollBehavior();
@@ -774,116 +670,6 @@ class _StaffChip extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _ReviewExcerpt extends StatelessWidget {
-  final String tenantId;
-  final int limit;
-  const _ReviewExcerpt({required this.tenantId, this.limit = 3});
-
-  @override
-  Widget build(BuildContext context) {
-    final q = FirebaseFirestore.instance
-        .collection('tenants')
-        .doc(tenantId)
-        .collection('publicReviews')
-        .orderBy('createdAt', descending: true)
-        .limit(limit);
-
-    return StreamBuilder<QuerySnapshot>(
-      stream: q.snapshots(),
-      builder: (context, snap) {
-        if (snap.hasError) {
-          return Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text('読み込みエラー: ${snap.error}'),
-          );
-        }
-        if (!snap.hasData) {
-          return const Padding(
-            padding: EdgeInsets.all(24),
-            child: Center(child: CircularProgressIndicator()),
-          );
-        }
-        final docs = snap.data!.docs;
-        if (docs.isEmpty) {
-          return const Padding(
-            padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Text('レビューはまだありません'),
-          );
-        }
-
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: Column(
-            children: docs.map((d) {
-              final data = d.data() as Map<String, dynamic>;
-              final author = (data['authorName'] ?? 'ゲスト').toString();
-              final rating = (data['rating'] ?? 5) as num;
-              final comment = (data['comment'] ?? '').toString();
-
-              return Container(
-                margin: const EdgeInsets.only(bottom: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: const [
-                    BoxShadow(color: Color(0x14000000), blurRadius: 12),
-                  ],
-                ),
-                padding: const EdgeInsets.all(14),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Icon(
-                      Icons.account_circle,
-                      size: 36,
-                      color: Colors.black45,
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // 星
-                          Row(
-                            children: List.generate(5, (i) {
-                              return Icon(
-                                i < rating.round()
-                                    ? Icons.star
-                                    : Icons.star_border,
-                                size: 18,
-                                color: Colors.amber[700],
-                              );
-                            }),
-                          ),
-                          const SizedBox(height: 6),
-                          if (comment.isNotEmpty)
-                            Text(
-                              comment,
-                              style: const TextStyle(color: Colors.black87),
-                            ),
-                          const SizedBox(height: 6),
-                          Text(
-                            author,
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  color: Colors.black54,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }).toList(),
-          ),
-        );
-      },
     );
   }
 }
