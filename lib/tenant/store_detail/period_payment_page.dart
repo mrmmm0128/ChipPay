@@ -226,14 +226,6 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
             separatorBuilder: (_, __) => const SizedBox(height: 12),
             itemBuilder: (_, i) {
               final d = filtered[i].data() as Map<String, dynamic>;
-              final split = (d['split'] as Map?)?.cast<String, dynamic>();
-              final appliedPct = (split?['percentApplied'] as num?)?.toDouble();
-              final appliedFixed = (split?['fixedApplied'] as num?)?.toInt();
-              final storeAmt = (split?['storeAmount'] as num?)?.toInt();
-              final staffAmt = (split?['staffAmount'] as num?)?.toInt();
-              final appliedInfo = (appliedPct != null || appliedFixed != null)
-                  ? '控除適用: ${appliedPct?.toStringAsFixed(1) ?? 0}% + ${(appliedFixed ?? 0)}円'
-                  : null;
               final rec = (d['recipient'] as Map?)?.cast<String, dynamic>();
               final isEmp =
                   (rec?['type'] == 'employee') || (d['employeeId'] != null);
@@ -242,6 +234,7 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
                   ? 'スタッフ: ${rec?['employeeName'] ?? d['employeeName'] ?? 'スタッフ'}'
                   : '店舗: ${rec?['storeName'] ?? d['storeName'] ?? '店舗'}';
 
+              // ★ 元金（チップの支払金額）のみ
               final amountNum = (d['amount'] as num?) ?? 0;
               final currency =
                   (d['currency'] as String?)?.toUpperCase() ?? 'JPY';
@@ -250,6 +243,7 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
                   ? '$sym${amountNum.toInt()}'
                   : '${amountNum.toInt()} $currency';
 
+              // 日時（表示は継続）
               String when = '';
               final ts = d['createdAt'];
               if (ts is Timestamp) {
@@ -275,33 +269,19 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
                       color: Colors.black87,
                     ),
                   ),
+                  // ★ サブタイトルは日時のみ（控除適用などは非表示）
                   subtitle: Text(
-                    [when, if (appliedInfo != null) appliedInfo].join('  •  '),
+                    when,
                     style: const TextStyle(color: Colors.black87),
                   ),
-                  trailing: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        amountText,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                          color: Colors.black87,
-                        ),
-                      ),
-                      if (storeAmt != null && staffAmt != null)
-                        const SizedBox(height: 2),
-                      if (storeAmt != null && staffAmt != null)
-                        Text(
-                          '店¥$storeAmt / ス¥$staffAmt',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.black54,
-                          ),
-                        ),
-                    ],
+                  // ★ 右側も元金のみを表示（店/スタッフ分配は非表示）
+                  trailing: Text(
+                    amountText,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                      color: Colors.black87,
+                    ),
                   ),
                 ),
               );

@@ -34,26 +34,33 @@ class RankingGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isWide = MediaQuery.of(context).size.width >= 720;
-    final cross = isWide ? 5 : 3;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        // 幅で列数をきめ細かく調整
+        // 〜359px: 2列 / 360〜599: 3列 / 600〜899: 4列 / 900〜: 5列
+        final int cross = w < 481 ? 2 : (w < 600 ? 3 : (w < 900 ? 4 : 5));
+        final double spacing = w < 360 ? 10 : 15;
+        final double aspect = w < 360 ? 0.88 : 0.9; // 狭い端末はわずかに背を低く
 
-    return GridView.builder(
-      shrinkWrap: shrinkWrap, // ← 反映
-      physics: physics, // ← 反映
-      padding: const EdgeInsets.all(4),
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: cross,
-        mainAxisSpacing: 15,
-        crossAxisSpacing: 15,
-        childAspectRatio: 0.9,
-      ),
-      itemCount: entries.length,
-      itemBuilder: (_, i) {
-        final e = entries[i];
-        return Padding(
-          // ほんの少しだけ上下左右に余白を入れて窮屈さを回避
-          padding: const EdgeInsets.fromLTRB(8, 10, 8, 6),
-          child: EmployeeRankTile(tenantId: tenantId, entry: e),
+        return GridView.builder(
+          shrinkWrap: shrinkWrap, // 呼び出し側で true を渡せる
+          physics: physics, // 呼び出し側で NeverScrollable を渡せる
+          padding: const EdgeInsets.all(4),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: cross,
+            mainAxisSpacing: spacing,
+            crossAxisSpacing: spacing,
+            childAspectRatio: aspect,
+          ),
+          itemCount: entries.length,
+          itemBuilder: (_, i) {
+            final e = entries[i];
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(8, 10, 8, 6),
+              child: EmployeeRankTile(tenantId: tenantId, entry: e),
+            );
+          },
         );
       },
     );
@@ -72,19 +79,21 @@ class EmployeeRankTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Column(
-      mainAxisSize: MainAxisSize.min, // 高さに合わせて縮む
+      mainAxisSize: MainAxisSize.min,
       children: [
         LayoutBuilder(
           builder: (context, c) {
-            // セルの幅に対してスケール：小さい端末でも溢れない
-            final double size = (c.maxWidth * 0.82).clamp(96.0, 160.0);
+            // セルの「短辺」に合わせるのがコツ（縦に溢れづらい）
+            final double size = (c.biggest.shortestSide * 0.78)
+                .clamp(90.0, 150.0)
+                .toDouble();
+
             return SizedBox(
               width: size,
               height: size,
               child: Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  // 丸写真
                   Positioned.fill(
                     child: ClipOval(
                       child: _EmployeePhoto(
@@ -93,7 +102,6 @@ class EmployeeRankTile extends StatelessWidget {
                       ),
                     ),
                   ),
-                  // 左上の順位バッジ
                   Positioned(
                     top: 6,
                     left: 6,
@@ -107,9 +115,9 @@ class EmployeeRankTile extends StatelessWidget {
                         borderRadius: BorderRadius.circular(6),
                         boxShadow: const [
                           BoxShadow(
-                            color: Color(0x33000000),
-                            blurRadius: 6,
-                            offset: Offset(0, 2),
+                            color: Color(0x22000000), // 影を弱めて視覚的なはみ出しも軽減
+                            blurRadius: 4,
+                            offset: Offset(0, 1),
                           ),
                         ],
                       ),
@@ -128,7 +136,7 @@ class EmployeeRankTile extends StatelessWidget {
             );
           },
         ),
-        const SizedBox(height: 8), // ← 少しだけ詰める
+        const SizedBox(height: 8),
         Text(
           entry.name.isNotEmpty ? entry.name : 'スタッフ',
           maxLines: 1,
@@ -136,16 +144,11 @@ class EmployeeRankTile extends StatelessWidget {
           textAlign: TextAlign.center,
           style: const TextStyle(
             fontWeight: FontWeight.w700,
-            fontSize: 13.5, // ← わずかに小さく
+            fontSize: 13.5,
             letterSpacing: 0.2,
             color: Colors.black54,
           ),
         ),
-        // 補足があればここに（必要時のみ）
-        // const SizedBox(height: 2),
-        // Text('¥${entry.amount} / ${entry.count}回',
-        //   style: const TextStyle(color: Colors.black54, fontSize: 12),
-        // ),
       ],
     );
   }

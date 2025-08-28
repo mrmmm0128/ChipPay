@@ -48,8 +48,8 @@ enum _Paper { a4, a3, letter, legal }
 
 class _PaperDef {
   final String label;
-  final PdfPageFormat format; // PDF用
-  final double widthMm; // プレビュー用
+  final PdfPageFormat format; // PDF用（縦基準）
+  final double widthMm; // プレビュー用（縦基準）
   final double heightMm;
   const _PaperDef(this.label, this.format, this.widthMm, this.heightMm);
 }
@@ -67,16 +67,16 @@ class _StoreQrTabState extends State<StoreQrTab> {
   String? _publicStoreUrl;
   String _selectedPosterId = 'asset'; // 既定はアセット
 
-  // ▼ 追加: 表示/出力のカスタム設定
+  // ▼ 表示/出力のカスタム設定
   bool _putWhiteBg = true; // QRの白背景
   double _qrScale = 0.35; // 画面/紙の短辺に対する占有率（20%〜60%）
   double _qrPaddingMm = 6; // QRの外側の白余白（mm）
-  _Paper _paper = _Paper.a4; // 選択用紙
+  _Paper _paper = _Paper.a4; // 用紙
+  bool _landscape = false; // 横向き切替
 
   @override
   void initState() {
     super.initState();
-    // 画面表示時にデフォルトでQRを出す
     _publicStoreUrl = _buildStoreUrl();
   }
 
@@ -85,9 +85,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.tenantId != widget.tenantId) {
       setState(() {
-        _publicStoreUrl = _buildStoreUrl(); // ← 選択中の店舗で更新
-        // （必要なら）ポスター選択を初期に戻したい場合は次行のコメントを外す
-        // _selectedPosterId = 'asset';
+        _publicStoreUrl = _buildStoreUrl();
       });
     }
   }
@@ -193,17 +191,18 @@ class _StoreQrTabState extends State<StoreQrTab> {
     }
 
     final pdef = _paperDefs[_paper]!;
+    final pageFormat = _landscape ? pdef.format.landscape : pdef.format;
+
     final doc = pw.Document();
 
     doc.addPage(
       pw.Page(
-        pageFormat: pdef.format, // ← 選択用紙を使用
+        pageFormat: pageFormat,
         build: (ctx) {
           final pageW = ctx.page.pageFormat.availableWidth;
           final pageH = ctx.page.pageFormat.availableHeight;
           final minSide = pageW < pageH ? pageW : pageH;
 
-          // サイズ・余白（pt単位）
           final qrSidePt = minSide * _qrScale;
           final padPt = _qrPaddingMm * PdfPageFormat.mm;
 
@@ -245,7 +244,6 @@ class _StoreQrTabState extends State<StoreQrTab> {
       ),
     );
 
-    // 印刷ダイアログを出さずに直接ダウンロード/共有
     await Printing.sharePdf(
       bytes: await doc.save(),
       filename: 'store_qr_${widget.tenantId}.pdf',
@@ -253,26 +251,65 @@ class _StoreQrTabState extends State<StoreQrTab> {
   }
 
   Future<void> _openOnboarding() async {
+    // ← 旧: createAccountOnboardingLink を呼んでいたメソッドを差し替え
     try {
+      // ここで最小限の事前入力（prefill）を渡します。
+      // country は 'JP' を既定、businessType はお店の形態に合わせて 'individual' or 'company'
+      final payload = {
+        'tenantId': widget.tenantId,
+        'account': {
+          'country': 'JP',
+          'businessType': 'individual', // or 'company'
+          // 'email': FirebaseAuth.instance.currentUser?.email, // 任意
+          'businessProfile': {
+            // 任意: 公開ページURLや説明などがあれば入れると審査が進みやすいです
+            'url': _publicStoreUrl, // 例: 店舗の公開ページ
+            'product_description': 'チップ受け取り（チッププラットフォーム）',
+            // 'mcc': '7299', // 必要に応じて
+          },
+          // 'individual': {...}, // ここに氏名/住所/生年月日/電話などを事前入力で渡せます（任意）
+          // 'company': {...},    // 会社の場合の事前入力
+          'tosAccepted': true, // 利用規約同意（日時/IP/UAは関数側で付与）
+          // 'bankAccountToken': 'btok_xxx', // 口座をトークン化済みなら渡す（任意）
+        },
+      };
+
       final res = await _functions
-          .httpsCallable('createAccountOnboardingLink')
-          .call({'tenantId': widget.tenantId});
-      final url = (res.data as Map)['url'] as String;
-      await launchUrlString(url, mode: LaunchMode.externalApplication);
+          .httpsCallable('upsertConnectedAccount')
+          .call(payload);
+
+      final data = (res.data as Map?) ?? const {};
+      final url = data['onboardingUrl'] as String?;
+      final chargesEnabled = data['chargesEnabled'] == true;
+      final payoutsEnabled = data['payoutsEnabled'] == true;
+
+      if (url != null && url.isNotEmpty) {
+        // 必須のKYCがまだ残っているときだけ、Stripeホスト画面へ
+        await launchUrlString(url, mode: LaunchMode.externalApplication);
+        return;
+      }
+
+      // ホスト画面に行かず完了（= 現時点の情報で要件クリア）した場合
+      if (!mounted) return;
+      final msg = chargesEnabled && payoutsEnabled
+          ? 'Stripe接続が完了しました'
+          : 'Stripe接続を更新しました（必要に応じて追加のKYCが求められることがあります）';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('オンボーディングリンク取得に失敗: $e')));
+      ).showSnackBar(SnackBar(content: Text('Stripe接続に失敗: $e')));
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final black78 = Colors.black.withOpacity(0.78); // ★ 統一色
     final primary = FilledButton.styleFrom(
-      backgroundColor: Colors.white, // ★ 背景を白に
-      foregroundColor: Colors.black87, // ★ テキスト/アイコンを黒87に
-      side: const BorderSide(color: Colors.black54), // 枠線（視認性のため）
+      backgroundColor: Colors.white,
+      foregroundColor: black78, // ★
+      side: const BorderSide(color: Colors.black54),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
     );
@@ -314,364 +351,385 @@ class _StoreQrTabState extends State<StoreQrTab> {
               })),
             ];
 
-            if (!options.any((o) => o.id == _selectedPosterId)) {
+            if (options.isNotEmpty &&
+                !options.any((o) => o.id == _selectedPosterId)) {
               _selectedPosterId = options.first.id;
             }
 
-            return Theme(
-              data: Theme.of(context).copyWith(
-                textTheme: Theme.of(context).textTheme.apply(
-                  bodyColor: Colors.black87, // ★ テキストテーマの既定色
-                  displayColor: Colors.black87,
-                ),
-              ),
-              child: DefaultTextStyle.merge(
-                style: const TextStyle(color: Colors.black87), // ★ 明示的な既定色
-                child: ListTileTheme(
-                  data: const ListTileThemeData(
-                    textColor: Colors.black87, // ★ ListTile内の文字色
-                    iconColor: Colors.black87,
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                final isWide = constraints.maxWidth >= 900;
+
+                Widget paperSelector() => Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    InputDecorator(
+                      decoration: InputDecoration(
+                        labelText: '用紙サイズ',
+                        labelStyle: TextStyle(color: black78), // ★
+                        hintStyle: TextStyle(color: black78), // ★
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<_Paper>(
+                          value: _paper,
+                          onChanged: (v) => setState(() => _paper = v!),
+                          items: _paperDefs.entries
+                              .map(
+                                (e) => DropdownMenuItem(
+                                  value: e.key,
+                                  child: Text(e.value.label),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    SwitchListTile(
+                      title: const Text(
+                        '横向き（ランドスケープ）',
+                        style: TextStyle(color: Colors.black87),
+                      ),
+
+                      value: _landscape,
+                      dense: true,
+                      onChanged: (v) => setState(() => _landscape = v),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ],
+                );
+
+                Widget pdfButton() => FilledButton.icon(
+                  style: primary,
+                  onPressed: (connected && _publicStoreUrl != null)
+                      ? () => _exportPdf(options)
+                      : null,
+                  icon: const Icon(Icons.file_download),
+                  label: const Text('PDFをダウンロード'),
+                );
+
+                Widget uploadButton() => OutlinedButton.icon(
+                  onPressed: connected ? _addPosterFromFile : null,
+                  icon: const Icon(Icons.add_photo_alternate_outlined),
+                  label: const Text('アップロード'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: black78, // ★
+                    side: const BorderSide(color: Colors.black54),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
                   ),
-                  child: SingleChildScrollView(
+                );
+
+                Widget posterPicker() => Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'ポスターを選択',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.titleMedium?.copyWith(color: black78), // ★
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 108,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: options.length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 10),
+                        itemBuilder: (_, i) {
+                          final opt = options[i];
+                          final selected = opt.id == _selectedPosterId;
+                          return GestureDetector(
+                            onTap: () =>
+                                setState(() => _selectedPosterId = opt.id),
+                            child: Column(
+                              children: [
+                                Container(
+                                  width: 80,
+                                  height: 80,
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                      color: selected
+                                          ? Colors.black
+                                          : Colors.black12,
+                                      width: selected ? 2 : 1,
+                                    ),
+                                  ),
+                                  clipBehavior: Clip.antiAlias,
+                                  child: opt.isAsset
+                                      ? Image.asset(
+                                          opt.assetPath!,
+                                          fit: BoxFit.cover,
+                                        )
+                                      : Image.network(
+                                          opt.url!,
+                                          fit: BoxFit.cover,
+                                        ),
+                                ),
+                                const SizedBox(height: 6),
+                                SizedBox(
+                                  width: 90,
+                                  child: Text(
+                                    opt.label,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                );
+
+                Widget urlText() => (_publicStoreUrl == null)
+                    ? const SizedBox.shrink()
+                    : SelectableText(
+                        _publicStoreUrl!,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: black78, // ★
+                        ),
+                        textAlign: TextAlign.left,
+                      );
+
+                Widget qrControls() => DefaultTextStyle.merge(
+                  style: TextStyle(color: black78), // ★
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _SliderTile(
+                        label: 'QRサイズ（%）',
+                        value: _qrScale,
+                        min: 0.20,
+                        max: 0.60,
+                        displayAsPercent: true,
+                        onChanged: (v) => setState(() => _qrScale = v),
+                      ),
+                      _SliderTile(
+                        label: 'QRの余白（mm）',
+                        value: _qrPaddingMm,
+                        min: 0,
+                        max: 20,
+                        onChanged: (v) => setState(() => _qrPaddingMm = v),
+                      ),
+                      SwitchListTile(
+                        title: const Text(
+                          'QRの背景を白で敷く',
+                          style: TextStyle(color: Colors.black87),
+                        ),
+                        value: _putWhiteBg,
+                        onChanged: (v) => setState(() => _putWhiteBg = v),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ],
+                  ),
+                );
+
+                Widget connectNotice() => (!connected)
+                    ? Card(
+                        elevation: 4,
+                        shadowColor: Colors.black26,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: ListTile(
+                          leading: const CircleAvatar(
+                            backgroundColor: Colors.amber,
+                            foregroundColor: Colors.black,
+                            child: Icon(Icons.info_outline),
+                          ),
+                          title: const Text(
+                            'Stripeオンボーディング未完了のため、QR発行はできません。',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          subtitle: const Text('接続後にQRを作成できます。'),
+                          trailing: FilledButton(
+                            style: primary,
+                            onPressed: _openOnboarding,
+                            child: Text(hasAccount ? '続きから再開' : 'Stripeに接続'),
+                          ),
+                        ),
+                      )
+                    : const SizedBox.shrink();
+
+                // 右側プレビュー
+                Widget previewPane() => AspectRatio(
+                  aspectRatio: () {
+                    final def = _paperDefs[_paper]!;
+                    final wMm = _landscape ? def.heightMm : def.widthMm;
+                    final hMm = _landscape ? def.widthMm : def.heightMm;
+                    return wMm / hMm;
+                  }(),
+                  child: LayoutBuilder(
+                    builder: (context, c) {
+                      final w = c.maxWidth;
+                      final h = c.maxHeight;
+                      final minSide = w < h ? w : h;
+
+                      final def = _paperDefs[_paper]!;
+                      final widthMm = _landscape ? def.heightMm : def.widthMm;
+                      final pxPerMm = w / widthMm;
+                      final padPx = _qrPaddingMm * pxPerMm;
+                      final qrSidePx = minSide * _qrScale;
+                      final boxSidePx =
+                          qrSidePx + (_putWhiteBg ? padPx * 2 : 0);
+
+                      final selected = options.firstWhere(
+                        (o) => o.id == _selectedPosterId,
+                      );
+                      final posterWidget = selected.isAsset
+                          ? Image.asset(selected.assetPath!, fit: BoxFit.cover)
+                          : Image.network(selected.url!, fit: BoxFit.cover);
+
+                      return Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          Positioned.fill(
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: posterWidget,
+                            ),
+                          ),
+                          if (_publicStoreUrl != null)
+                            Align(
+                              alignment: Alignment.center,
+                              child: Transform.translate(
+                                offset: const Offset(6, 0),
+                                child: Container(
+                                  width: boxSidePx,
+                                  height: boxSidePx,
+                                  decoration: BoxDecoration(
+                                    color: _putWhiteBg
+                                        ? Colors.white
+                                        : Colors.transparent,
+                                    borderRadius: BorderRadius.circular(8),
+                                    boxShadow: _putWhiteBg
+                                        ? const [
+                                            BoxShadow(
+                                              color: Color(0x22000000),
+                                              blurRadius: 6,
+                                              offset: Offset(0, 2),
+                                            ),
+                                          ]
+                                        : null,
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: Padding(
+                                    padding: EdgeInsets.all(
+                                      _putWhiteBg ? padPx : 0,
+                                    ),
+                                    child: QrImageView(
+                                      data: _publicStoreUrl!,
+                                      version: QrVersions.auto,
+                                      gapless: true,
+                                      size: qrSidePx,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+                );
+
+                // ---- 実レイアウト ----
+                if (isWide) {
+                  // PC：左（操作）/ 右（プレビュー）
+                  return Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 460),
+                          child: SingleChildScrollView(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                connectNotice(),
+                                if (connected) ...[
+                                  paperSelector(),
+                                  const SizedBox(height: 12),
+                                  Row(
+                                    children: [
+                                      Expanded(child: pdfButton()),
+                                      const SizedBox(width: 12),
+                                      Expanded(child: uploadButton()),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 16),
+                                ],
+                                posterPicker(),
+                                const SizedBox(height: 16),
+                                qrControls(),
+                                const SizedBox(height: 12),
+                                urlText(),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.topCenter,
+                            child: previewPane(),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                } else {
+                  // モバイル/タブ：縦積み
+                  return SingleChildScrollView(
                     padding: const EdgeInsets.all(16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (!connected)
-                          Card(
-                            elevation: 4,
-                            shadowColor: Colors.black26,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: ListTile(
-                              leading: const CircleAvatar(
-                                backgroundColor: Colors.amber,
-                                foregroundColor: Colors.black,
-                                child: Icon(Icons.info_outline),
-                              ),
-                              title: Text(
-                                hasAccount
-                                    ? 'Stripeオンボーディング未完了のため、QR発行はできません。'
-                                    : 'Stripe未接続のため、QR発行はできません。',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              subtitle: const Text('接続後にQRを作成できます。'),
-                              trailing: FilledButton(
-                                style: primary,
-                                onPressed: _openOnboarding,
-                                child: Text(
-                                  hasAccount ? '続きから再開' : 'Stripeに接続',
-                                ),
-                              ),
-                            ),
+                        connectNotice(),
+                        if (connected) ...[
+                          paperSelector(), // 横向きスイッチも含む
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Expanded(child: pdfButton()),
+                              const SizedBox(width: 12),
+                              Expanded(child: uploadButton()),
+                            ],
                           ),
-
-                        // アクション行
-                        // ▼ アクション行（置き換え）
-                        LayoutBuilder(
-                          builder: (context, constraints) {
-                            final isWide =
-                                constraints.maxWidth >= 720; // 端末幅が広ければ横並び
-
-                            // 用紙選択（中身そのまま流用）
-                            Widget paperSelector = InputDecorator(
-                              decoration: InputDecoration(
-                                labelText: '用紙サイズ',
-                                labelStyle: const TextStyle(
-                                  color: Colors.black87,
-                                ),
-                                hintStyle: const TextStyle(
-                                  color: Colors.black87,
-                                ),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 6,
-                                ),
-                              ),
-                              child: DropdownButtonHideUnderline(
-                                child: DropdownButton<_Paper>(
-                                  value: _paper,
-                                  onChanged: (v) => setState(() => _paper = v!),
-                                  items: _paperDefs.entries
-                                      .map(
-                                        (e) => DropdownMenuItem(
-                                          value: e.key,
-                                          child: Text(e.value.label),
-                                        ),
-                                      )
-                                      .toList(),
-                                ),
-                              ),
-                            );
-
-                            // PDFボタン
-                            final pdfButton = FilledButton.icon(
-                              style: primary,
-                              onPressed: (connected && _publicStoreUrl != null)
-                                  ? () => _exportPdf(options)
-                                  : null,
-                              icon: const Icon(Icons.file_download),
-                              label: const Text('PDFをダウンロード'),
-                            );
-
-                            // ポスターアップロード
-                            final uploadButton = OutlinedButton.icon(
-                              onPressed: connected ? _addPosterFromFile : null,
-                              icon: const Icon(
-                                Icons.add_photo_alternate_outlined,
-                              ),
-                              label: const Text('ポスターをアップロード'),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: Colors.black87,
-                                side: const BorderSide(color: Colors.black54),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                  vertical: 12,
-                                ),
-                              ),
-                            );
-
-                            if (isWide) {
-                              // 横一列（用紙選択を少し広めに）
-                              return Row(
-                                children: [
-                                  Expanded(flex: 1, child: paperSelector),
-                                  const SizedBox(width: 12),
-                                  Expanded(flex: 1, child: pdfButton),
-                                  const SizedBox(width: 12),
-                                  Expanded(flex: 1, child: uploadButton),
-                                ],
-                              );
-                            } else {
-                              // 狭い幅では縦積み→ボタン2つは横並び
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  paperSelector,
-                                  const SizedBox(height: 12),
-                                  Row(
-                                    children: [
-                                      Expanded(child: pdfButton),
-                                      const SizedBox(width: 12),
-                                      Expanded(child: uploadButton),
-                                    ],
-                                  ),
-                                ],
-                              );
-                            }
-                          },
-                        ),
-
+                          const SizedBox(height: 16),
+                        ],
+                        posterPicker(),
                         const SizedBox(height: 16),
-                        Text(
-                          'ポスターを選択',
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(
-                                color: Colors.black87, // ★ 追加
-                              ),
-                        ),
-                        const SizedBox(height: 8),
-
-                        // サムネ（横スクロール）
-                        SizedBox(
-                          height: 108,
-                          child: ListView.separated(
-                            scrollDirection: Axis.horizontal,
-                            itemCount: options.length,
-                            separatorBuilder: (_, __) =>
-                                const SizedBox(width: 10),
-                            itemBuilder: (_, i) {
-                              final opt = options[i];
-                              final selected = opt.id == _selectedPosterId;
-                              return GestureDetector(
-                                onTap: () =>
-                                    setState(() => _selectedPosterId = opt.id),
-                                child: Column(
-                                  children: [
-                                    Container(
-                                      width: 80,
-                                      height: 80,
-                                      decoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(10),
-                                        border: Border.all(
-                                          color: selected
-                                              ? Colors.black
-                                              : Colors.black12,
-                                          width: selected ? 2 : 1,
-                                        ),
-                                      ),
-                                      clipBehavior: Clip.antiAlias,
-                                      child: opt.isAsset
-                                          ? Image.asset(
-                                              opt.assetPath!,
-                                              fit: BoxFit.cover,
-                                            )
-                                          : Image.network(
-                                              opt.url!,
-                                              fit: BoxFit.cover,
-                                            ),
-                                    ),
-                                    const SizedBox(height: 6),
-                                    SizedBox(
-                                      width: 90,
-                                      child: Text(
-                                        opt.label,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        textAlign: TextAlign.center,
-                                        style: const TextStyle(fontSize: 12),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-
-                        const SizedBox(height: 16),
-
-                        // ▼ プレビュー（選択した用紙のアスペクト比）
-                        AspectRatio(
-                          aspectRatio: () {
-                            final def = _paperDefs[_paper]!;
-                            return def.widthMm / def.heightMm;
-                          }(),
-                          child: LayoutBuilder(
-                            builder: (context, c) {
-                              final w = c.maxWidth;
-                              final h = c.maxHeight;
-                              final minSide = w < h ? w : h;
-
-                              final def = _paperDefs[_paper]!;
-                              // mm → px 変換（幅=用紙幅mmとして換算）
-                              final pxPerMm = w / def.widthMm;
-                              final padPx = _qrPaddingMm * pxPerMm;
-
-                              final qrSidePx = minSide * _qrScale;
-                              final boxSidePx =
-                                  qrSidePx + (_putWhiteBg ? padPx * 2 : 0);
-
-                              final selected = options.firstWhere(
-                                (o) => o.id == _selectedPosterId,
-                              );
-                              final posterWidget = selected.isAsset
-                                  ? Image.asset(
-                                      selected.assetPath!,
-                                      fit: BoxFit.cover,
-                                    )
-                                  : Image.network(
-                                      selected.url!,
-                                      fit: BoxFit.cover,
-                                    );
-
-                              return Stack(
-                                alignment: Alignment.center,
-                                children: [
-                                  Positioned.fill(
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(12),
-                                      child: posterWidget,
-                                    ),
-                                  ),
-                                  if (_publicStoreUrl != null)
-                                    Container(
-                                      width: boxSidePx,
-                                      height: boxSidePx,
-                                      decoration: BoxDecoration(
-                                        color: _putWhiteBg
-                                            ? Colors.white
-                                            : Colors.transparent,
-                                        borderRadius: BorderRadius.circular(8),
-                                        boxShadow: _putWhiteBg
-                                            ? const [
-                                                BoxShadow(
-                                                  color: Color(0x22000000),
-                                                  blurRadius: 6,
-                                                  offset: Offset(0, 2),
-                                                ),
-                                              ]
-                                            : null,
-                                      ),
-                                      alignment: Alignment.center,
-                                      child: Padding(
-                                        padding: EdgeInsets.all(
-                                          _putWhiteBg ? padPx : 0,
-                                        ),
-                                        child: QrImageView(
-                                          data: _publicStoreUrl!,
-                                          version: QrVersions.auto,
-                                          gapless: true,
-                                          size: qrSidePx,
-                                        ),
-                                      ),
-                                    ),
-                                  if (!connected)
-                                    Container(
-                                      color: Colors.white.withOpacity(0.6),
-                                      alignment: Alignment.center,
-                                      child: const Text(
-                                        'Stripe接続が完了するとQRを表示できます',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ),
-                                ],
-                              );
-                            },
-                          ),
-                        ),
-
+                        previewPane(),
                         const SizedBox(height: 12),
-                        if (_publicStoreUrl != null)
-                          SelectableText(
-                            _publicStoreUrl!,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.black87,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-
+                        urlText(),
                         const SizedBox(height: 16),
-
-                        // ▼ QR見た目コントロール
-                        _SliderTile(
-                          label: 'QRサイズ（%）',
-                          value: _qrScale,
-                          min: 0.20,
-                          max: 0.60,
-                          displayAsPercent: true,
-                          onChanged: (v) => setState(() => _qrScale = v),
-                        ),
-                        _SliderTile(
-                          label: 'QRの余白（mm）',
-                          value: _qrPaddingMm,
-                          min: 0,
-                          max: 20,
-                          onChanged: (v) => setState(() => _qrPaddingMm = v),
-                        ),
-                        SwitchListTile(
-                          title: const Text('QRの背景を白で敷く'),
-                          value: _putWhiteBg,
-                          onChanged: (v) => setState(() => _putWhiteBg = v),
-                          contentPadding: EdgeInsets.zero,
-                        ),
+                        qrControls(),
                       ],
                     ),
-                  ),
-                ),
-              ),
+                  );
+                }
+              },
             );
           },
         );
@@ -703,7 +761,8 @@ class _SliderTile extends StatelessWidget {
         : value.toStringAsFixed(0);
     return ListTile(
       contentPadding: EdgeInsets.zero,
-      title: Text(label),
+      textColor: Colors.black87,
+      title: Text(label, style: TextStyle(color: Colors.black87)),
       subtitle: Slider(value: value, min: min, max: max, onChanged: onChanged),
       trailing: SizedBox(
         width: 56,

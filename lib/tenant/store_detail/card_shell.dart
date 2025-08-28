@@ -25,49 +25,70 @@ class CardShell extends StatelessWidget {
   }
 }
 
-class PlanPicker extends StatelessWidget {
+class PlanPicker extends StatefulWidget {
   final String selected; // 'A' | 'B' | 'C'
   final ValueChanged<String> onChanged;
-  const PlanPicker({required this.selected, required this.onChanged});
+
+  const PlanPicker({
+    super.key,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  @override
+  State<PlanPicker> createState() => _PlanPickerState();
+}
+
+class _PlanPickerState extends State<PlanPicker> {
+  // 必要ならここに状態を追加してOK（例: 折りたたみ等）
 
   @override
   Widget build(BuildContext context) {
+    // 画面高さの1/4を基本に、最小/最大をクランプ
+    final screenH = MediaQuery.of(context).size.height;
+    final tileHeight = (screenH * 0.25).clamp(220.0, 420.0).toDouble();
+
     final plans = <PlanDef>[
       PlanDef(
         code: 'A',
         title: 'Aプラン',
         monthly: 0,
         feePct: 20,
-        features: const ['月額無料', '手数料20%'],
+        features: const ['月額無料', '手数料30%'],
       ),
       PlanDef(
         code: 'B',
         title: 'Bプラン',
         monthly: 1980,
         feePct: 15,
-        features: const ['月額1,980円', '手数料15%'],
+        features: const ['月額3,980円', '手数料10%'],
       ),
       PlanDef(
         code: 'C',
         title: 'Cプラン',
         monthly: 9800,
         feePct: 10,
-        features: const ['月額9,800円', '手数料10%', '公式LINEリンク', 'Googleレビューリンク'],
+        features: const [
+          '月額9,800円',
+          '手数料10%',
+          '公式LINEリンクの掲載',
+          'Googleレビューリンクの掲載',
+        ],
       ),
     ];
 
     return LayoutBuilder(
       builder: (context, c) {
         final isWide = c.maxWidth >= 900;
-        final children = plans
-            .map(
-              (p) => _PlanTile(
-                plan: p,
-                selected: selected == p.code,
-                onTap: () => onChanged(p.code),
-              ),
-            )
-            .toList();
+
+        final children = plans.map((p) {
+          return _PlanTile(
+            plan: p,
+            selected: widget.selected == p.code,
+            onTap: () => widget.onChanged(p.code),
+            height: tileHeight, // ★ ここで注入！
+          );
+        }).toList();
 
         if (isWide) {
           return Row(
@@ -138,16 +159,24 @@ class _PlanTile extends StatelessWidget {
   final PlanDef plan;
   final bool selected;
   final VoidCallback onTap;
+
+  /// 全カードを同じ高さにしたいときに指定（例: 220〜260くらい）
+  final double height;
+
   const _PlanTile({
     required this.plan,
     required this.selected,
     required this.onTap,
+    required this.height, // ← 好みで調整。全カードで同じ値を渡せばOK
   });
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: selected ? Colors.black : Colors.white,
+    final baseFg = selected ? Colors.white : Colors.black87;
+    final subFg = selected ? Colors.white70 : Colors.black54;
+
+    final tile = Material(
+      color: selected ? Colors.black : Colors.black12,
       borderRadius: BorderRadius.circular(16),
       elevation: selected ? 8 : 4,
       shadowColor: const Color(0x1A000000),
@@ -159,6 +188,7 @@ class _PlanTile extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // ヘッダー行
               Row(
                 children: [
                   Container(
@@ -182,7 +212,7 @@ class _PlanTile extends StatelessWidget {
                   Text(
                     plan.title,
                     style: TextStyle(
-                      color: selected ? Colors.white : Colors.black87,
+                      color: baseFg,
                       fontWeight: FontWeight.w700,
                       fontSize: 16,
                     ),
@@ -191,41 +221,44 @@ class _PlanTile extends StatelessWidget {
                   Text(
                     plan.monthly == 0 ? '無料' : '¥${plan.monthly}',
                     style: TextStyle(
-                      color: selected ? Colors.white : Colors.black87,
+                      color: baseFg,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                 ],
               ),
+
               const SizedBox(height: 10),
-              Text(
-                '手数料 ${plan.feePct}%',
-                style: TextStyle(
-                  color: selected ? Colors.white70 : Colors.black54,
-                ),
-              ),
+              Text('手数料 ${plan.feePct}%', style: TextStyle(color: subFg)),
               const SizedBox(height: 6),
-              ...plan.features.map(
-                (f) => Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.check,
-                        size: 16,
-                        color: selected ? Colors.white : Colors.black87,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          f,
-                          style: TextStyle(
-                            color: selected ? Colors.white : Colors.black87,
+
+              // 機能リスト：ここだけスクロール可能にして高さ超過を吸収
+              Expanded(
+                child: ListView.builder(
+                  padding: EdgeInsets.zero,
+                  physics: const ClampingScrollPhysics(),
+                  itemCount: plan.features.length,
+                  itemBuilder: (_, i) {
+                    final f = plan.features[i];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.check, size: 16, color: baseFg),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              f,
+                              style: TextStyle(color: baseFg),
+                              maxLines: 2, // ← 行数制限したければ調整
+                              overflow: TextOverflow.fade, // ← or ellipsis
+                            ),
                           ),
-                        ),
+                        ],
                       ),
-                    ],
-                  ),
+                    );
+                  },
                 ),
               ),
             ],
@@ -233,6 +266,9 @@ class _PlanTile extends StatelessWidget {
         ),
       ),
     );
+
+    // 高さを統一
+    return SizedBox(height: height, child: tile);
   }
 }
 

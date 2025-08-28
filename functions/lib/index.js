@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.listInvoices = exports.openCustomerPortal = exports.createSubscriptionCheckout = exports.revokeInvite = exports.acceptTenantAdmin = exports.inviteTenantAdmin = exports.createAccountOnboardingLink = exports.createConnectAccountForTenant = exports.stripeWebhook = exports.onTipSucceededSendMailV2 = exports.createStoreTipSessionPublic = exports.createTipSessionPublic = exports.RESEND_API_KEY = void 0;
+exports.upsertConnectedAccount = exports.listInvoices = exports.openCustomerPortal = exports.createSubscriptionCheckout = exports.revokeInvite = exports.acceptTenantAdmin = exports.inviteTenantAdmin = exports.createAccountOnboardingLink = exports.createConnectAccountForTenant = exports.stripeWebhook = exports.onTipSucceededSendMailV2 = exports.createStoreTipSessionPublic = exports.createTipSessionPublic = exports.RESEND_API_KEY = void 0;
 const functions = __importStar(require("firebase-functions"));
 const stripe_1 = __importDefault(require("stripe"));
 const firestore_1 = require("firebase-functions/v2/firestore");
@@ -1011,8 +1011,9 @@ exports.createSubscriptionCheckout = functions
     const planDoc = await getPlanFromDb(plan);
     const purchaserEmail = email || context.auth?.token?.email;
     const customerId = await ensureCustomer(tenantId, purchaserEmail, name);
-    const successUrl = `${APP_ORIGIN}/#/settings?tenant=${encodeURIComponent(tenantId)}&checkout=success`;
-    const cancelUrl = `${APP_ORIGIN}/#/settings?tenant=${encodeURIComponent(tenantId)}&checkout=cancel`;
+    // createSubscriptionCheckout
+    const successUrl = `${APP_ORIGIN}/#/?toast=tenant_created&tenant=${encodeURIComponent(tenantId)}&name=${encodeURIComponent(name || '')}`;
+    const cancelUrl = `${APP_ORIGIN}/#/`;
     // 既存のサブスクがあるか Stripe に問い合わせ（価格で縛りたいなら price フィルタも）
     const subs = await stripe.subscriptions.list({
         customer: customerId,
@@ -1064,7 +1065,7 @@ exports.openCustomerPortal = functions
     }
     const session = await stripe.billingPortal.sessions.create({
         customer: customerId,
-        return_url: `${APP_ORIGIN}/#/settings?tenant=${encodeURIComponent(tenantId)}`
+        return_url: `${APP_ORIGIN}/#/store?tenant=${encodeURIComponent(tenantId)}`
     });
     return { url: session.url };
 });
@@ -1105,4 +1106,111 @@ exports.listInvoices = functions
         created: inv.created,
     }));
     return { invoices };
+});
+exports.upsertConnectedAccount = (0, https_1.onCall)({
+    region: "us-central1",
+    memory: "256MiB",
+    cors: ["https://venerable-mermaid-fcf8c8.netlify.app", "http://localhost:5173", "http://localhost:59694"],
+    secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL"],
+}, async (req) => {
+    if (!req.auth)
+        throw new https_1.HttpsError("unauthenticated", "auth required");
+    const uid = req.auth.uid;
+    const tenantId = req.data?.tenantId;
+    const form = (req.data?.account || {}); // { businessType, email, individual, company, businessProfile, bankAccountToken, tosAccepted, country }
+    if (!tenantId)
+        throw new https_1.HttpsError("invalid-argument", "tenantId required");
+    const tRef = db.collection("tenants").doc(tenantId);
+    const tDoc = await tRef.get();
+    if (!tDoc.exists)
+        throw new https_1.HttpsError("not-found", "tenant not found");
+    // ざっくりメンバー確認（任意で厳格化OK）
+    const members = (tDoc.data()?.members ?? []);
+    if (!members.includes(uid)) {
+        throw new https_1.HttpsError("permission-denied", "not a tenant member");
+    }
+    const stripe = stripeClient();
+    let acctId = tDoc.data()?.stripeAccountId;
+    const country = form.country || "JP";
+    // 1) 未作成なら Custom アカウントを作成
+    if (!acctId) {
+        const created = await stripe.accounts.create({
+            type: "custom",
+            country,
+            email: form.email,
+            business_type: form.businessType || "individual", // "company" or "individual"
+            capabilities: {
+                card_payments: { requested: true },
+                transfers: { requested: true },
+            },
+        });
+        acctId = created.id;
+        await tRef.set({
+            stripeAccountId: acctId,
+            connect: {
+                charges_enabled: created.charges_enabled,
+                payouts_enabled: created.payouts_enabled,
+            },
+        }, { merge: true });
+    }
+    // 2) 収集した情報でアップデート（アプリ内入力で極力プレフィル）
+    const upd = {};
+    if (form.businessType)
+        upd.business_type = form.businessType;
+    if (form.businessProfile) {
+        // 例: { url, product_description, support_phone, mcc }
+        upd.business_profile = form.businessProfile;
+    }
+    if (form.individual) {
+        // 例: { first_name_kana, last_name_kana, first_name, last_name, phone, dob, address }
+        upd.individual = form.individual;
+    }
+    if (form.company) {
+        // 例: { name, phone, address, executives_provided, directors_provided, tax_id }
+        upd.company = form.company;
+    }
+    if (form.bankAccountToken) {
+        // 口座は必ずトークン化してから渡してください（サーバに生の口座番号は置かない）
+        upd.external_account = form.bankAccountToken;
+    }
+    if (form.tosAccepted) {
+        upd.tos_acceptance = {
+            date: Math.floor(Date.now() / 1000),
+            ip: req.rawRequest.headers["x-forwarded-for"]?.split(",")[0] || req.rawRequest.ip,
+            user_agent: req.rawRequest.get("user-agent") || undefined,
+        };
+    }
+    const updated = await stripe.accounts.update(acctId, upd);
+    // 3) まだ提出が必要な要件が残っているかチェック
+    const due = updated.requirements?.currently_due ?? [];
+    const pastDue = updated.requirements?.past_due ?? [];
+    const needsHosted = due.length > 0 ||
+        pastDue.length > 0; // ざっくり。細かく document 系だけに絞ってもOK
+    let onboardingUrl;
+    if (needsHosted) {
+        // 最後の本人確認/追加書類など“Stripeホストでしかできない部分”が残る時だけURLを返す
+        const BASE = process.env.FRONTEND_BASE_URL;
+        const link = await stripe.accountLinks.create({
+            account: acctId,
+            type: "account_onboarding",
+            refresh_url: `${BASE}/#/connect-refresh?t=${tenantId}`,
+            return_url: `${BASE}/#/connect-return?t=${tenantId}`,
+        });
+        onboardingUrl = link.url;
+    }
+    // 4) 状態保存（任意）
+    await tRef.set({
+        connect: {
+            charges_enabled: updated.charges_enabled,
+            payouts_enabled: updated.payouts_enabled,
+            requirements: updated.requirements || null,
+        },
+    }, { merge: true });
+    return {
+        accountId: acctId,
+        chargesEnabled: updated.charges_enabled,
+        payoutsEnabled: updated.payouts_enabled,
+        due,
+        onboardingUrl, // これが返ってきた時だけ最終確認のホスト画面へ遷移
+    };
 });

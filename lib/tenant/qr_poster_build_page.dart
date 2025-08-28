@@ -422,7 +422,10 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
                   onChanged: (v) => setState(() => _marginMm = v),
                 ),
                 SwitchListTile(
-                  title: const Text('QRの背景を白で敷く'),
+                  title: const Text(
+                    'QRの背景を白で敷く',
+                    style: TextStyle(color: Colors.black87),
+                  ),
                   value: _putWhiteBg,
                   onChanged: (v) => setState(() => _putWhiteBg = v),
                   contentPadding: EdgeInsets.zero,
@@ -455,7 +458,8 @@ class _SliderTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListTile(
       contentPadding: EdgeInsets.zero,
-      title: Text(label),
+      textColor: Colors.black87,
+      title: Text(label, style: TextStyle(color: Colors.black87)),
       subtitle: Slider(value: value, min: min, max: max, onChanged: onChanged),
       trailing: SizedBox(width: 56, child: Text(value.toStringAsFixed(0))),
     );

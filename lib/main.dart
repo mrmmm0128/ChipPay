@@ -8,6 +8,7 @@ import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 import 'package:yourpay/admin/admin_dashboard_screen.dart';
 import 'package:yourpay/admin/admin_login_screen.dart';
 import 'package:yourpay/admin/admin_tenant_detrail_screen.dart';
+import 'package:yourpay/endUser/tip_complete_page.dart';
 import 'package:yourpay/tenant/account_detail_screen.dart';
 import 'package:yourpay/endUser/public_store_page.dart';
 import 'package:yourpay/endUser/staff_detail_page.dart';
@@ -61,6 +62,7 @@ class MyApp extends StatelessWidget {
       '/store': (_) => const StoreDetailScreen(),
       '/p': (_) => const PublicStorePage(), // 公開
       '/staff': (_) => const StaffDetailPage(), // 公開
+      '/chechout-end': (_) => const TipCompletePage(tenantId: ''), // 公開
       '/account': (_) => const AccountDetailScreen(),
       '/admin-login': (_) => const AdminLoginScreen(),
       '/admin': (_) => const AdminDashboardScreen(),
@@ -92,7 +94,25 @@ class MyApp extends StatelessWidget {
         }
 
         if (uri.path == '/p') {
-          final tid = uri.queryParameters['t'];
+          final tid = uri.queryParameters['t'] ?? '';
+          final thanks = uri.queryParameters['thanks'] == 'true';
+          final canceled = uri.queryParameters['canceled'] == 'true';
+
+          // 成功/キャンセル時は完了ページへ
+          if (thanks || canceled) {
+            return MaterialPageRoute(
+              builder: (_) => TipCompletePage(
+                tenantId: tid,
+                // これらはURLに載せていなければnullでOK（ページ内で再読込されます）
+                tenantName: uri.queryParameters['tenantName'],
+                amount: int.tryParse(uri.queryParameters['amount'] ?? ''),
+                employeeName: uri.queryParameters['employeeName'],
+              ),
+              settings: settings,
+            );
+          }
+
+          // 通常表示（公開ストアページ）
           return MaterialPageRoute(
             builder: (_) => const PublicStorePage(),
             settings: RouteSettings(
@@ -101,6 +121,7 @@ class MyApp extends StatelessWidget {
             ),
           );
         }
+
         if (uri.path == '/staff') {
           return MaterialPageRoute(
             builder: (_) => const StaffDetailPage(),

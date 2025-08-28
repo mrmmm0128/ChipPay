@@ -111,7 +111,7 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
         elevation: 0,
         title: const Text(
           'アカウント',
-          style: TextStyle(fontWeight: FontWeight.w600),
+          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
         ),
       ),
       body: Center(

@@ -5,52 +5,35 @@ import 'package:yourpay/tenant/store_detail/card_shell.dart';
 class RangePill extends StatelessWidget {
   final String label;
   final bool active;
-  final VoidCallback? onTap;
-  final IconData? icon;
+  final VoidCallback onTap;
   const RangePill({
+    super.key,
     required this.label,
     required this.active,
-    this.onTap,
-    this.icon,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final child = Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (icon != null) ...[
-          Icon(icon, size: 16, color: active ? Colors.white : Colors.black87),
-          const SizedBox(width: 6),
-        ],
-        Text(
-          label,
-          style: TextStyle(
-            color: active ? Colors.white : Colors.black87,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ],
-    );
+    final bg = active ? Colors.black : Colors.white;
+    final fg = active ? Colors.white : Colors.black87;
+    final border = active ? Colors.black : Colors.black26;
 
     return InkWell(
-      borderRadius: BorderRadius.circular(999),
       onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: active ? Colors.black : Colors.white,
+          color: bg,
           borderRadius: BorderRadius.circular(999),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x14000000),
-              blurRadius: 10,
-              offset: Offset(0, 4),
-            ),
-          ],
-          border: Border.all(color: active ? Colors.black : Colors.black12),
+          border: Border.all(color: border),
+          // ← 影なし（BoxShadow未指定）
         ),
-        child: child,
+        child: Text(
+          label,
+          style: TextStyle(color: fg, fontWeight: FontWeight.w700),
+        ),
       ),
     );
   }

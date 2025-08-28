@@ -53,6 +53,47 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
     return (percentPart + f.toInt()).clamp(0, amount);
   }
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _maybeShowCreatedTenantToast(),
+    );
+  }
+
+  Future<void> _maybeShowCreatedTenantToast() async {
+    final uri = Uri.base;
+    final frag =
+        uri.fragment; // 例: "/?toast=tenant_created&tenant=xxx&name=YYY"
+    final qi = frag.indexOf('?');
+    final qp = <String, String>{}..addAll(uri.queryParameters);
+    if (qi >= 0) qp.addAll(Uri.splitQueryString(frag.substring(qi + 1)));
+
+    if (qp['toast'] != 'tenant_created') return;
+
+    String name = qp['name'] ?? '';
+    final tid = qp['tenant'];
+    if (name.isEmpty && tid != null && tid.isNotEmpty) {
+      try {
+        final doc = await FirebaseFirestore.instance
+            .collection('tenants')
+            .doc(tid)
+            .get();
+        name = (doc.data()?['name'] as String?) ?? '';
+      } catch (_) {}
+    }
+
+    final msg = name.isNotEmpty ? '$name のサブスクリプションを登録しました' : '店舗を作成しました';
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+
+    // （任意）URLの一度きりパラメータを消しておく → Webのみ使うならコメントアウト外す
+    // try {
+    //   final clean = '${uri.scheme}://${uri.host}${uri.hasPort ? ':${uri.port}' : ''}/#/';
+    //   html.window.history.replaceState(null, '', clean);
+    // } catch (_) {}
+  }
+
   String _rangeLabel() {
     String ym(DateTime d) => '${d.year}/${d.month.toString().padLeft(2, '0')}';
     String ymd(DateTime d) =>
@@ -638,23 +679,53 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
     final months = _monthOptions();
     final monthValue = _selectedMonthStart ?? months.first;
 
+    // === 置き換え: 以前の topCta 定義をこれに差し替え ===
     final topCta = Padding(
       padding: const EdgeInsets.only(bottom: 12),
-      child: SizedBox(
-        width: double.infinity,
-        child: FilledButton.icon(
-          onPressed: _exportMonthlyReportPdf,
-          icon: const Icon(Icons.receipt_long, size: 18),
-          label: const Text('選択された期間・スタッフの明細を確認する'),
-          style: FilledButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            backgroundColor: Colors.black,
-            foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // 左: タイトル
+          const Expanded(
+            child: Text(
+              'チップ売り上げ',
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+                color: Colors.black87,
+              ),
             ),
           ),
-        ),
+          const SizedBox(width: 12),
+
+          // 右: これまで通りの「明細確認」ボタン（ロジック変更なし）
+          Flexible(
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: FilledButton.icon(
+                  onPressed: _exportMonthlyReportPdf,
+                  icon: const Icon(Icons.receipt_long, size: 18),
+                  // ラベルは少しだけ短くして横幅を節約（処理は同じ）
+                  label: const Text('pdf'),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 12,
+                    ),
+                    backgroundColor: Colors.black,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
 
@@ -743,7 +814,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
             RangePill(
               label: _mode == _RangeMode.custom ? _rangeLabel() : '期間指定',
               active: _mode == _RangeMode.custom,
-              icon: Icons.date_range,
+
               onTap: _pickCustomRange,
             ),
           ],
@@ -778,6 +849,14 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           topCta,
+          const Text(
+            "期間",
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              color: Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 7),
           filterBar,
 
           // ===== データ＆UI（スタッフチップ/ランキング/統計） =====
@@ -839,7 +918,13 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                     children: [
                       for (final id in staffOrder)
                         ChoiceChip(
-                          label: Text(staffNamesAll[id] ?? 'スタッフ'),
+                          label: Text(
+                            staffNamesAll[id] ?? 'スタッフ',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: Colors.black87,
+                            ),
+                          ),
                           selected: _excludedStaff.contains(
                             id,
                           ), // selected = 除外中（暗く）
@@ -976,12 +1061,13 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                     ),
                   ),
 
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 24),
 
                   const Text(
                     'スタッフランキング（上位10）',
                     style: TextStyle(
-                      fontWeight: FontWeight.w700,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
                       color: Colors.black87,
                     ),
                   ),

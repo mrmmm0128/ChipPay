@@ -124,30 +124,85 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
   }
 
   // ---------- テナント作成ダイアログ ----------
-  Future<void> _createTenantDialog() async {
+  Future<void> createTenantDialog() async {
     final nameCtrl = TextEditingController();
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => Theme(
-        // ★ 紫対策：ローカル白黒テーマ
-        data: _bwTheme(context),
+        // ここはこのダイアログ専用の白黒トーン（他画面へは影響なし）
+        data: Theme.of(context).copyWith(
+          colorScheme: Theme.of(context).colorScheme.copyWith(
+            primary: Colors.black87,
+            onPrimary: Colors.white,
+            surfaceTint: Colors.transparent,
+          ),
+          textSelectionTheme: const TextSelectionThemeData(
+            cursorColor: Colors.black87,
+            selectionColor: Color(0x33000000),
+            selectionHandleColor: Colors.black87,
+          ),
+        ),
         child: AlertDialog(
+          backgroundColor: const Color(0xFFF5F5F5), // ★ 薄い灰色の背景
+          surfaceTintColor: Colors.transparent, // ★ M3の色かぶり抑止
+          titleTextStyle: const TextStyle(
+            // ★ タイトル黒
+            color: Colors.black87,
+            fontSize: 20,
+            fontWeight: FontWeight.w600,
+          ),
+          contentTextStyle: const TextStyle(
+            // ★ 本文黒
+            color: Colors.black87,
+            fontSize: 14,
+          ),
           title: const Text('新しい店舗を作成'),
           content: TextField(
             controller: nameCtrl,
-            decoration: const InputDecoration(
+            autofocus: true,
+            style: const TextStyle(color: Colors.black87), // ★ 入力文字黒
+            decoration: InputDecoration(
               labelText: '店舗名',
               hintText: '例）渋谷店',
+              labelStyle: const TextStyle(color: Colors.black87), // ★ ラベル黒
+              hintStyle: const TextStyle(color: Colors.black54), // ★ ヒント濃いグレー
+              filled: true,
+              fillColor: Colors.white, // ★ 入力欄は白地
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 12,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Colors.black26),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Colors.black87, width: 1.2),
+              ),
             ),
-            autofocus: true,
+          ),
+          actionsPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 8,
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.black87, // ★ ボタン文字黒
+              ),
               child: const Text('キャンセル'),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.black, // ★ 黒ボタン
+                foregroundColor: Colors.white, // ★ 白文字
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
               child: const Text('作成'),
             ),
           ],
@@ -170,7 +225,6 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
             'uid': _uid,
             'email': FirebaseAuth.instance.currentUser?.email,
           },
-          // まだ未契約の初期状態
           'subscription': {'status': 'inactive', 'plan': 'A'},
         });
         if (!mounted) return;
@@ -185,8 +239,8 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
           ),
         );
 
-        // ★ 作成後にオンボーディング起動
-        _startOnboarding(ref.id, name);
+        // 作成後にオンボーディング起動
+        startOnboarding(ref.id, name);
       } catch (e) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -203,7 +257,7 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
   }
 
   // ---------- オンボーディング（モーダル/ステッパー） ----------
-  Future<void> _startOnboarding(String tenantId, String tenantName) async {
+  Future<void> startOnboarding(String tenantId, String tenantName) async {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -215,7 +269,7 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
         // ★ 紫対策：ボトムシート全体を白黒テーマで包む
         return Theme(
           data: _bwTheme(context),
-          child: _OnboardingSheet(
+          child: OnboardingSheet(
             tenantId: tenantId,
             tenantName: tenantName,
             functions: _functions,
@@ -259,7 +313,7 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                     ),
                   ),
                   OutlinedButton.icon(
-                    onPressed: _createTenantDialog,
+                    onPressed: createTenantDialog,
                     icon: const Icon(Icons.add, size: 18),
                     label: const Text('店舗を作成'),
                     style: _outlineSmall,
@@ -340,7 +394,7 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                 ),
                 const SizedBox(width: 8),
                 OutlinedButton.icon(
-                  onPressed: _createTenantDialog,
+                  onPressed: createTenantDialog,
                   icon: const Icon(Icons.add, size: 18),
                   label: const Text('新規作成'),
                   style: _outlineSmall,
@@ -408,21 +462,21 @@ class _StepDot extends StatelessWidget {
 }
 
 // ---- ボトムシート本体（分離して Theme 適用を確実に） ----
-class _OnboardingSheet extends StatefulWidget {
+class OnboardingSheet extends StatefulWidget {
   final String tenantId;
   final String tenantName;
   final FirebaseFunctions functions;
-  const _OnboardingSheet({
+  const OnboardingSheet({
     required this.tenantId,
     required this.tenantName,
     required this.functions,
   });
 
   @override
-  State<_OnboardingSheet> createState() => _OnboardingSheetState();
+  State<OnboardingSheet> createState() => OnboardingSheetState();
 }
 
-class _OnboardingSheetState extends State<_OnboardingSheet> {
+class OnboardingSheetState extends State<OnboardingSheet> {
   int step = 0; // 0: サブスク, 1: メンバー
   String selectedPlan = 'A';
   bool creatingCheckout = false;
@@ -526,32 +580,150 @@ class _OnboardingSheetState extends State<_OnboardingSheet> {
 
   @override
   Widget build(BuildContext context) {
+    // State内：selectedPlan を使います（例: String selectedPlan = 'A';）
+
     Widget planChips() {
-      Widget chip(String label, String value) {
-        final selected = selectedPlan == value;
-        return ChoiceChip(
-          selected: selected,
-          label: Text(
-            label,
-            style: const TextStyle(
-              color: Colors.black87,
-              fontWeight: FontWeight.w600,
+      // プラン定義（説明を充実）
+      const plans = <_Plan>[
+        _Plan(
+          code: 'A',
+          title: 'Aプラン',
+          monthly: 0,
+          feePct: 20,
+          features: ['月額無料で今すぐ開始', '決済手数料は20%', 'まずはお試しに最適'],
+        ),
+        _Plan(
+          code: 'B',
+          title: 'Bプラン',
+          monthly: 1980,
+          feePct: 15,
+          features: ['月額1,980円で手数料15%', 'コストと手数料のバランス◎', '小規模〜標準的な店舗向け'],
+        ),
+        _Plan(
+          code: 'C',
+          title: 'Cプラン',
+          monthly: 9800,
+          feePct: 10,
+          features: ['月額9,800円で手数料10%', 'Googleレビュー導線の設置', '公式LINEの友だち追加導線'],
+        ),
+      ];
+
+      Widget item(_Plan p) {
+        final sel = selectedPlan == p.code;
+        final bg = sel ? Colors.black : Colors.white;
+        final fg = sel ? Colors.white : Colors.black87;
+        final sub = sel ? Colors.white70 : Colors.black54;
+
+        return Tooltip(
+          message:
+              '${p.title}｜月額: ${p.monthly == 0 ? '無料' : '¥${p.monthly}'}・手数料: ${p.feePct}%',
+          preferBelow: true,
+          child: ChoiceChip(
+            selected: sel,
+            onSelected: (_) => setState(() => selectedPlan = p.code),
+            backgroundColor: Colors.white,
+            selectedColor: Colors.black, // 黒ベタ
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: sel ? Colors.black : Colors.black26),
             ),
+            // label は自由に作れるのでリッチ表示
+            label: ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 220), // つぶれ防止
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                child: DefaultTextStyle(
+                  style: TextStyle(color: fg, fontSize: 13),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // 上段：プラン名 + 料金
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: sel ? Colors.white : Colors.black,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              p.code,
+                              style: TextStyle(
+                                color: sel ? Colors.black : Colors.white,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              p.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: fg,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 15,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            p.monthly == 0 ? '無料' : '¥${p.monthly}/月',
+                            style: TextStyle(
+                              color: fg,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      // 手数料
+                      Text('手数料 ${p.feePct}%', style: TextStyle(color: sub)),
+                      const SizedBox(height: 6),
+                      // 特典/機能（2～3行に抑えて読みやすく）
+                      ...p.features
+                          .take(3)
+                          .map(
+                            (f) => Padding(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 1.5,
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Icon(Icons.check, size: 14, color: fg),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      f,
+                                      style: TextStyle(color: fg, height: 1.2),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            // ChoiceChipの selected/unselected テキスト色は label 側で制御するので labelStyle は未使用
           ),
-          selectedColor: Colors.black12,
-          side: const BorderSide(color: Colors.black26),
-          onSelected: (_) => setState(() => selectedPlan = value),
         );
       }
 
       return Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [
-          chip('A（20%）', 'A'),
-          chip('B（15%）', 'B'),
-          chip('C（10%）', 'C'),
-        ],
+        spacing: 10,
+        runSpacing: 10,
+        children: plans.map(item).toList(),
       );
     }
 
@@ -625,7 +797,7 @@ class _OnboardingSheetState extends State<_OnboardingSheet> {
                                 ),
                               )
                             : const Icon(Icons.open_in_new),
-                        label: const Text('登録へ進む（チェックアウト）'),
+                        label: const Text('登録へ進む'),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -706,4 +878,20 @@ class _OnboardingSheetState extends State<_OnboardingSheet> {
       },
     );
   }
+}
+
+// ===== サポート用ミニモデル（同ファイル内に置いてOK）=====
+class _Plan {
+  final String code;
+  final String title;
+  final int monthly; // JPY
+  final int feePct; // %
+  final List<String> features;
+  const _Plan({
+    required this.code,
+    required this.title,
+    required this.monthly,
+    required this.feePct,
+    required this.features,
+  });
 }

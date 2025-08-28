@@ -343,7 +343,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 ),
                                 const SizedBox(width: 8),
                                 const Text(
-                                  'あなたのアプリ名', // ← 適宜置き換え
+                                  'Tipri', // ← 適宜置き換え
                                   style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w600,

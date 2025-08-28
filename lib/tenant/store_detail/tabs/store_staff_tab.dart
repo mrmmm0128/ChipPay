@@ -22,6 +22,8 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
   final _empNameCtrl = TextEditingController();
   final _empEmailCtrl = TextEditingController();
   final _empCommentCtrl = TextEditingController();
+  // 追記: クラス先頭の state フィールド（_StoreStaffTabState 内）に追加
+  String? _prefilledPhotoUrlFromGlobal; // グローバル検索で見つかった写真URLを保持（任意）
   Uint8List? _empPhotoBytes;
   String? _empPhotoName;
   bool _addingEmp = false;
@@ -43,6 +45,107 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
     return fallback;
   }
 
+  String _normalizeEmail(String v) => v.trim().toLowerCase();
+
+  Future<Map<String, dynamic>?> _lookupGlobalStaff(String email) async {
+    final id = _normalizeEmail(email);
+    if (id.isEmpty) return null;
+    final doc = await FirebaseFirestore.instance
+        .collection('staff')
+        .doc(id)
+        .get();
+    if (!doc.exists) return null;
+    final data = (doc.data() ?? {})..['id'] = doc.id;
+    return data.cast<String, dynamic>();
+  }
+
+  Future<QueryDocumentSnapshot<Map<String, dynamic>>?> _findTenantDupByEmail(
+    String tenantId,
+    String email,
+  ) async {
+    final q = await FirebaseFirestore.instance
+        .collection('tenants')
+        .doc(tenantId)
+        .collection('employees')
+        .where('email', isEqualTo: _normalizeEmail(email))
+        .limit(1)
+        .get();
+    return q.docs.isEmpty ? null : q.docs.first;
+  }
+
+  Future<bool?> _confirmDuplicateDialog({
+    required BuildContext context,
+    required Map<String, dynamic> existing,
+  }) {
+    final name = (existing['name'] ?? '') as String? ?? '';
+    final email = (existing['email'] ?? '') as String? ?? '';
+    final photoUrl = (existing['photoUrl'] ?? '') as String? ?? '';
+    return showDialog<bool>(
+      context: context,
+      builder: (_) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: Theme.of(context).colorScheme.copyWith(
+            primary: Colors.black87,
+            onPrimary: Colors.white,
+            surfaceTint: Colors.transparent,
+          ),
+        ),
+        child: AlertDialog(
+          backgroundColor: const Color(0xFFF5F5F5),
+          surfaceTintColor: Colors.transparent,
+          titleTextStyle: const TextStyle(
+            color: Colors.black87,
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+          ),
+          contentTextStyle: const TextStyle(color: Colors.black87),
+          title: const Text('同一人物の可能性があります'),
+          content: Row(
+            children: [
+              CircleAvatar(
+                radius: 24,
+                backgroundImage: photoUrl.isNotEmpty
+                    ? NetworkImage(photoUrl)
+                    : null,
+                child: photoUrl.isEmpty ? const Icon(Icons.person) : null,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name.isNotEmpty ? name : 'スタッフ',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(email, style: const TextStyle(color: Colors.black54)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              style: TextButton.styleFrom(foregroundColor: Colors.black87),
+              child: const Text('別人として追加'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.black,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('同一人物（既存を見る）'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   String _allStaffUrl() => '$_publicBase/#/qr-all?t=${widget.tenantId}';
 
   @override
@@ -59,9 +162,12 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
     return s.contains('@') && s.contains('.');
   }
 
+  // ＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝
+  // 差し替え: _openAddEmployeeDialog 本体
   Future<void> _openAddEmployeeDialog() async {
     _empPhotoBytes = null;
     _empPhotoName = null;
+    _prefilledPhotoUrlFromGlobal = null;
     _empNameCtrl.clear();
     _empEmailCtrl.clear();
     _empCommentCtrl.clear();
@@ -89,197 +195,442 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
             }
           }
 
-          void localPick() {
+          Future<void> pickPhoto() async {
             if (_addingEmp) return;
-            FilePicker.platform
-                .pickFiles(
-                  type: FileType.image,
-                  allowMultiple: false,
-                  withData: true,
-                )
-                .then((res) async {
-                  try {
-                    if (res == null || res.files.isEmpty) return;
-                    final f = res.files.single;
-
-                    Uint8List? bytes = f.bytes;
-                    if (bytes == null && f.readStream != null) {
-                      final chunks = <int>[];
-                      await for (final c in f.readStream!) {
-                        chunks.addAll(c);
-                      }
-                      bytes = Uint8List.fromList(chunks);
-                    }
-                    if (bytes == null) {
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('画像の読み込みに失敗しました')),
-                        );
-                      }
-                      return;
-                    }
-                    if (context.mounted) {
-                      setLocal(() {
-                        _empPhotoBytes = bytes;
-                        _empPhotoName = f.name;
-                      });
-                    }
-                  } catch (e) {
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(
-                        context,
-                      ).showSnackBar(SnackBar(content: Text('画像選択エラー: $e')));
-                    }
-                  }
+            final res = await FilePicker.platform.pickFiles(
+              type: FileType.image,
+              allowMultiple: false,
+              withData: true,
+            );
+            try {
+              if (res == null || res.files.isEmpty) return;
+              final f = res.files.single;
+              Uint8List? bytes = f.bytes;
+              if (bytes == null && f.readStream != null) {
+                final chunks = <int>[];
+                await for (final c in f.readStream!) {
+                  chunks.addAll(c);
+                }
+                bytes = Uint8List.fromList(chunks);
+              }
+              if (bytes == null) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('画像の読み込みに失敗しました')),
+                  );
+                }
+                return;
+              }
+              if (context.mounted) {
+                setLocal(() {
+                  _empPhotoBytes = bytes;
+                  _empPhotoName = f.name;
+                  _prefilledPhotoUrlFromGlobal = null; // 手元画像を優先
                 });
+              }
+            } catch (e) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('画像選択エラー: $e')));
+              }
+            }
           }
 
-          return AlertDialog(
-            title: const Text('社員を追加'),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: _addingEmp ? null : localPick,
-                    child: CircleAvatar(
-                      radius: 40,
-                      backgroundImage: (_empPhotoBytes != null)
-                          ? MemoryImage(_empPhotoBytes!)
-                          : null,
-                      child: (_empPhotoBytes == null)
-                          ? const Icon(Icons.camera_alt, size: 28)
-                          : null,
+          Future<void> searchByEmail() async {
+            final email = _normalizeEmail(_empEmailCtrl.text);
+            if (email.isEmpty || !_validateEmail(email)) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('検索には正しいメールアドレスが必要です')),
+              );
+              return;
+            }
+            final data = await _lookupGlobalStaff(email);
+            if (data == null) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('一致するスタッフは見つかりませんでした')),
+              );
+              return;
+            }
+            // 取り込み確認
+            await showDialog<void>(
+              context: context,
+              builder: (_) => Theme(
+                data: Theme.of(context).copyWith(
+                  colorScheme: Theme.of(context).colorScheme.copyWith(
+                    primary: Colors.black87,
+                    onPrimary: Colors.white,
+                    surfaceTint: Colors.transparent,
+                  ),
+                ),
+                child: AlertDialog(
+                  backgroundColor: const Color(0xFFF5F5F5),
+                  surfaceTintColor: Colors.transparent,
+                  titleTextStyle: const TextStyle(
+                    color: Colors.black87,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  contentTextStyle: const TextStyle(color: Colors.black87),
+                  title: const Text('プロフィールを取り込みますか？'),
+                  content: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 24,
+                        backgroundImage:
+                            (data['photoUrl'] ?? '').toString().isNotEmpty
+                            ? NetworkImage((data['photoUrl'] as String))
+                            : null,
+                        child: ((data['photoUrl'] ?? '') as String).isEmpty
+                            ? const Icon(Icons.person)
+                            : null,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              (data['name'] ?? '') as String? ?? '',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              (data['email'] ?? '') as String? ?? '',
+                              style: const TextStyle(color: Colors.black54),
+                            ),
+                            if ((data['comment'] ?? '')
+                                .toString()
+                                .isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                (data['comment'] as String),
+                                style: const TextStyle(color: Colors.black87),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.black87,
+                      ),
+                      child: const Text('閉じる'),
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _empNameCtrl,
-                    decoration: const InputDecoration(labelText: '名前（必須）'),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _empEmailCtrl,
-                    decoration: const InputDecoration(labelText: 'メールアドレス（任意）'),
-                    keyboardType: TextInputType.emailAddress,
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _empCommentCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'コメント（任意）',
-                      hintText: '得意分野や一言メモなど',
+                    FilledButton(
+                      onPressed: () {
+                        // フィールドに反映（写真はURLのみ保持）
+                        setLocal(() {
+                          _empNameCtrl.text =
+                              (data['name'] as String?) ?? _empNameCtrl.text;
+                          _empCommentCtrl.text =
+                              (data['comment'] as String?) ??
+                              _empCommentCtrl.text;
+                          _prefilledPhotoUrlFromGlobal =
+                              (data['photoUrl'] as String?) ?? '';
+                          _empPhotoBytes = null; // URL優先に切替
+                          _empPhotoName = null;
+                        });
+                        Navigator.pop(context);
+                      },
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.black,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('取り込む'),
                     ),
-                    maxLines: 2,
-                  ),
-                  const SizedBox(height: 4),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      '名前は必須。写真・メール・コメントは任意です',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ),
-                ],
+                  ],
+                ),
+              ),
+            );
+          }
+
+          Future<void> submit() async {
+            if (_addingEmp) return;
+            final name = _empNameCtrl.text.trim();
+            final email = _normalizeEmail(_empEmailCtrl.text);
+            final comment = _empCommentCtrl.text.trim();
+
+            if (name.isEmpty) {
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('名前を入力してください')));
+              return;
+            }
+            if (email.isNotEmpty && !_validateEmail(email)) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('正しいメールアドレスを入力してください')),
+              );
+              return;
+            }
+
+            // 同一メールがこの店舗に存在するか確認
+            if (email.isNotEmpty) {
+              final dup = await _findTenantDupByEmail(widget.tenantId, email);
+              if (dup != null) {
+                final same = await _confirmDuplicateDialog(
+                  context: context,
+                  existing: {
+                    'name': dup.data()['name'],
+                    'email': dup.data()['email'],
+                    'photoUrl': dup.data()['photoUrl'],
+                  },
+                );
+                if (same == true) {
+                  // 既存詳細を開く
+                  if (context.mounted) {
+                    Navigator.pop(context); // ダイアログを閉じて
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => StaffDetailScreen(
+                          tenantId: widget.tenantId,
+                          employeeId: dup.id,
+                        ),
+                      ),
+                    );
+                  }
+                  return;
+                }
+                // 別人として続行 → そのまま追加
+              }
+            }
+
+            setLocal(() => _addingEmp = true);
+            try {
+              final tid = widget.tenantId;
+              final user = FirebaseAuth.instance.currentUser!;
+              final empRef = FirebaseFirestore.instance
+                  .collection('tenants')
+                  .doc(tid)
+                  .collection('employees')
+                  .doc();
+
+              String photoUrl = '';
+              if (_empPhotoBytes != null) {
+                final contentType = _detectContentType(_empPhotoName);
+                final ext = contentType.split('/').last; // jpeg 等
+                final storageRef = FirebaseStorage.instance.ref().child(
+                  'tenants/$tid/employees/${empRef.id}/photo.$ext',
+                );
+                await storageRef.putData(
+                  _empPhotoBytes!,
+                  SettableMetadata(contentType: contentType),
+                );
+                photoUrl = await storageRef.getDownloadURL();
+              } else if ((_prefilledPhotoUrlFromGlobal ?? '').isNotEmpty) {
+                photoUrl = _prefilledPhotoUrlFromGlobal!;
+              }
+
+              await empRef.set({
+                'name': name,
+                'email': email,
+                'photoUrl': photoUrl,
+                'comment': comment,
+                'createdAt': FieldValue.serverTimestamp(),
+                'createdBy': {'uid': user.uid, 'email': user.email},
+              });
+
+              // グローバル staff/{email} を軽く upsert（統合管理の種）
+              if (email.isNotEmpty) {
+                await FirebaseFirestore.instance
+                    .collection('staff')
+                    .doc(email)
+                    .set({
+                      'email': email,
+                      if (name.isNotEmpty) 'name': name,
+                      if (photoUrl.isNotEmpty) 'photoUrl': photoUrl,
+                      if (comment.isNotEmpty) 'comment': comment,
+                      'tenants': FieldValue.arrayUnion([tid]),
+                      'updatedAt': FieldValue.serverTimestamp(),
+                    }, SetOptions(merge: true));
+              }
+
+              if (context.mounted) {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('社員を追加しました')));
+              }
+            } catch (e) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('追加に失敗: $e')));
+              }
+            } finally {
+              if (context.mounted) setLocal(() => _addingEmp = false);
+            }
+          }
+
+          // —— ダイアログ（白黒トーン）
+          return Theme(
+            data: Theme.of(context).copyWith(
+              colorScheme: Theme.of(context).colorScheme.copyWith(
+                primary: Colors.black87,
+                onPrimary: Colors.white,
+                surfaceTint: Colors.transparent,
+              ),
+              textSelectionTheme: const TextSelectionThemeData(
+                cursorColor: Colors.black87,
+                selectionColor: Color(0x33000000),
+                selectionHandleColor: Colors.black87,
               ),
             ),
-            actions: [
-              TextButton(
-                onPressed: _addingEmp ? null : () => Navigator.pop(context),
-                child: const Text('キャンセル'),
+            child: AlertDialog(
+              backgroundColor: const Color(0xFFF5F5F5), // 薄い灰色
+              surfaceTintColor: Colors.transparent,
+              titleTextStyle: const TextStyle(
+                color: Colors.black87,
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
               ),
-              FilledButton(
-                onPressed: _addingEmp
-                    ? null
-                    : () async {
-                        final name = _empNameCtrl.text.trim();
-                        final email = _empEmailCtrl.text.trim();
-                        final comment = _empCommentCtrl.text.trim();
-                        if (name.isEmpty) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('名前を入力してください')),
-                          );
-                          return;
-                        }
-                        if (email.isNotEmpty && !_validateEmail(email)) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('正しいメールアドレスを入力してください'),
-                            ),
-                          );
-                          return;
-                        }
-
-                        setLocal(() => _addingEmp = true);
-                        try {
-                          final tid = widget.tenantId;
-                          final user = FirebaseAuth.instance.currentUser!;
-                          final empRef = FirebaseFirestore.instance
-                              .collection('tenants')
-                              .doc(tid)
-                              .collection('employees')
-                              .doc();
-
-                          String photoUrl = '';
-                          if (_empPhotoBytes != null) {
-                            final contentType = _detectContentType(
-                              _empPhotoName,
-                            );
-                            final ext = contentType.split('/').last; // jpeg等
-                            final storageRef = FirebaseStorage.instance
-                                .ref()
-                                .child(
-                                  'tenants/$tid/employees/${empRef.id}/photo.$ext',
-                                );
-                            await storageRef.putData(
-                              _empPhotoBytes!,
-                              SettableMetadata(contentType: contentType),
-                            );
-                            photoUrl = await storageRef.getDownloadURL();
-                          }
-
-                          await empRef.set({
-                            'name': name,
-                            'email': email,
-                            'photoUrl': photoUrl,
-                            'comment': comment,
-                            'createdAt': FieldValue.serverTimestamp(),
-                            'createdBy': {'uid': user.uid, 'email': user.email},
-                          });
-
-                          if (context.mounted) {
-                            Navigator.pop(context);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('社員を追加しました')),
-                            );
-                          }
-                        } catch (e) {
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('追加に失敗: $e')),
-                            );
-                          }
-                        } finally {
-                          if (context.mounted) {
-                            setLocal(() => _addingEmp = false);
-                          }
-                        }
-                      },
-                child: _addingEmp
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('追加'),
+              contentTextStyle: const TextStyle(color: Colors.black87),
+              title: const Text('社員を追加'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _addingEmp ? null : pickPhoto,
+                      child: CircleAvatar(
+                        radius: 40,
+                        backgroundImage: (_empPhotoBytes != null)
+                            ? MemoryImage(_empPhotoBytes!)
+                            : ((_prefilledPhotoUrlFromGlobal ?? '').isNotEmpty
+                                      ? NetworkImage(
+                                          _prefilledPhotoUrlFromGlobal!,
+                                        )
+                                      : null)
+                                  as ImageProvider<Object>?,
+                        child:
+                            (_empPhotoBytes == null &&
+                                (_prefilledPhotoUrlFromGlobal ?? '').isEmpty)
+                            ? const Icon(Icons.camera_alt, size: 28)
+                            : null,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _empNameCtrl,
+                      decoration: InputDecoration(
+                        labelText: '名前（必須）',
+                        filled: true,
+                        fillColor: Colors.white,
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: Colors.black26),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(
+                            color: Colors.black87,
+                            width: 1.2,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _empEmailCtrl,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: InputDecoration(
+                        labelText: 'メールアドレス（任意・検索可）',
+                        filled: true,
+                        fillColor: Colors.white,
+                        suffixIcon: IconButton(
+                          tooltip: 'メールで検索',
+                          icon: const Icon(Icons.search),
+                          onPressed: _addingEmp ? null : searchByEmail,
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: Colors.black26),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(
+                            color: Colors.black87,
+                            width: 1.2,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _empCommentCtrl,
+                      maxLines: 2,
+                      decoration: InputDecoration(
+                        labelText: 'コメント（任意）',
+                        hintText: '得意分野や一言メモなど',
+                        filled: true,
+                        fillColor: Colors.white,
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: Colors.black26),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(
+                            color: Colors.black87,
+                            width: 1.2,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '名前は必須。写真・メール・コメントは任意です。\nメールを入れて検索すると他店舗の登録から取り込めます。',
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(color: Colors.black54),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ],
+              actionsPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 8,
+              ),
+              actions: [
+                TextButton(
+                  onPressed: _addingEmp ? null : () => Navigator.pop(context),
+                  style: TextButton.styleFrom(foregroundColor: Colors.black87),
+                  child: const Text('キャンセル'),
+                ),
+                FilledButton(
+                  onPressed: _addingEmp ? null : submit,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.black,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: _addingEmp
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('追加'),
+                ),
+              ],
+            ),
           );
         },
       ),
     );
   }
+  // ＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝
 
   Widget _qrAllLinkCard(String url) {
     final outlinedBtnStyle = OutlinedButton.styleFrom(
@@ -290,7 +641,7 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
     );
 
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(7),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -302,56 +653,47 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            '全スタッフQR一覧（共有用URL）',
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              color: Colors.black87,
+      child: Center(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '全スタッフQR一覧（共有用URL）',
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: Colors.black87,
+              ),
             ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              const Icon(Icons.link, color: Colors.black54),
-              const SizedBox(width: 8),
-              Expanded(
-                child: SelectableText(
-                  url,
-                  style: const TextStyle(color: Colors.black87),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  style: outlinedBtnStyle,
+                  onPressed: () => launchUrlString(
+                    url,
+                    mode: LaunchMode.externalApplication,
+                  ),
+                  icon: const Icon(Icons.open_in_new),
+                  label: const Text('リンクを開く'),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            children: [
-              OutlinedButton.icon(
-                style: outlinedBtnStyle,
-                onPressed: () =>
-                    launchUrlString(url, mode: LaunchMode.externalApplication),
-                icon: const Icon(Icons.open_in_new),
-                label: const Text('リンクを開く'),
-              ),
-              OutlinedButton.icon(
-                style: outlinedBtnStyle,
-                onPressed: () async {
-                  await Clipboard.setData(ClipboardData(text: url));
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('URLをコピーしました')),
-                    );
-                  }
-                },
-                icon: const Icon(Icons.copy),
-                label: const Text('URLをコピー'),
-              ),
-            ],
-          ),
-        ],
+                OutlinedButton.icon(
+                  style: outlinedBtnStyle,
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: url));
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('URLをコピーしました')),
+                      );
+                    }
+                  },
+                  icon: const Icon(Icons.copy),
+                  label: const Text('URLをコピー'),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

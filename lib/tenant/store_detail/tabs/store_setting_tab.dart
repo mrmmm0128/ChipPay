@@ -143,7 +143,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Stripeを通じてチップを受け取る場合、Stripeの決済手数料として元金の2.4%が差し引かれます。',
+              'Stripeを通じてチップを受け取る場合、Stripeの決済手数料として元金の2.4%が差し引かれます。（2.4%は標準の値であり、前後する可能性がございます。）',
               style: TextStyle(color: Colors.black87),
             ),
             SizedBox(height: 8),
@@ -464,7 +464,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                 const SizedBox(height: 16),
 
                 const Text(
-                  'サブスク',
+                  'サブスクリプション',
                   style: TextStyle(
                     fontWeight: FontWeight.w700,
                     color: Colors.black87,
@@ -482,11 +482,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                             PlanChip(label: '現在', dark: true),
                             const SizedBox(width: 8),
                             Text(
-                              'プラン $currentPlan  •  手数料 ${pct ?? (_selectedPlan == 'A'
-                                      ? 20
-                                      : _selectedPlan == 'B'
-                                      ? 15
-                                      : 10)}%  •  ステータス: $status',
+                              'プラン $currentPlan',
                               style: const TextStyle(
                                 fontWeight: FontWeight.w600,
                                 color: Colors.black87,
@@ -580,7 +576,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                 label: Text(
                                   currentPlan == _selectedPlan
                                       ? '再設定/再購読'
-                                      : 'このプランに変更',
+                                      : '変更',
                                 ),
                               ),
                             ),
@@ -589,7 +585,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                               style: outlinedBtnStyle,
                               onPressed: _openCustomerPortal,
                               icon: const Icon(Icons.credit_card),
-                              label: const Text('支払い情報を管理'),
+                              label: const Text('サブスク登録を管理'),
                             ),
                           ],
                         ),
@@ -681,6 +677,11 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                   ),
                                 ],
                               ),
+                            ),
+                            const SizedBox(width: 12),
+                            const Text(
+                              "or",
+                              style: TextStyle(color: Colors.black87),
                             ),
                             const SizedBox(width: 12),
                             Expanded(
@@ -845,8 +846,14 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                 const <String>[];
                             if (uids.isEmpty) {
                               return const ListTile(
-                                title: Text('管理者がいません'),
-                                subtitle: Text('右上の追加ボタンから招待できます'),
+                                title: Text(
+                                  '管理者がいません',
+                                  style: TextStyle(color: Colors.black87),
+                                ),
+                                subtitle: Text(
+                                  '右上の追加ボタンから招待できます',
+                                  style: TextStyle(color: Colors.black87),
+                                ),
                               );
                             }
                             return AdminList(
