@@ -13,6 +13,12 @@ class StaffDetailPage extends StatefulWidget {
 }
 
 class _StaffDetailPageState extends State<StaffDetailPage> {
+  // ===== デザイン用の統一カラー・線の太さ =====
+  static const Color kBlack = Color(0xFF000000);
+  static const Color kWhite = Color(0xFFFFFFFF);
+  static const Color kYellow = Color(0xFFFFD54F); // 黄色
+  static const double kBorderWidth = 2.0;
+
   String? tenantId;
   String? employeeId;
   String? name;
@@ -43,7 +49,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
   @override
   void initState() {
     super.initState();
-    _initFromUrlIfNeeded(); // ← 追加：URL直叩き対応
+    _initFromUrlIfNeeded(); // URL直叩き対応
   }
 
   @override
@@ -142,10 +148,10 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
   Future<void> _sendTip() async {
     if (tenantId == null || employeeId == null) return;
     final amount = _currentAmount();
-    if (amount <= 0) {
+    if (amount < 100) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('有効な金額を入力してください')));
+      ).showSnackBar(const SnackBar(content: Text('チップは100円から送ることができます')));
       return;
     }
     if (amount > _maxAmount) {
@@ -175,7 +181,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
       await launchUrlString(
         checkoutUrl,
         mode: LaunchMode.platformDefault, // Webは同タブ
-        webOnlyWindowName: '_self', // ★同じタブに強制
+        webOnlyWindowName: '_self', // 同じタブに強制
       );
       await _ensureAnonSignIn();
 
@@ -207,21 +213,32 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
   @override
   Widget build(BuildContext context) {
     final title = name ?? 'スタッフ詳細';
-    final presets = const [100, 300, 500, 1000, 3000, 5000, 10000];
+    final presets = const [1000, 3000, 5000, 10000];
 
     final cardDecoration = BoxDecoration(
-      color: Colors.white,
+      color: kWhite,
       borderRadius: BorderRadius.circular(14),
-      boxShadow: const [BoxShadow(color: Color(0x14000000), blurRadius: 12)],
+      border: Border.all(color: kBlack, width: kBorderWidth),
+      boxShadow: [
+        BoxShadow(
+          color: kBlack.withOpacity(0.06),
+          blurRadius: 8,
+          offset: const Offset(0, 3),
+        ),
+      ],
     );
 
     return Scaffold(
-      backgroundColor: Colors.grey[100],
+      backgroundColor: kYellow,
       appBar: AppBar(
-        title: Text(title),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
-        elevation: 0.5,
+        title: Text(title, style: const TextStyle(color: kBlack)),
+        backgroundColor: kWhite,
+        foregroundColor: kBlack,
+        elevation: 0,
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(kBorderWidth),
+          child: Container(height: kBorderWidth, color: kBlack),
+        ),
       ),
       body: SafeArea(
         child: LayoutBuilder(
@@ -230,7 +247,6 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
               child: ConstrainedBox(
                 constraints: BoxConstraints(
-                  // 縦が小さい端末でもスクロールで対応
                   minHeight: constraints.maxHeight - 40,
                 ),
                 child: Column(
@@ -243,15 +259,33 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          CircleAvatar(
-                            radius: 36,
-                            backgroundImage:
-                                (photoUrl != null && photoUrl!.isNotEmpty)
-                                ? NetworkImage(photoUrl!)
-                                : null,
-                            child: (photoUrl == null || photoUrl!.isEmpty)
-                                ? const Icon(Icons.person, size: 36)
-                                : null,
+                          // 黒の太枠付きアバター
+                          Container(
+                            width: 72,
+                            height: 72,
+                            decoration: BoxDecoration(
+                              color: kWhite,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: kBlack,
+                                width: kBorderWidth,
+                              ),
+                            ),
+                            child: CircleAvatar(
+                              backgroundColor: kWhite,
+                              radius: 36,
+                              backgroundImage:
+                                  (photoUrl != null && photoUrl!.isNotEmpty)
+                                  ? NetworkImage(photoUrl!)
+                                  : null,
+                              child: (photoUrl == null || photoUrl!.isEmpty)
+                                  ? const Icon(
+                                      Icons.person,
+                                      size: 36,
+                                      color: kBlack,
+                                    )
+                                  : null,
+                            ),
                           ),
                           const SizedBox(width: 16),
                           Expanded(
@@ -266,7 +300,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                                         style: const TextStyle(
                                           fontSize: 20,
                                           fontWeight: FontWeight.w700,
-                                          color: Colors.black87,
+                                          color: kBlack,
                                         ),
                                       ),
                                     ),
@@ -278,67 +312,25 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                                           vertical: 6,
                                         ),
                                         decoration: BoxDecoration(
-                                          color: Colors.grey[100],
+                                          color: kYellow,
                                           borderRadius: BorderRadius.circular(
                                             20,
                                           ),
                                           border: Border.all(
-                                            color: Colors.black12,
+                                            color: kBlack,
+                                            width: kBorderWidth,
                                           ),
                                         ),
                                         child: Text(
                                           tenantName!,
                                           style: const TextStyle(
                                             fontSize: 12,
-                                            color: Colors.black87,
+                                            color: kBlack,
                                           ),
                                         ),
                                       ),
                                   ],
                                 ),
-                                const SizedBox(height: 6),
-                                if (email != null && email!.isNotEmpty)
-                                  Row(
-                                    children: [
-                                      const Icon(
-                                        Icons.mail_outline,
-                                        size: 16,
-                                        color: Colors.black54,
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Expanded(
-                                        child: Text(
-                                          email!,
-                                          style: const TextStyle(
-                                            color: Colors.black87,
-                                          ),
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                // if (employeeId != null) ...[
-                                //   const SizedBox(height: 4),
-                                //   Row(
-                                //     children: [
-                                //       const Icon(
-                                //         Icons.badge_outlined,
-                                //         size: 16,
-                                //         color: Colors.black54,
-                                //       ),
-                                //       const SizedBox(width: 6),
-                                //       Expanded(
-                                //         child: Text(
-                                //           'ID: $employeeId',
-                                //           style: const TextStyle(
-                                //             color: Colors.black54,
-                                //           ),
-                                //           overflow: TextOverflow.ellipsis,
-                                //         ),
-                                //       ),
-                                //     ],
-                                //   ),
-                                // ],
                               ],
                             ),
                           ),
@@ -361,20 +353,17 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                                 '金額',
                                 style: TextStyle(
                                   fontWeight: FontWeight.w700,
-                                  color: Colors.black87,
+                                  color: kBlack,
                                 ),
                               ),
                               const Spacer(),
                               TextButton.icon(
                                 onPressed: () => _setAmount(0),
-                                icon: const Icon(
-                                  Icons.clear,
-                                  color: Colors.black54,
+                                style: TextButton.styleFrom(
+                                  foregroundColor: kBlack,
                                 ),
-                                label: const Text(
-                                  'クリア',
-                                  style: TextStyle(color: Colors.black54),
-                                ),
+                                icon: const Icon(Icons.clear, color: kBlack),
+                                label: const Text('クリア'),
                               ),
                             ],
                           ),
@@ -384,9 +373,12 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                               vertical: 14,
                             ),
                             decoration: BoxDecoration(
-                              color: Colors.white,
+                              color: kWhite,
                               borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.black12),
+                              border: Border.all(
+                                color: kBlack,
+                                width: kBorderWidth,
+                              ),
                             ),
                             child: Row(
                               children: [
@@ -395,6 +387,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                                   style: TextStyle(
                                     fontSize: 22,
                                     fontWeight: FontWeight.w700,
+                                    color: kBlack,
                                   ),
                                 ),
                                 const SizedBox(width: 8),
@@ -405,7 +398,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                                     style: const TextStyle(
                                       fontSize: 30,
                                       fontWeight: FontWeight.w800,
-                                      color: Colors.black87,
+                                      color: kBlack,
                                     ),
                                   ),
                                 ),
@@ -419,16 +412,18 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                             children: presets.map((v) {
                               final active = _currentAmount() == v;
                               return ChoiceChip(
-                                backgroundColor: active
-                                    ? const Color(0xFF111111)
-                                    : Colors.grey[100],
-                                selected: active,
                                 label: Text('¥${_fmt(v)}'),
+                                selected: active,
                                 showCheckmark: false,
-                                selectedColor: const Color(0xFF111111),
+                                backgroundColor: kYellow,
+                                selectedColor: kBlack,
                                 labelStyle: TextStyle(
-                                  color: active ? Colors.white : Colors.black87,
-                                  fontWeight: FontWeight.w600,
+                                  color: active ? kWhite : kBlack,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                                side: const BorderSide(
+                                  color: kBlack,
+                                  width: kBorderWidth,
                                 ),
                                 onSelected: (_) => _setAmount(v),
                               );
@@ -462,26 +457,6 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                       ),
                     ),
 
-                    const SizedBox(height: 18),
-
-                    // ===== 送信ボタン =====
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton.icon(
-                        onPressed: _loading ? null : _sendTip,
-                        icon: const Icon(Icons.volunteer_activism),
-                        label: _loading
-                            ? const SizedBox(
-                                height: 16,
-                                width: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Text('Stripeでチップを送る'),
-                      ),
-                    ),
-
                     // ===== 開発用：決済完了画面へ遷移 =====
                     const SizedBox(height: 4),
                     SizedBox(
@@ -499,10 +474,10 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                                   return;
                                 }
                                 final amount = _currentAmount();
-                                if (amount <= 0) {
+                                if (amount < 100) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(
-                                      content: Text('有効な金額を入力してください'),
+                                      content: Text('チップは100円から送ることができます'),
                                     ),
                                   );
                                   return;
@@ -519,16 +494,20 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                                   ),
                                 );
                               },
+                        style: FilledButton.styleFrom(
+                          backgroundColor: kWhite,
+                          foregroundColor: kBlack,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: const BorderSide(
+                              color: kBlack,
+                              width: kBorderWidth,
+                            ),
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
                         icon: const Icon(Icons.volunteer_activism),
-                        label: _loading
-                            ? const SizedBox(
-                                height: 16,
-                                width: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Text('決済完了画面へ遷移'),
+                        label: const Text('決済完了画面へ遷移'),
                       ),
                     ),
                   ],
@@ -538,12 +517,44 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
           },
         ),
       ),
+      // 画面下部に常にボタンを設置
+      bottomNavigationBar: BottomAppBar(
+        color: kYellow,
+        child: FilledButton.icon(
+          onPressed: _loading ? null : _sendTip,
+          style: FilledButton.styleFrom(
+            backgroundColor: kYellow,
+            foregroundColor: kBlack,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: const BorderSide(color: kBlack, width: kBorderWidth),
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 14),
+          ),
+          icon: _loading
+              ? const SizedBox(
+                  height: 16,
+                  width: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: kBlack,
+                  ),
+                )
+              : const Icon(Icons.volunteer_activism),
+          label: _loading ? const Text('処理中…') : const Text('チップを送る'),
+        ),
+      ),
     );
   }
 }
 
 /// 画面内テンキー（1–9 / 00 / 0 / ⌫）
 class _AmountKeypad extends StatelessWidget {
+  // デザイン定数（このクラス内でも統一）
+  static const Color kBlack = Color(0xFF000000);
+  static const Color kWhite = Color(0xFFFFFFFF);
+  static const double kBorderWidth = 2.0;
+
   final void Function(int digit) onTapDigit;
   final VoidCallback onTapDoubleZero;
   final VoidCallback onBackspace;
@@ -580,10 +591,10 @@ class _AmountKeypad extends StatelessWidget {
       onPressed: onPressed,
       style: ElevatedButton.styleFrom(
         elevation: 0,
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
+        backgroundColor: kWhite,
+        foregroundColor: kBlack,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        side: const BorderSide(color: Colors.black12),
+        side: const BorderSide(color: kBlack, width: kBorderWidth),
         padding: const EdgeInsets.symmetric(vertical: 14),
         textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
       ),
@@ -596,10 +607,10 @@ class _AmountKeypad extends StatelessWidget {
       onPressed: onPressed,
       style: ElevatedButton.styleFrom(
         elevation: 0,
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
+        backgroundColor: kWhite,
+        foregroundColor: kBlack,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        side: const BorderSide(color: Colors.black12),
+        side: const BorderSide(color: kBlack, width: kBorderWidth),
         padding: const EdgeInsets.symmetric(vertical: 14),
       ),
       child: Icon(icon, size: 22),
