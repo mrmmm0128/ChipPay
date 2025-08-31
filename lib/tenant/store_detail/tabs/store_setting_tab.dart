@@ -418,8 +418,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
             final sub =
                 (data['subscription'] as Map?)?.cast<String, dynamic>() ?? {};
             final currentPlan = (sub['plan'] as String?) ?? 'A';
-            final status = (sub['status'] as String?) ?? 'inactive';
-            final pct = (sub['feePercent'] as num?)?.toInt();
+
             final periodEndTs = sub['currentPeriodEnd'];
             DateTime? periodEnd;
             if (periodEndTs is Timestamp) periodEnd = periodEndTs.toDate();
@@ -596,7 +595,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
 
                 const SizedBox(height: 24),
                 const Text(
-                  '店舗の控除・手数料',
+                  "スタッフから差し引く金額を設定します。",
                   style: TextStyle(
                     fontWeight: FontWeight.w700,
                     color: Colors.black87,
@@ -610,7 +609,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'チップから店舗が差し引く金額を設定します（スタッフ受取分の計算に使用）。',
+                          'スタッフにチップを満額渡しますか？',
                           style: TextStyle(color: Colors.black87),
                         ),
                         const SizedBox(height: 12),
@@ -662,7 +661,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                               child: TextField(
                                 controller: _storePercentCtrl,
                                 decoration: const InputDecoration(
-                                  labelText: '控除（％）',
+                                  labelText: 'スタッフから店舗が差し引く金額（％）',
                                   hintText: '例: 10 または 12.5',
                                   suffixText: '%',
                                 ),
@@ -675,26 +674,6 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                   FilteringTextInputFormatter.allow(
                                     RegExp(r'[0-9.]'),
                                   ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            const Text(
-                              "or",
-                              style: TextStyle(color: Colors.black87),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: TextField(
-                                controller: _storeFixedCtrl,
-                                decoration: const InputDecoration(
-                                  labelText: '控除（固定額, 円）',
-                                  hintText: '例: 50',
-                                  suffixText: '円',
-                                ),
-                                keyboardType: TextInputType.number,
-                                inputFormatters: [
-                                  FilteringTextInputFormatter.digitsOnly,
                                 ],
                               ),
                             ),

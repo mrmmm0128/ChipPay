@@ -74,6 +74,9 @@ class _StoreQrTabState extends State<StoreQrTab> {
   _Paper _paper = _Paper.a4; // 用紙
   bool _landscape = false; // 横向き切替
 
+  /// ★ 追加：QR の位置（正規化座標 0〜1）。dx=横、dy=縦。中央スタート。
+  Offset _qrPos = const Offset(0.5, 0.5);
+
   @override
   void initState() {
     super.initState();
@@ -86,6 +89,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
     if (oldWidget.tenantId != widget.tenantId) {
       setState(() {
         _publicStoreUrl = _buildStoreUrl();
+        _qrPos = const Offset(0.5, 0.5); // テナント変更時は中央にリセット（任意）
       });
     }
   }
@@ -187,7 +191,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
       final b = await rootBundle.load(selected.assetPath!);
       posterProvider = pw.MemoryImage(Uint8List.view(b.buffer));
     } else {
-      posterProvider = await networkImage(selected.url!);
+      posterProvider = await networkImage(selected.url!); // from printing
     }
 
     final pdef = _paperDefs[_paper]!;
@@ -205,6 +209,20 @@ class _StoreQrTabState extends State<StoreQrTab> {
 
           final qrSidePt = minSide * _qrScale;
           final padPt = _qrPaddingMm * PdfPageFormat.mm;
+          final boxSidePt = qrSidePt + (_putWhiteBg ? padPt * 2 : 0);
+
+          // 正規化座標 -> PDF座標に変換（はみ出しクランプ）
+          double leftPt = _qrPos.dx * pageW - boxSidePt / 2;
+          double topPt = _qrPos.dy * pageH - boxSidePt / 2;
+          leftPt = leftPt.clamp(0, pageW - boxSidePt);
+          topPt = topPt.clamp(0, pageH - boxSidePt);
+
+          final poster = pw.Positioned.fill(
+            child: pw.FittedBox(
+              child: pw.Image(posterProvider),
+              fit: pw.BoxFit.cover, // プレビューと合わせる
+            ),
+          );
 
           final qr = pw.BarcodeWidget(
             barcode: Barcode.qrCode(),
@@ -228,17 +246,11 @@ class _StoreQrTabState extends State<StoreQrTab> {
             child: qr,
           );
 
-          return pw.Center(
-            child: pw.Stack(
-              alignment: pw.Alignment.center,
-              children: [
-                pw.FittedBox(
-                  child: pw.Image(posterProvider),
-                  fit: pw.BoxFit.contain,
-                ),
-                qrBox, // 中央に重ねる
-              ],
-            ),
+          return pw.Stack(
+            children: [
+              poster,
+              pw.Positioned(left: leftPt, top: topPt, child: qrBox),
+            ],
           );
         },
       ),
@@ -251,26 +263,17 @@ class _StoreQrTabState extends State<StoreQrTab> {
   }
 
   Future<void> _openOnboarding() async {
-    // ← 旧: createAccountOnboardingLink を呼んでいたメソッドを差し替え
     try {
-      // ここで最小限の事前入力（prefill）を渡します。
-      // country は 'JP' を既定、businessType はお店の形態に合わせて 'individual' or 'company'
       final payload = {
         'tenantId': widget.tenantId,
         'account': {
           'country': 'JP',
           'businessType': 'individual', // or 'company'
-          // 'email': FirebaseAuth.instance.currentUser?.email, // 任意
           'businessProfile': {
-            // 任意: 公開ページURLや説明などがあれば入れると審査が進みやすいです
-            'url': _publicStoreUrl, // 例: 店舗の公開ページ
+            'url': _publicStoreUrl,
             'product_description': 'チップ受け取り（チッププラットフォーム）',
-            // 'mcc': '7299', // 必要に応じて
           },
-          // 'individual': {...}, // ここに氏名/住所/生年月日/電話などを事前入力で渡せます（任意）
-          // 'company': {...},    // 会社の場合の事前入力
-          'tosAccepted': true, // 利用規約同意（日時/IP/UAは関数側で付与）
-          // 'bankAccountToken': 'btok_xxx', // 口座をトークン化済みなら渡す（任意）
+          'tosAccepted': true,
         },
       };
 
@@ -284,12 +287,10 @@ class _StoreQrTabState extends State<StoreQrTab> {
       final payoutsEnabled = data['payoutsEnabled'] == true;
 
       if (url != null && url.isNotEmpty) {
-        // 必須のKYCがまだ残っているときだけ、Stripeホスト画面へ
         await launchUrlString(url, mode: LaunchMode.externalApplication);
         return;
       }
 
-      // ホスト画面に行かず完了（= 現時点の情報で要件クリア）した場合
       if (!mounted) return;
       final msg = chargesEnabled && payoutsEnabled
           ? 'Stripe接続が完了しました'
@@ -305,10 +306,10 @@ class _StoreQrTabState extends State<StoreQrTab> {
 
   @override
   Widget build(BuildContext context) {
-    final black78 = Colors.black.withOpacity(0.78); // ★ 統一色
+    final black78 = Colors.black.withOpacity(0.78); // 統一色
     final primary = FilledButton.styleFrom(
       backgroundColor: Colors.white,
-      foregroundColor: black78, // ★
+      foregroundColor: black78,
       side: const BorderSide(color: Colors.black54),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -366,8 +367,8 @@ class _StoreQrTabState extends State<StoreQrTab> {
                     InputDecorator(
                       decoration: InputDecoration(
                         labelText: '用紙サイズ',
-                        labelStyle: TextStyle(color: black78), // ★
-                        hintStyle: TextStyle(color: black78), // ★
+                        labelStyle: TextStyle(color: black78),
+                        hintStyle: TextStyle(color: black78),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
@@ -397,7 +398,6 @@ class _StoreQrTabState extends State<StoreQrTab> {
                         '横向き（ランドスケープ）',
                         style: TextStyle(color: Colors.black87),
                       ),
-
                       value: _landscape,
                       dense: true,
                       onChanged: (v) => setState(() => _landscape = v),
@@ -420,7 +420,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
                   icon: const Icon(Icons.add_photo_alternate_outlined),
                   label: const Text('アップロード'),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: black78, // ★
+                    foregroundColor: black78,
                     side: const BorderSide(color: Colors.black54),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -439,7 +439,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
                       'ポスターを選択',
                       style: Theme.of(
                         context,
-                      ).textTheme.titleMedium?.copyWith(color: black78), // ★
+                      ).textTheme.titleMedium?.copyWith(color: black78),
                     ),
                     const SizedBox(height: 8),
                     SizedBox(
@@ -503,15 +503,12 @@ class _StoreQrTabState extends State<StoreQrTab> {
                     ? const SizedBox.shrink()
                     : SelectableText(
                         _publicStoreUrl!,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: black78, // ★
-                        ),
+                        style: TextStyle(fontSize: 12, color: black78),
                         textAlign: TextAlign.left,
                       );
 
                 Widget qrControls() => DefaultTextStyle.merge(
-                  style: TextStyle(color: black78), // ★
+                  style: TextStyle(color: black78),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -538,6 +535,11 @@ class _StoreQrTabState extends State<StoreQrTab> {
                         value: _putWhiteBg,
                         onChanged: (v) => setState(() => _putWhiteBg = v),
                         contentPadding: EdgeInsets.zero,
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'ヒント：プレビュー内のQRをドラッグで移動／ダブルタップで中央に戻せます。',
+                        style: TextStyle(fontSize: 12, color: Colors.black54),
                       ),
                     ],
                   ),
@@ -570,7 +572,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
                       )
                     : const SizedBox.shrink();
 
-                // 右側プレビュー
+                // 右側プレビュー（ドラッグ対応版）
                 Widget previewPane() => AspectRatio(
                   aspectRatio: () {
                     final def = _paperDefs[_paper]!;
@@ -592,6 +594,10 @@ class _StoreQrTabState extends State<StoreQrTab> {
                       final boxSidePx =
                           qrSidePx + (_putWhiteBg ? padPx * 2 : 0);
 
+                      // 端からはみ出さないための中心位置の許容域
+                      final halfX = (boxSidePx / 2) / w;
+                      final halfY = (boxSidePx / 2) / h;
+
                       final selected = options.firstWhere(
                         (o) => o.id == _selectedPosterId,
                       );
@@ -599,8 +605,10 @@ class _StoreQrTabState extends State<StoreQrTab> {
                           ? Image.asset(selected.assetPath!, fit: BoxFit.cover)
                           : Image.network(selected.url!, fit: BoxFit.cover);
 
+                      final left = _qrPos.dx * w - boxSidePx / 2;
+                      final top = _qrPos.dy * h - boxSidePx / 2;
+
                       return Stack(
-                        alignment: Alignment.center,
                         children: [
                           Positioned.fill(
                             child: ClipRRect(
@@ -609,13 +617,27 @@ class _StoreQrTabState extends State<StoreQrTab> {
                             ),
                           ),
                           if (_publicStoreUrl != null)
-                            Align(
-                              alignment: Alignment.center,
-                              child: Transform.translate(
-                                offset: const Offset(6, 0),
+                            Positioned(
+                              left: left,
+                              top: top,
+                              width: boxSidePx,
+                              height: boxSidePx,
+                              child: GestureDetector(
+                                onPanUpdate: (details) {
+                                  setState(() {
+                                    final nx =
+                                        (_qrPos.dx + details.delta.dx / w)
+                                            .clamp(halfX, 1 - halfX);
+                                    final ny =
+                                        (_qrPos.dy + details.delta.dy / h)
+                                            .clamp(halfY, 1 - halfY);
+                                    _qrPos = Offset(nx, ny);
+                                  });
+                                },
+                                onDoubleTap: () => setState(
+                                  () => _qrPos = const Offset(0.5, 0.5),
+                                ),
                                 child: Container(
-                                  width: boxSidePx,
-                                  height: boxSidePx,
                                   decoration: BoxDecoration(
                                     color: _putWhiteBg
                                         ? Colors.white
@@ -630,6 +652,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
                                             ),
                                           ]
                                         : null,
+                                    border: Border.all(color: Colors.black12),
                                   ),
                                   alignment: Alignment.center,
                                   child: Padding(
@@ -762,7 +785,7 @@ class _SliderTile extends StatelessWidget {
     return ListTile(
       contentPadding: EdgeInsets.zero,
       textColor: Colors.black87,
-      title: Text(label, style: TextStyle(color: Colors.black87)),
+      title: Text(label, style: const TextStyle(color: Colors.black87)),
       subtitle: Slider(value: value, min: min, max: max, onChanged: onChanged),
       trailing: SizedBox(
         width: 56,
