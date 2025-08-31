@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:yourpay/endUser/tip_complete_page.dart';
 import 'package:yourpay/endUser/tip_waiting_page.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class StaffDetailPage extends StatefulWidget {
   const StaffDetailPage({super.key});
@@ -16,8 +17,8 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
   // ===== デザイン用の統一カラー・線の太さ =====
   static const Color kBlack = Color(0xFF000000);
   static const Color kWhite = Color(0xFFFFFFFF);
-  static const Color kYellow = Color(0xFFFFD54F); // 黄色
-  static const double kBorderWidth = 2.0;
+  static const Color kYellow = Color(0xFFFCC400); // 黄色
+  static const double kBorderWidth = 5.0;
 
   String? tenantId;
   String? employeeId;
@@ -244,7 +245,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             return SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+              padding: const EdgeInsets.fromLTRB(12, 14, 12, 24),
               child: ConstrainedBox(
                 constraints: BoxConstraints(
                   minHeight: constraints.maxHeight - 40,
@@ -343,34 +344,14 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                     // ===== 金額カード（表示＋プリセット）=====
                     Container(
                       decoration: cardDecoration,
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Row(
-                            children: [
-                              const Text(
-                                '金額',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  color: kBlack,
-                                ),
-                              ),
-                              const Spacer(),
-                              TextButton.icon(
-                                onPressed: () => _setAmount(0),
-                                style: TextButton.styleFrom(
-                                  foregroundColor: kBlack,
-                                ),
-                                icon: const Icon(Icons.clear, color: kBlack),
-                                label: const Text('クリア'),
-                              ),
-                            ],
-                          ),
                           Container(
                             padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 14,
+                              horizontal: 8,
+                              vertical: 8,
                             ),
                             decoration: BoxDecoration(
                               color: kWhite,
@@ -402,16 +383,28 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                                     ),
                                   ),
                                 ),
+                                IconButton(
+                                  onPressed: () => _setAmount(0),
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: kBlack,
+                                  ),
+                                  icon: const Icon(
+                                    Icons.clear,
+                                    color: Color.fromARGB(255, 60, 60, 60),
+                                  ),
+                                ),
                               ],
                             ),
                           ),
                           const SizedBox(height: 12),
                           Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
+                            spacing: 2,
+                            alignment: WrapAlignment.spaceBetween,
                             children: presets.map((v) {
                               final active = _currentAmount() == v;
                               return ChoiceChip(
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
                                 label: Text('¥${_fmt(v)}'),
                                 selected: active,
                                 showCheckmark: false,
@@ -421,10 +414,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                                   color: active ? kWhite : kBlack,
                                   fontWeight: FontWeight.w700,
                                 ),
-                                side: const BorderSide(
-                                  color: kBlack,
-                                  width: kBorderWidth,
-                                ),
+                                side: const BorderSide(color: kBlack, width: 3),
                                 onSelected: (_) => _setAmount(v),
                               );
                             }).toList(),
@@ -459,57 +449,57 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
 
                     // ===== 開発用：決済完了画面へ遷移 =====
                     const SizedBox(height: 4),
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton.icon(
-                        onPressed: _loading
-                            ? null
-                            : () {
-                                if (tenantId == null || employeeId == null) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('スタッフ情報が不明です'),
-                                    ),
-                                  );
-                                  return;
-                                }
-                                final amount = _currentAmount();
-                                if (amount < 100) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('チップは100円から送ることができます'),
-                                    ),
-                                  );
-                                  return;
-                                }
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => TipCompletePage(
-                                      tenantId: tenantId!,
-                                      tenantName: tenantName ?? '店舗',
-                                      employeeName: name,
-                                      amount: amount,
-                                    ),
-                                  ),
-                                );
-                              },
-                        style: FilledButton.styleFrom(
-                          backgroundColor: kWhite,
-                          foregroundColor: kBlack,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            side: const BorderSide(
-                              color: kBlack,
-                              width: kBorderWidth,
-                            ),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                        ),
-                        icon: const Icon(Icons.volunteer_activism),
-                        label: const Text('決済完了画面へ遷移'),
-                      ),
-                    ),
+                    // SizedBox(
+                    //   width: double.infinity,
+                    //   child: FilledButton.icon(
+                    //     onPressed: _loading
+                    //         ? null
+                    //         : () {
+                    //             if (tenantId == null || employeeId == null) {
+                    //               ScaffoldMessenger.of(context).showSnackBar(
+                    //                 const SnackBar(
+                    //                   content: Text('スタッフ情報が不明です'),
+                    //                 ),
+                    //               );
+                    //               return;
+                    //             }
+                    //             final amount = _currentAmount();
+                    //             if (amount < 100) {
+                    //               ScaffoldMessenger.of(context).showSnackBar(
+                    //                 const SnackBar(
+                    //                   content: Text('チップは100円から送ることができます'),
+                    //                 ),
+                    //               );
+                    //               return;
+                    //             }
+                    //             Navigator.push(
+                    //               context,
+                    //               MaterialPageRoute(
+                    //                 builder: (_) => TipCompletePage(
+                    //                   tenantId: tenantId!,
+                    //                   tenantName: tenantName ?? '店舗',
+                    //                   employeeName: name,
+                    //                   amount: amount,
+                    //                 ),
+                    //               ),
+                    //             );
+                    //           },
+                    //     style: FilledButton.styleFrom(
+                    //       backgroundColor: kWhite,
+                    //       foregroundColor: kBlack,
+                    //       shape: RoundedRectangleBorder(
+                    //         borderRadius: BorderRadius.circular(12),
+                    //         side: const BorderSide(
+                    //           color: kBlack,
+                    //           width: kBorderWidth,
+                    //         ),
+                    //       ),
+                    //       padding: const EdgeInsets.symmetric(vertical: 14),
+                    //     ),
+                    //     icon: const Icon(Icons.volunteer_activism),
+                    //     label: const Text('決済完了画面へ遷移'),
+                    //   ),
+                    // ),
                   ],
                 ),
               ),
@@ -518,30 +508,44 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
         ),
       ),
       // 画面下部に常にボタンを設置
-      bottomNavigationBar: BottomAppBar(
-        color: kYellow,
-        child: FilledButton.icon(
-          onPressed: _loading ? null : _sendTip,
-          style: FilledButton.styleFrom(
-            backgroundColor: kYellow,
-            foregroundColor: kBlack,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: const BorderSide(color: kBlack, width: kBorderWidth),
+      bottomNavigationBar: SizedBox(
+        height: 100, // ← ボトムバー全体の高さを指定
+        child: BottomAppBar(
+          color: kYellow,
+          child: Padding(
+            padding: const EdgeInsets.all(4.0), // ← ボタンが潰れないよう余白
+            child: FilledButton.icon(
+              onPressed: _loading ? null : _sendTip,
+              style: FilledButton.styleFrom(
+                backgroundColor: kWhite,
+                foregroundColor: kBlack,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: const BorderSide(color: kBlack, width: kBorderWidth),
+                ),
+              ),
+              icon: _loading
+                  ? const SizedBox(
+                      height: 16,
+                      width: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: kBlack,
+                      ),
+                    )
+                  : const Icon(Icons.volunteer_activism),
+              label: _loading
+                  ? const Text('処理中…')
+                  : const Text(
+                      'チップを贈る',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                        color: kBlack,
+                      ),
+                    ),
             ),
-            padding: const EdgeInsets.symmetric(vertical: 14),
           ),
-          icon: _loading
-              ? const SizedBox(
-                  height: 16,
-                  width: 16,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: kBlack,
-                  ),
-                )
-              : const Icon(Icons.volunteer_activism),
-          label: _loading ? const Text('処理中…') : const Text('チップを送る'),
         ),
       ),
     );
@@ -553,7 +557,7 @@ class _AmountKeypad extends StatelessWidget {
   // デザイン定数（このクラス内でも統一）
   static const Color kBlack = Color(0xFF000000);
   static const Color kWhite = Color(0xFFFFFFFF);
-  static const double kBorderWidth = 2.0;
+  static const double kBorderWidth = 5.0;
 
   final void Function(int digit) onTapDigit;
   final VoidCallback onTapDoubleZero;
