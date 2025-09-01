@@ -1,0 +1,41 @@
+{
+    "app_title": "チップアプリ",
+    "store0": "店舗", 
+    "staff" : {
+        "number" : "第{rank}位"
+    },
+    "section": {
+        "members": "メンバー",
+        "store": "お店",
+        "initiate1" : "ご協力お願いします",
+        "initiate2" : "チップリを導入しよう"
+    },
+    "button": {
+        "send_tip" : "チップを贈る",
+        "send_tip_for_store" : "お店にチップを贈る",
+        "LINE" : "公式LINE",
+        "Google_review" : "Googleの口コミ",
+        "search_staff" : "名前で検索する",
+        "see_more" : "もっと見る",
+        "close" : "閉じる",
+        "cancel" : "キャンセル"
+    },
+    "status": {
+        "processing": "処理中...",
+        "no_staff" : "該当するスタッフがいません",
+        "not_found" : "店舗が見つかりません（URLをご確認ください）"
+    },
+    "validation": {
+        "tip": {
+            "min": "チップは100円から贈ることができます",
+            "max": "金額が大きすぎます（最大100万円）"
+        }
+    },
+    "stripe" : {
+        "attention" : "1~1,000,000 円で入力してください",
+        "miss_URL" : "決済URLの取得に失敗しました",
+        "error" : "エラー: {}",
+        "tip_for_store" : "店舗にチップを贈る",
+        "tip_for_store1" : "{tenantName}にチップを贈る"
+    }
+}

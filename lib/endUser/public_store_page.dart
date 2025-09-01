@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
@@ -181,6 +182,54 @@ class _TrianglePainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
+class LanguageSelector extends StatelessWidget {
+  const LanguageSelector({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final currentLocale = context.locale;
+
+    final supportedLocales = const [
+      Locale('ja'),
+      Locale('en'),
+      Locale('zh'),
+      Locale('ko'),
+    ];
+
+    return DropdownButton<Locale>(
+      value: supportedLocales.contains(currentLocale)
+          ? currentLocale
+          : const Locale('ja'),
+      items: supportedLocales.map((locale) {
+        final label = _getLabel(locale.languageCode);
+
+        return DropdownMenuItem(value: locale, child: Text(label));
+      }).toList(),
+      onChanged: (Locale? newLocale) {
+        if (newLocale != null) {
+          context.setLocale(newLocale);
+        }
+      },
+    );
+  }
+
+  /// 言語コードに応じたラベル
+  String _getLabel(String code) {
+    switch (code) {
+      case 'ja':
+        return '日本語';
+      case 'en':
+        return 'English';
+      case 'zh':
+        return '中文';
+      case 'ko':
+        return '한국어';
+      default:
+        return code;
+    }
+  }
+}
+
 /// ===============================================================
 /// ページ本体
 /// ===============================================================
@@ -270,9 +319,7 @@ class _PublicStorePageState extends State<PublicStorePage> {
   @override
   Widget build(BuildContext context) {
     if (tenantId == null) {
-      return const Scaffold(
-        body: Center(child: Text('店舗が見つかりません（URLをご確認ください）')),
-      );
+      return Scaffold(body: Center(child: Text(tr("status.not_found"))));
     }
 
     final tenantDocStream = FirebaseFirestore.instance
@@ -300,7 +347,10 @@ class _PublicStorePageState extends State<PublicStorePage> {
             foregroundColor: AppPalette.black,
             elevation: 0,
             automaticallyImplyLeading: false,
-            title: Text(tenantName ?? '店舗', style: AppTypography.body()),
+            title: Text(
+              tenantName ?? tr('store0'),
+              style: AppTypography.body(),
+            ),
             bottom: PreferredSize(
               preferredSize: const Size.fromHeight(1),
               child: Container(
@@ -308,6 +358,12 @@ class _PublicStorePageState extends State<PublicStorePage> {
                 height: AppDims.border,
               ),
             ),
+            actions: const [
+              Padding(
+                padding: EdgeInsets.only(right: 12),
+                child: LanguageSelector(),
+              ),
+            ],
           ),
           body: SingleChildScrollView(
             controller: _scrollController,
@@ -338,7 +394,7 @@ class _PublicStorePageState extends State<PublicStorePage> {
                 ),
 
                 // ── メンバー ────────────────────────────────
-                _Sectionbar(title: 'メンバー'),
+                _Sectionbar(title: tr('section.members')),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(
                     AppDims.pad,
@@ -349,7 +405,7 @@ class _PublicStorePageState extends State<PublicStorePage> {
                   child: TextField(
                     controller: _searchCtrl,
                     decoration: InputDecoration(
-                      hintText: '名前で検索する',
+                      hintText: tr('button.search_staff'),
                       hintStyle: AppTypography.small(),
                       prefixIcon: const Icon(
                         Icons.search,
@@ -391,7 +447,9 @@ class _PublicStorePageState extends State<PublicStorePage> {
                     if (snap.hasError) {
                       return Padding(
                         padding: const EdgeInsets.all(16),
-                        child: Text('読み込みエラー: ${snap.error}'),
+                        child: Text(
+                          tr("stripe.error", args: [snap.toString()]),
+                        ),
                       );
                     }
                     if (!snap.hasData) {
@@ -409,9 +467,9 @@ class _PublicStorePageState extends State<PublicStorePage> {
                     }).toList();
 
                     if (filtered.isEmpty) {
-                      return const Padding(
+                      return Padding(
                         padding: EdgeInsets.all(24),
-                        child: Center(child: Text('該当するスタッフがいません')),
+                        child: Center(child: Text(tr('status.no_staff'))),
                       );
                     }
 
@@ -458,7 +516,12 @@ class _PublicStorePageState extends State<PublicStorePage> {
                                   (data['photoUrl'] ?? '') as String;
 
                               return _RankedMemberCard(
-                                rankLabel: i < 4 ? '第${i + 1}位' : 'メンバー',
+                                rankLabel: i < 4
+                                    ? tr(
+                                        'staff.number',
+                                        namedArgs: {'rank': '${i + 1}'},
+                                      )
+                                    : tr('section.members'),
                                 name: name,
                                 photoUrl: photoUrl,
                                 onTap: () {
@@ -490,7 +553,9 @@ class _PublicStorePageState extends State<PublicStorePage> {
                     onPressed: () =>
                         setState(() => _showAllMembers = !_showAllMembers),
                     child: Text(
-                      _showAllMembers ? '閉じる' : 'もっと見る',
+                      _showAllMembers
+                          ? tr('button.close')
+                          : tr('button.see_more'),
                       style: AppTypography.label(
                         color: AppPalette.textSecondary,
                       ),
@@ -499,13 +564,13 @@ class _PublicStorePageState extends State<PublicStorePage> {
                 ),
 
                 // ── お店にチップ ─────────────────────────────
-                _Sectionbar(title: 'お店'),
+                _Sectionbar(title: tr('section.store')),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: AppDims.pad),
                   child: SizedBox(
                     height: 80,
                     child: _YellowActionButton(
-                      label: 'お店にチップを贈る',
+                      label: tr('button.send_tip_for_store'),
                       icon: Icons.currency_yen,
                       onPressed: _openStoreTipSheet,
                     ),
@@ -515,7 +580,7 @@ class _PublicStorePageState extends State<PublicStorePage> {
 
                 // ── ご協力お願いします（Cタイプのみ表示） ───────────
                 if (!isTypeC) ...[
-                  _Sectionbar(title: 'ご協力お願いします'),
+                  _Sectionbar(title: tr('section.initiate1')),
                   Padding(
                     padding: const EdgeInsets.symmetric(
                       horizontal: AppDims.pad,
@@ -525,7 +590,7 @@ class _PublicStorePageState extends State<PublicStorePage> {
                         SizedBox(
                           height: 60,
                           child: _YellowActionButton(
-                            label: '公式LINE',
+                            label: tr('button.LINE'),
                             onPressed: lineUrl.isEmpty
                                 ? null
                                 : () => launchUrlString(
@@ -538,7 +603,7 @@ class _PublicStorePageState extends State<PublicStorePage> {
                         SizedBox(
                           height: 60,
                           child: _YellowActionButton(
-                            label: 'Googleの口コミ',
+                            label: tr('button.Google_review'),
                             onPressed: googleReviewUrl.isEmpty
                                 ? null
                                 : () => launchUrlString(
@@ -553,7 +618,7 @@ class _PublicStorePageState extends State<PublicStorePage> {
                 ],
 
                 // ── チップリを導入しよう（PR） ─────────────────
-                _Sectionbar(title: 'チップリを導入しよう'),
+                _Sectionbar(title: tr('section.initiate2')),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: AppDims.pad),
                   child: Text('写真を挿入'),
@@ -567,15 +632,26 @@ class _PublicStorePageState extends State<PublicStorePage> {
   }
 }
 
-/// 黄色×黒の大ボタン
+/// 黄色×黒の大ボタン（色は任意で上書き可）
 class _YellowActionButton extends StatelessWidget {
   final String label;
   final IconData? icon;
   final VoidCallback? onPressed;
-  const _YellowActionButton({required this.label, this.icon, this.onPressed});
+
+  /// 背景色。未指定(null)なら AppPalette.yellow を使用
+  final Color? color;
+
+  const _YellowActionButton({
+    required this.label,
+    this.icon,
+    this.onPressed,
+    this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final bg = color ?? AppPalette.yellow;
+
     final child = Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
@@ -588,13 +664,13 @@ class _YellowActionButton extends StatelessWidget {
     );
 
     return Material(
-      color: AppPalette.yellow,
+      color: bg, // ← 指定があればその色、なければ黄色
       borderRadius: BorderRadius.circular(AppDims.radius),
       child: InkWell(
         onTap: onPressed,
         borderRadius: BorderRadius.circular(AppDims.radius),
         child: Container(
-          padding: EdgeInsets.symmetric(vertical: 12),
+          padding: const EdgeInsets.symmetric(vertical: 12),
           alignment: Alignment.center,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(AppDims.radius),
@@ -825,7 +901,7 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('1〜1,000,000 円で入力してください')));
+      ).showSnackBar(SnackBar(content: Text(tr('stripe.attention'))));
       return;
     }
     setState(() => _loading = true);
@@ -844,16 +920,16 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
         if (!mounted) return;
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('決済URLの取得に失敗しました')));
+        ).showSnackBar(SnackBar(content: Text(tr('stripe.miss_URL'))));
         return;
       }
       if (mounted) Navigator.pop(context);
       await launchUrlString(checkoutUrl, mode: LaunchMode.externalApplication);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('エラー: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(tr("stripe.error", args: [e.toString()]))),
+      );
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -876,8 +952,13 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
                 Expanded(
                   child: Text(
                     widget.tenantName == null
-                        ? '店舗にチップ'
-                        : '${widget.tenantName} にチップ',
+                        ? tr('stripe.tip_for_store')
+                        : tr(
+                            'stripe.tip_for_store1',
+                            namedArgs: {
+                              'tenantName': widget.tenantName ?? tr('store0'),
+                            },
+                          ),
                     style: AppTypography.label(),
                   ),
                 ),
@@ -962,17 +1043,21 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
             const SizedBox(height: 12),
             Row(
               children: [
-                SizedBox(
+                Flexible(
+                  flex: 1,
                   child: _YellowActionButton(
-                    label: 'キャンセル',
+                    label: tr('button.cancel'),
                     onPressed: _loading ? null : () => Navigator.pop(context),
+                    color: AppPalette.white,
                   ),
                 ),
                 const SizedBox(width: 8),
-                SizedBox(
+                Flexible(
+                  flex: 2,
                   child: _YellowActionButton(
-                    label: 'チップを贈る',
+                    label: tr('button.send_tip'),
                     onPressed: _loading ? null : _goStripe,
+                    color: AppPalette.white,
                   ),
                 ),
               ],

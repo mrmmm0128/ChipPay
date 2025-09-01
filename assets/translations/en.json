@@ -1,0 +1,42 @@
+{
+    "app_title": "Tip App",
+    "store0": "Store",
+    "staff": {
+      "number": "Rank {rank}"
+    },
+    "section": {
+      "members": "Members",
+      "store": "Store",
+      "initiate1": "We appreciate your support",
+      "initiate2": "Let's start using Tipri"
+    },
+    "button": {
+      "send_tip": "Send a tip",
+      "send_tip_for_store": "Send a tip to the store",
+      "LINE": "Official LINE",
+      "Google_review": "Google review",
+      "search_staff": "Search by name",
+      "see_more": "See more",
+      "close": "Close",
+      "cancel": "Cancel"
+    },
+    "status": {
+      "processing": "Processing...",
+      "no_staff": "No matching staff found",
+      "not_found": "Store not found (please check the URL)"
+    },
+    "validation": {
+      "tip": {
+        "min": "You can send tips from 100 JPY",
+        "max": "The amount is too large (max 1,000,000 JPY)"
+      }
+    },
+    "stripe": {
+      "attention": "Please enter between 1 and 1,000,000 JPY",
+      "miss_URL": "Failed to obtain the checkout URL",
+      "error": "Error: {}",
+      "tip_for_store": "Send a tip to the store",
+      "tip_for_store1": "Send a tip to {tenantName}"
+    }
+  }
+  

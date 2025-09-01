@@ -1,11 +1,13 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
+import 'package:easy_localization/easy_localization.dart';
+
 import 'package:yourpay/admin/admin_dashboard_screen.dart';
 import 'package:yourpay/admin/admin_login_screen.dart';
 import 'package:yourpay/admin/admin_tenant_detrail_screen.dart';
@@ -22,7 +24,7 @@ import 'tenant/store_detail_screen.dart';
 import 'tenant/admin_console_screen.dart';
 import 'endUser/payer_landing_screen.dart';
 
-// TODO: 生成した Firebase 設定に置き換え
+// ===== Firebase options（そのままでOK） =====
 const firebaseOptions = FirebaseOptions(
   apiKey: 'AIzaSyDePrpR8CD5xWf19828aGwdgVve5s4EYOc',
   appId: '1:362152912464:web:223f3abe2183994303d355',
@@ -36,17 +38,61 @@ const firebaseOptions = FirebaseOptions(
 Future<void> main() async {
   setUrlStrategy(const HashUrlStrategy());
   WidgetsFlutterBinding.ensureInitialized();
+  await EasyLocalization.ensureInitialized();
   await Firebase.initializeApp(options: firebaseOptions);
-  //await connectToEmulatorsIfDebug(); // ← 追加
-  runApp(const MyApp());
+  // await _connectToEmulatorsIfDebug();
+
+  // 画面が真っ白になっても原因が見えるように
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    if (kReleaseMode) {
+      return const Material(
+        color: Colors.white,
+        child: Center(
+          child: Text('Unexpected error', style: TextStyle(color: Colors.red)),
+        ),
+      );
+    }
+    return Material(
+      color: Colors.white,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Text(
+          details.exceptionAsString(),
+          style: const TextStyle(color: Colors.red),
+        ),
+      ),
+    );
+  };
+
+  runZonedGuarded(
+    () {
+      runApp(
+        EasyLocalization(
+          supportedLocales: const [
+            Locale('en'),
+            Locale('ja'),
+            Locale('ko'),
+            Locale('zh'),
+          ],
+          path: 'assets/translations',
+          fallbackLocale: const Locale('en'),
+          useOnlyLangCode: true,
+          child: const MyApp(),
+        ),
+      );
+    },
+    (error, stack) {
+      // Webのコンソールにも確実に出す
+      // ignore: avoid_print
+      print('Uncaught zone error: $error\n$stack');
+    },
+  );
 }
 
-Future<void> connectToEmulatorsIfDebug() async {
+Future<void> _connectToEmulatorsIfDebug() async {
   if (kDebugMode) {
-    // Webは localhost でも OK
     FirebaseFirestore.instance.useFirestoreEmulator('localhost', 8080);
     FirebaseFunctions.instance.useFunctionsEmulator('localhost', 5001);
-    // Auth を使うなら（任意）
     await FirebaseAuth.instance.useAuthEmulator('localhost', 9099);
   }
 }
@@ -54,103 +100,108 @@ Future<void> connectToEmulatorsIfDebug() async {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  @override
-  Widget build(BuildContext context) {
-    final Map<String, WidgetBuilder> appRoutes = {
+  Route<dynamic> _onGenerateRoute(RouteSettings settings) {
+    final name = settings.name ?? '/';
+    final uri = Uri.parse(name);
+
+    // /payer?sid=...
+    if (uri.path == '/payer') {
+      final sid = uri.queryParameters['sid'] ?? '';
+      return MaterialPageRoute(
+        builder: (_) => PayerLandingScreen(sessionId: sid),
+        settings: settings,
+      );
+    }
+
+    // /p?t=... [&thanks=true|&canceled=true]
+    if (uri.path == '/p') {
+      final tid = uri.queryParameters['t'] ?? '';
+
+      final thanks = uri.queryParameters['thanks'] == 'true';
+      final canceled = uri.queryParameters['canceled'] == 'true';
+      if (thanks || canceled) {
+        return MaterialPageRoute(
+          builder: (_) => TipCompletePage(
+            tenantId: tid,
+            tenantName: uri.queryParameters['tenantName'],
+            amount: int.tryParse(uri.queryParameters['amount'] ?? ''),
+            employeeName: uri.queryParameters['employeeName'],
+          ),
+          settings: settings,
+        );
+      }
+
+      return MaterialPageRoute(
+        builder: (_) => const PublicStorePage(),
+        settings: RouteSettings(
+          name: settings.name,
+          arguments: {'tenantId': tid},
+        ),
+      );
+    }
+
+    // /staff?tid=...&eid=...
+    if (uri.path == '/staff') {
+      return MaterialPageRoute(
+        builder: (_) => const StaffDetailPage(),
+        settings: RouteSettings(
+          name: settings.name,
+          arguments: {
+            'tenantId': uri.queryParameters['tid'],
+            'employeeId': uri.queryParameters['eid'],
+          },
+        ),
+      );
+    }
+
+    // それ以外の静的ルート
+    final staticRoutes = <String, WidgetBuilder>{
       '/': (_) => const Root(),
       '/login': (_) => const LoginScreen(),
       '/stores': (_) => const StoreListScreen(),
       '/store': (_) => const StoreDetailScreen(),
-      '/p': (_) => const PublicStorePage(), // 公開
-      '/staff': (_) => const StaffDetailPage(), // 公開
-      '/chechout-end': (_) => const TipCompletePage(tenantId: ''), // 公開
       '/account': (_) => const AccountDetailScreen(),
       '/admin-login': (_) => const AdminLoginScreen(),
       '/admin': (_) => const AdminDashboardScreen(),
       '/admin/tenant': (_) => const AdminTenantDetailScreen(),
       '/admin-invite': (_) => const AcceptInviteScreen(),
-      '/qr-all': (_) => const PublicStaffQrListPage(), // 公開
-      '/qr-builder': (_) => const QrPosterBuilderPage(), // 公開
+      '/qr-all': (_) => const PublicStaffQrListPage(),
+      '/qr-builder': (_) => const QrPosterBuilderPage(),
+      // 開発ミス防止：旧タイポ残っていたらログインへ
+      '/chechout-end': (_) => const LoginScreen(),
     };
 
+    final builder = staticRoutes[uri.path];
+    return MaterialPageRoute(
+      builder: builder ?? (_) => const LoginScreen(),
+      settings: settings,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return MaterialApp(
-      theme: ThemeData.dark(useMaterial3: true).copyWith(
-        textTheme: ThemeData.dark().textTheme.apply(
-          bodyColor: Colors.black, // 本文の色
-          displayColor: Colors.black, // 見出しの色
+      debugShowCheckedModeBanner: false,
+
+      // easy_localization
+      localizationsDelegates: context.localizationDelegates,
+      supportedLocales: context.supportedLocales,
+      locale: context.locale,
+
+      // テーマ（ライト基調：白背景で“真っ白=クラッシュ”と区別しやすい）
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.black,
+          brightness: Brightness.light,
         ),
       ),
 
-      onGenerateRoute: (settings) {
-        final name = settings.name ?? '/';
-        final uri = Uri.parse(name);
+      // 初期画面は Root（ここで公開/非公開を振り分け）
+      home: const Root(),
 
-        // クエリ付きを個別処理
-        if (uri.path == '/payer') {
-          final sid = uri.queryParameters['sid'] ?? '';
-          return MaterialPageRoute(
-            builder: (_) => PayerLandingScreen(sessionId: sid),
-            settings: settings,
-          );
-        }
-
-        if (uri.path == '/p') {
-          final tid = uri.queryParameters['t'] ?? '';
-          final thanks = uri.queryParameters['thanks'] == 'true';
-          final canceled = uri.queryParameters['canceled'] == 'true';
-
-          // 成功/キャンセル時は完了ページへ
-          if (thanks || canceled) {
-            return MaterialPageRoute(
-              builder: (_) => TipCompletePage(
-                tenantId: tid,
-                // これらはURLに載せていなければnullでOK（ページ内で再読込されます）
-                tenantName: uri.queryParameters['tenantName'],
-                amount: int.tryParse(uri.queryParameters['amount'] ?? ''),
-                employeeName: uri.queryParameters['employeeName'],
-              ),
-              settings: settings,
-            );
-          }
-
-          // 通常表示（公開ストアページ）
-          return MaterialPageRoute(
-            builder: (_) => const PublicStorePage(),
-            settings: RouteSettings(
-              name: settings.name,
-              arguments: {'tenantId': tid},
-            ),
-          );
-        }
-
-        if (uri.path == '/staff') {
-          return MaterialPageRoute(
-            builder: (_) => const StaffDetailPage(),
-            settings: RouteSettings(
-              name: settings.name,
-              arguments: {
-                'tenantId': uri.queryParameters['tid'],
-                'employeeId': uri.queryParameters['eid'],
-              },
-            ),
-          );
-        }
-
-        // ✅ 公開ルートもここで必ず解決（null返し禁止）
-        final builder = appRoutes[uri.path];
-        if (builder != null) {
-          return MaterialPageRoute(builder: builder, settings: settings);
-        }
-
-        // 未知はログインへ（404を作るならそちらへ）
-        return MaterialPageRoute(
-          builder: (_) => const LoginScreen(),
-          settings: settings,
-        );
-      },
-
-      // pushNamed 用
-      routes: appRoutes,
+      // 以降の named push はここで解決
+      onGenerateRoute: _onGenerateRoute,
     );
   }
 }
@@ -169,7 +220,7 @@ class Root extends StatelessWidget {
           );
         }
 
-        // いまのURLからパス部分だけ取り出す（/#/qr-all?… → /qr-all）
+        // ハッシュURL対応（/#/qr-all?… → /qr-all）
         String currentPath() {
           final uri = Uri.base;
           if (uri.fragment.isNotEmpty) {
@@ -177,13 +228,12 @@ class Root extends StatelessWidget {
             final q = frag.indexOf('?');
             return q >= 0 ? frag.substring(0, q) : frag; // "/qr-all"
           }
-          return uri.path; // "/qr-all"
+          return uri.path;
         }
 
         final path = currentPath();
-        final publicPaths = const {'/qr-all', '/qr-builder', '/staff', '/p'};
+        const publicPaths = {'/qr-all', '/qr-builder', '/staff', '/p'};
 
-        // 未ログインでも公開ページはそのまま表示
         if (snap.data == null && publicPaths.contains(path)) {
           switch (path) {
             case '/qr-all':
@@ -197,10 +247,10 @@ class Root extends StatelessWidget {
           }
         }
 
-        // 未ログイン & 非公開ページ → ログイン
-        if (snap.data == null) return const LoginScreen();
+        if (snap.data == null) {
+          return const LoginScreen();
+        }
 
-        // ログイン済み → 従来の管理シェルへ
         return const StoreOrAdminSwitcher();
       },
     );
@@ -226,9 +276,7 @@ class _StoreOrAdminSwitcherState extends State<StoreOrAdminSwitcher> {
   Future<void> _loadClaims() async {
     final user = FirebaseAuth.instance.currentUser!;
     final result = await user.getIdTokenResult(true);
-    setState(() {
-      _role = (result.claims?['role'] as String?) ?? 'staff';
-    });
+    setState(() => _role = (result.claims?['role'] as String?) ?? 'staff');
   }
 
   @override
@@ -239,7 +287,7 @@ class _StoreOrAdminSwitcherState extends State<StoreOrAdminSwitcher> {
     if (_role == 'superadmin') {
       return const AdminConsoleScreen();
     } else {
-      //return const LoginScreen();
+      // TODO: 店舗ダッシュボード等へ遷移させる（今はログイン画面に戻す）
       return const LoginScreen();
     }
   }

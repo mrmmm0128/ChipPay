@@ -1,0 +1,42 @@
+{
+    "app_title": "打赏应用",
+    "store0": "店铺",
+    "staff": {
+      "number": "第{rank}名"
+    },
+    "section": {
+      "members": "成员",
+      "store": "店铺",
+      "initiate1": "请多多支持",
+      "initiate2": "开始使用 Tipri"
+    },
+    "button": {
+      "send_tip": "打赏",
+      "send_tip_for_store": "打赏店铺",
+      "LINE": "LINE 官方账号",
+      "Google_review": "Google 评价",
+      "search_staff": "按姓名搜索",
+      "see_more": "查看更多",
+      "close": "关闭",
+      "cancel": "取消"
+    },
+    "status": {
+      "processing": "处理中...",
+      "no_staff": "没有符合的员工",
+      "not_found": "未找到店铺（请检查 URL）"
+    },
+    "validation": {
+      "tip": {
+        "min": "打赏金额至少 100 日元",
+        "max": "金额过大（最高 100 万日元）"
+      }
+    },
+    "stripe": {
+      "attention": "请输入 1～1,000,000 日元",
+      "miss_URL": "获取结算 URL 失败",
+      "error": "错误：{}",
+      "tip_for_store": "打赏店铺",
+      "tip_for_store1": "给 {tenantName} 打赏"
+    }
+  }
+  
