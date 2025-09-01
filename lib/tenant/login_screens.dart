@@ -17,6 +17,7 @@ class _LoginScreenState extends State<LoginScreen> {
   // 追加: 名前・会社名
   final _nameCtrl = TextEditingController();
   final _companyCtrl = TextEditingController();
+
   @override
   void dispose() {
     _email.dispose();
@@ -35,6 +36,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
   // ★ 規約チェック（登録時は必須）
   bool _agreeTerms = false;
+
+  // ★ 追加：ログイン状態を保持（Web のみ実動作。ネイティブは常に保持）
+  bool _rememberMe = true;
 
   // ★ 必須ラベル（黒色アスタリスク）
   Widget _requiredLabel(String text) {
@@ -70,8 +74,6 @@ class _LoginScreenState extends State<LoginScreen> {
         arguments: {'tenantId': qs.docs.first.id, 'tenantName': d['name']},
       );
     } else {
-      // 店舗が無い → 店舗切替バーで新規作成してもらうため、そのまま /store に遷移
-      // （StoreDetailScreen 側で上のバーとプレースホルダが出ます）
       Navigator.pushReplacementNamed(context, '/store');
     }
   }
@@ -88,7 +90,6 @@ class _LoginScreenState extends State<LoginScreen> {
     return null;
   }
 
-  // 既存の _validatePassword の下あたりに追加
   String? _validatePasswordConfirm(String? v) {
     if (v == null || v.isEmpty) return '確認用パスワードを入力してください';
     if (v != _pass.text) return 'パスワードが一致しません';
@@ -109,6 +110,10 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
+      await FirebaseAuth.instance.setPersistence(
+        _rememberMe ? Persistence.LOCAL : Persistence.SESSION,
+      );
+
       if (_isSignUp) {
         final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
           email: _email.text.trim(),
@@ -134,17 +139,16 @@ class _LoginScreenState extends State<LoginScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('登録しました。確認メールを送信しました。メール認証後にログインできます。')),
         );
-        // 登録直後はログインさせない（そのままフォーム画面に残す）
+        // 登録直後はログインさせない
       } else {
         final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
           email: _email.text.trim(),
           password: _pass.text,
         );
 
-        // CHANGED: メール未確認はログインさせない
+        // メール未確認はログインさせない
         final user = cred.user;
         if (user != null && !user.emailVerified) {
-          // 未確認なら自動で再送（連打対策でSnackBarだけでもOK）
           await user.sendEmailVerification();
           await FirebaseAuth.instance.signOut();
           if (!mounted) return;
@@ -195,7 +199,6 @@ class _LoginScreenState extends State<LoginScreen> {
       case 'email-already-in-use':
         return 'このメールアドレスは既に登録されています';
       case 'weak-password':
-        // ★ ルール変更に合わせて文言も更新
         return 'パスワードが弱すぎます（8文字以上・英字と数字の組み合わせ）';
       case 'too-many-requests':
         return 'メールアドレスを認証してください';
@@ -214,28 +217,20 @@ class _LoginScreenState extends State<LoginScreen> {
     String? helperText,
   }) {
     return InputDecoration(
-      // 必須項目は label（Widget）で黒アスタリスク表示
       label: required ? _requiredLabel(label) : null,
-      // 任意項目は従来どおり
       labelText: required ? null : label,
       hintText: hintText,
       helperText: helperText,
-
-      // ラベル/浮動ラベル/ヒント は黒系
       labelStyle: const TextStyle(color: Colors.black87),
       floatingLabelStyle: const TextStyle(color: Colors.black),
       hintStyle: const TextStyle(color: Colors.black54),
-
-      // アイコンも黒寄りに
       prefixIcon: prefixIcon,
       suffixIcon: suffixIcon,
       prefixIconColor: Colors.black54,
       suffixIconColor: Colors.black54,
-
       filled: true,
       fillColor: Colors.white,
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
         borderSide: BorderSide(color: Colors.grey.shade300, width: 1),
@@ -279,7 +274,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     borderRadius: BorderRadius.circular(18),
                     boxShadow: const [
                       BoxShadow(
-                        color: Color(0x1A000000), // 黒の10%ちょい
+                        color: Color(0x1A000000),
                         blurRadius: 24,
                         spreadRadius: 0,
                         offset: Offset(0, 12),
@@ -321,13 +316,11 @@ class _LoginScreenState extends State<LoginScreen> {
                             ],
                           ),
 
-                          // ★ アカウント欄の下に余白＋アプリ名・ロゴ
                           const SizedBox(height: 12),
                           Center(
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                // ここは任意のロゴに差し替え
                                 Container(
                                   width: 28,
                                   height: 28,
@@ -343,7 +336,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 ),
                                 const SizedBox(width: 8),
                                 const Text(
-                                  'Tipri', // ← 適宜置き換え
+                                  'Tipri',
                                   style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w600,
@@ -394,7 +387,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             controller: _email,
                             decoration: _input(
                               'Email',
-                              required: true, // ★ 必須マーク（黒）
+                              required: true,
                               prefixIcon: const Icon(Icons.email_outlined),
                             ),
                             style: const TextStyle(color: Colors.black87),
@@ -418,7 +411,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             style: const TextStyle(color: Colors.black87),
                             decoration: _input(
                               'Password',
-                              required: true, // ★ 必須マーク（黒）
+                              required: true,
                               prefixIcon: const Icon(Icons.lock_outline),
                               suffixIcon: IconButton(
                                 onPressed: () =>
@@ -429,7 +422,6 @@ class _LoginScreenState extends State<LoginScreen> {
                                       : Icons.visibility,
                                 ),
                               ),
-                              // ★ パスワード条件を明記
                               helperText: '8文字以上・英字と数字を含む（記号可）',
                             ),
                             obscureText: !_showPass,
@@ -443,8 +435,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
                           if (_isSignUp) ...[
                             const SizedBox(height: 8),
-
-                            // NEW: 確認用パスワード
                             TextFormField(
                               controller: _passConfirm,
                               style: const TextStyle(color: Colors.black87),
@@ -467,12 +457,11 @@ class _LoginScreenState extends State<LoginScreen> {
                               textInputAction: TextInputAction.next,
                               validator: _validatePasswordConfirm,
                             ),
-
                             const SizedBox(height: 8),
                             TextFormField(
                               controller: _nameCtrl,
                               decoration: _input('名前（表示名）', required: true),
-                              style: TextStyle(color: Colors.black87),
+                              style: const TextStyle(color: Colors.black87),
                               validator: (v) {
                                 if (_isSignUp &&
                                     (v == null || v.trim().isEmpty)) {
@@ -485,9 +474,46 @@ class _LoginScreenState extends State<LoginScreen> {
                             TextFormField(
                               controller: _companyCtrl,
                               decoration: _input('会社名（任意）'),
-                              style: TextStyle(color: Colors.black87),
+                              style: const TextStyle(color: Colors.black87),
                             ),
-                            // （以下、規約チェックなど既存のまま）
+                          ],
+
+                          // ★ 追加：ログイン時のみ「ログイン状態を保持する」
+                          if (!_isSignUp) ...[
+                            const SizedBox(height: 8),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Checkbox(
+                                  value: _rememberMe,
+                                  onChanged: _loading
+                                      ? null
+                                      : (v) => setState(
+                                          () => _rememberMe = v ?? true,
+                                        ),
+                                  side: const BorderSide(color: Colors.black54),
+                                  checkColor: Colors.white,
+                                  activeColor: Colors.black,
+                                ),
+                                const SizedBox(width: 4),
+                                const Expanded(
+                                  child: Text(
+                                    'ログイン状態を保持する',
+                                    style: TextStyle(color: Colors.black87),
+                                  ),
+                                ),
+
+                                const Tooltip(
+                                  message:
+                                      'オン：ブラウザを閉じてもログイン維持\nオフ：このタブ/ウィンドウを閉じるとログアウト',
+                                  child: Icon(
+                                    Icons.info_outline,
+                                    size: 18,
+                                    color: Colors.black45,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ],
 
                           if (_isSignUp) ...[
@@ -518,7 +544,6 @@ class _LoginScreenState extends State<LoginScreen> {
                                         const TextSpan(
                                           text: '利用規約に同意します（必須）\n',
                                         ),
-                                        // 規約ページへの導線（例：/terms に遷移）
                                         TextSpan(
                                           text: '利用規約を読む',
                                           style: const TextStyle(
@@ -529,8 +554,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                           ),
                                           recognizer: TapGestureRecognizer()
                                             ..onTap = () {
-                                              // TODO: 規約ページへ。例:
-                                              // Navigator.pushNamed(context, '/terms');
+                                              // TODO: 規約ページへ遷移
                                             },
                                         ),
                                       ],
@@ -581,7 +605,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
                           const SizedBox(height: 14),
 
-                          // 送信ボタン（規約未同意時は押せない）
+                          // 送信ボタン
                           FilledButton(
                             style: primaryBtnStyle,
                             onPressed: _loading

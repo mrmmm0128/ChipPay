@@ -1,6 +1,8 @@
 // tabs/settings_tab.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher_string.dart';
@@ -30,6 +32,11 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
   final _storeFixedCtrl = TextEditingController();
   bool _savingStoreCut = false;
   bool _loggingOut = false;
+  String? _thanksPhotoUrl;
+  String? _thanksVideoUrl;
+  bool _uploadingPhoto = false;
+  bool _uploadingVideo = false;
+  Uint8List? _thanksPhotoPreviewBytes; // 新規選択時のプレビュー用（任意）
 
   @override
   void dispose() {
@@ -38,6 +45,182 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
     _storePercentCtrl.dispose();
     _storeFixedCtrl.dispose();
     super.dispose();
+  }
+
+  // 初期表示に Firestore から読み込む（周辺のスナップショットがあるならそこから代入でもOK）
+  Future<void> _loadCPerks(DocumentReference tenantRef) async {
+    final snap = await tenantRef.get();
+    final data = (snap.data() as Map<String, dynamic>?);
+    final cPerks = (data?['c_perks'] as Map<String, dynamic>?) ?? {};
+    setState(() {
+      _thanksPhotoUrl = cPerks['thanksPhotoUrl'] as String?;
+      _thanksVideoUrl = cPerks['thanksVideoUrl'] as String?;
+    });
+  }
+
+  Future<void> _pickAndUploadPhoto(DocumentReference tenantRef) async {
+    try {
+      setState(() => _uploadingPhoto = true);
+      final tenantId = tenantRef.id;
+
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['jpg', 'jpeg', 'png'],
+        allowMultiple: false,
+        withData: true,
+      );
+      if (result == null || result.files.isEmpty) return;
+
+      final file = result.files.single;
+      final bytes = file.bytes;
+      if (bytes == null) return;
+
+      // サイズ制限（例: 5MB）
+      const maxBytes = 5 * 1024 * 1024;
+      if (bytes.length > maxBytes) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('画像サイズが大きすぎます（最大 5MB）。')),
+          );
+        }
+        return;
+      }
+
+      // 旧ファイルがあれば先に削除（任意）
+      if (_thanksPhotoUrl != null) {
+        try {
+          await FirebaseStorage.instance.refFromURL(_thanksPhotoUrl!).delete();
+        } catch (_) {}
+      }
+
+      final ext = (file.extension ?? 'jpg').toLowerCase();
+      final contentType = ext == 'png' ? 'image/png' : 'image/jpeg';
+      final filename =
+          'gratitude_${DateTime.now().millisecondsSinceEpoch}.$ext';
+      final ref = FirebaseStorage.instance.ref(
+        'tenants/$tenantId/c_plan/$filename',
+      );
+
+      await ref.putData(bytes, SettableMetadata(contentType: contentType));
+      final url = await ref.getDownloadURL();
+
+      // Firestore に即保存（「あとで使える」状態を担保）
+      await tenantRef.update({
+        'c_perks.thanksPhotoUrl': url,
+        'c_perks.updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      setState(() {
+        _thanksPhotoUrl = url;
+        _thanksPhotoPreviewBytes = bytes; // その場でのプレビューに使いたい場合
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('感謝の写真を保存しました。')));
+      }
+    } finally {
+      if (mounted) setState(() => _uploadingPhoto = false);
+    }
+  }
+
+  Future<void> _pickAndUploadVideo(DocumentReference tenantRef) async {
+    try {
+      setState(() => _uploadingVideo = true);
+      final tenantId = tenantRef.id;
+
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['mp4', 'mov', 'webm'],
+        allowMultiple: false,
+        withData: true,
+      );
+      if (result == null || result.files.isEmpty) return;
+
+      final file = result.files.single;
+      final bytes = file.bytes;
+      if (bytes == null) return;
+
+      // サイズ制限（例: 50MB）
+      const maxBytes = 50 * 1024 * 1024;
+      if (bytes.length > maxBytes) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('動画サイズが大きすぎます（最大 50MB）。')),
+          );
+        }
+        return;
+      }
+
+      // 旧ファイル削除（任意）
+      if (_thanksVideoUrl != null) {
+        try {
+          await FirebaseStorage.instance.refFromURL(_thanksVideoUrl!).delete();
+        } catch (_) {}
+      }
+
+      final ext = (file.extension ?? 'mp4').toLowerCase();
+      final contentType = switch (ext) {
+        'mov' => 'video/quicktime',
+        'webm' => 'video/webm',
+        _ => 'video/mp4',
+      };
+      final filename =
+          'gratitude_${DateTime.now().millisecondsSinceEpoch}.$ext';
+      final ref = FirebaseStorage.instance.ref(
+        'tenants/$tenantId/c_plan/$filename',
+      );
+
+      await ref.putData(bytes, SettableMetadata(contentType: contentType));
+      final url = await ref.getDownloadURL();
+
+      await tenantRef.update({
+        'c_perks.thanksVideoUrl': url,
+        'c_perks.updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      setState(() {
+        _thanksVideoUrl = url;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('感謝の動画を保存しました。')));
+      }
+    } finally {
+      if (mounted) setState(() => _uploadingVideo = false);
+    }
+  }
+
+  Future<void> _deleteThanksPhoto(DocumentReference tenantRef) async {
+    if (_thanksPhotoUrl == null) return;
+    try {
+      await FirebaseStorage.instance.refFromURL(_thanksPhotoUrl!).delete();
+    } catch (_) {}
+    await tenantRef.update({
+      'c_perks.thanksPhotoUrl': FieldValue.delete(),
+      'c_perks.updatedAt': FieldValue.serverTimestamp(),
+    });
+    setState(() {
+      _thanksPhotoUrl = null;
+      _thanksPhotoPreviewBytes = null;
+    });
+  }
+
+  Future<void> _deleteThanksVideo(DocumentReference tenantRef) async {
+    if (_thanksVideoUrl == null) return;
+    try {
+      await FirebaseStorage.instance.refFromURL(_thanksVideoUrl!).delete();
+    } catch (_) {}
+    await tenantRef.update({
+      'c_perks.thanksVideoUrl': FieldValue.delete(),
+      'c_perks.updatedAt': FieldValue.serverTimestamp(),
+    });
+    setState(() {
+      _thanksVideoUrl = null;
+    });
   }
 
   Future<void> _logout() async {
@@ -528,6 +711,195 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                             ),
                             keyboardType: TextInputType.url,
                           ),
+
+                          // ===== 感謝メディア（写真／動画）ここから =====
+                          const SizedBox(height: 16),
+                          const Divider(height: 1),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'Cプランの特典（感謝の写真・動画）',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(height: 8),
+
+                          // 写真
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // プレビュー
+                              Container(
+                                width: 96,
+                                height: 96,
+                                color: Colors.grey.shade200,
+                                alignment: Alignment.center,
+                                child: _uploadingPhoto
+                                    ? const SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : (() {
+                                        if (_thanksPhotoPreviewBytes != null) {
+                                          return Image.memory(
+                                            _thanksPhotoPreviewBytes!,
+                                            fit: BoxFit.cover,
+                                          );
+                                        }
+                                        if (_thanksPhotoUrl != null) {
+                                          return Image.network(
+                                            _thanksPhotoUrl!,
+                                            fit: BoxFit.cover,
+                                          );
+                                        }
+                                        return const Icon(
+                                          Icons.photo,
+                                          size: 32,
+                                        );
+                                      })(),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text('感謝の写真（JPG/PNG・5MBまで）'),
+                                    const SizedBox(height: 8),
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 8,
+                                      children: [
+                                        FilledButton.icon(
+                                          onPressed: _uploadingPhoto
+                                              ? null
+                                              : () => _pickAndUploadPhoto(
+                                                  tenantRef,
+                                                ),
+                                          icon: const Icon(Icons.file_upload),
+                                          label: Text(
+                                            _thanksPhotoUrl == null
+                                                ? '写真を選ぶ'
+                                                : '写真を差し替え',
+                                          ),
+                                        ),
+                                        if (_thanksPhotoUrl != null)
+                                          OutlinedButton.icon(
+                                            onPressed: _uploadingPhoto
+                                                ? null
+                                                : () => _deleteThanksPhoto(
+                                                    tenantRef,
+                                                  ),
+                                            icon: const Icon(
+                                              Icons.delete_outline,
+                                            ),
+                                            label: const Text('写真を削除'),
+                                          ),
+                                        if (_thanksPhotoUrl != null)
+                                          OutlinedButton.icon(
+                                            onPressed: () => launchUrlString(
+                                              _thanksPhotoUrl!,
+                                              mode: LaunchMode
+                                                  .externalApplication,
+                                            ),
+                                            icon: const Icon(Icons.open_in_new),
+                                            label: const Text('写真を開く'),
+                                          ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+
+                          const SizedBox(height: 16),
+
+                          // 動画
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                width: 96,
+                                height: 96,
+                                color: Colors.grey.shade200,
+                                alignment: Alignment.center,
+                                child: _uploadingVideo
+                                    ? const SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(Icons.movie, size: 32),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text('感謝の動画（MP4/MOV/WEBM・50MBまで）'),
+                                    const SizedBox(height: 8),
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 8,
+                                      children: [
+                                        FilledButton.icon(
+                                          onPressed: _uploadingVideo
+                                              ? null
+                                              : () => _pickAndUploadVideo(
+                                                  tenantRef,
+                                                ),
+                                          icon: const Icon(Icons.file_upload),
+                                          label: Text(
+                                            _thanksVideoUrl == null
+                                                ? '動画を選ぶ'
+                                                : '動画を差し替え',
+                                          ),
+                                        ),
+                                        if (_thanksVideoUrl != null)
+                                          OutlinedButton.icon(
+                                            onPressed: _uploadingVideo
+                                                ? null
+                                                : () => _deleteThanksVideo(
+                                                    tenantRef,
+                                                  ),
+                                            icon: const Icon(
+                                              Icons.delete_outline,
+                                            ),
+                                            label: const Text('動画を削除'),
+                                          ),
+                                        if (_thanksVideoUrl != null)
+                                          OutlinedButton.icon(
+                                            onPressed: () => launchUrlString(
+                                              _thanksVideoUrl!,
+                                              mode: LaunchMode
+                                                  .externalApplication,
+                                            ),
+                                            icon: const Icon(Icons.open_in_new),
+                                            label: const Text('動画を開く'),
+                                          ),
+                                      ],
+                                    ),
+                                    if (_thanksVideoUrl != null) ...[
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        '保存URL: $_thanksVideoUrl',
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodySmall,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+
+                          // ===== 感謝メディアここまで =====
                           const SizedBox(height: 12),
                           Align(
                             alignment: Alignment.centerRight,
@@ -542,11 +914,12 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                       height: 16,
                                       child: CircularProgressIndicator(
                                         strokeWidth: 2,
-                                        color: Colors.white, // 黒ボタン上なので白
+                                        color: Colors.white,
                                       ),
                                     )
                                   : const Icon(Icons.link),
-                              label: const Text('特典リンクを保存'),
+                              // ここは「特典を保存」に名称変更（リンク＋メディア全体の保存の意味合いに）
+                              label: const Text('特典を保存'),
                             ),
                           ),
                         ],
