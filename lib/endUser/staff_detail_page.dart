@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:easy_localization/easy_localization.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher_string.dart';
@@ -152,13 +153,13 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
     if (amount < 100) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('チップは100円から送ることができます')));
+      ).showSnackBar(SnackBar(content: Text(tr('validation.tip.min'))));
       return;
     }
     if (amount > _maxAmount) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('金額が大きすぎます（最大100万円）')));
+      ).showSnackBar(SnackBar(content: Text(tr('validation.tip.max'))));
       return;
     }
 
@@ -201,9 +202,9 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
         ),
       );
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('エラー: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(tr('stripe.error', args: [e.toString()]))),
+      );
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -449,57 +450,57 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
 
                     // ===== 開発用：決済完了画面へ遷移 =====
                     const SizedBox(height: 4),
-                    // SizedBox(
-                    //   width: double.infinity,
-                    //   child: FilledButton.icon(
-                    //     onPressed: _loading
-                    //         ? null
-                    //         : () {
-                    //             if (tenantId == null || employeeId == null) {
-                    //               ScaffoldMessenger.of(context).showSnackBar(
-                    //                 const SnackBar(
-                    //                   content: Text('スタッフ情報が不明です'),
-                    //                 ),
-                    //               );
-                    //               return;
-                    //             }
-                    //             final amount = _currentAmount();
-                    //             if (amount < 100) {
-                    //               ScaffoldMessenger.of(context).showSnackBar(
-                    //                 const SnackBar(
-                    //                   content: Text('チップは100円から送ることができます'),
-                    //                 ),
-                    //               );
-                    //               return;
-                    //             }
-                    //             Navigator.push(
-                    //               context,
-                    //               MaterialPageRoute(
-                    //                 builder: (_) => TipCompletePage(
-                    //                   tenantId: tenantId!,
-                    //                   tenantName: tenantName ?? '店舗',
-                    //                   employeeName: name,
-                    //                   amount: amount,
-                    //                 ),
-                    //               ),
-                    //             );
-                    //           },
-                    //     style: FilledButton.styleFrom(
-                    //       backgroundColor: kWhite,
-                    //       foregroundColor: kBlack,
-                    //       shape: RoundedRectangleBorder(
-                    //         borderRadius: BorderRadius.circular(12),
-                    //         side: const BorderSide(
-                    //           color: kBlack,
-                    //           width: kBorderWidth,
-                    //         ),
-                    //       ),
-                    //       padding: const EdgeInsets.symmetric(vertical: 14),
-                    //     ),
-                    //     icon: const Icon(Icons.volunteer_activism),
-                    //     label: const Text('決済完了画面へ遷移'),
-                    //   ),
-                    // ),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: _loading
+                            ? null
+                            : () {
+                                if (tenantId == null || employeeId == null) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('スタッフ情報が不明です'),
+                                    ),
+                                  );
+                                  return;
+                                }
+                                final amount = _currentAmount();
+                                if (amount < 100) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('チップは100円から送ることができます'),
+                                    ),
+                                  );
+                                  return;
+                                }
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => TipCompletePage(
+                                      tenantId: tenantId!,
+                                      tenantName: tenantName ?? '店舗',
+                                      employeeName: name,
+                                      amount: amount,
+                                    ),
+                                  ),
+                                );
+                              },
+                        style: FilledButton.styleFrom(
+                          backgroundColor: kWhite,
+                          foregroundColor: kBlack,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: const BorderSide(
+                              color: kBlack,
+                              width: kBorderWidth,
+                            ),
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        icon: const Icon(Icons.volunteer_activism),
+                        label: const Text('決済完了画面へ遷移'),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -535,9 +536,9 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                     )
                   : const Icon(Icons.volunteer_activism),
               label: _loading
-                  ? const Text('処理中…')
-                  : const Text(
-                      'チップを贈る',
+                  ? Text(tr('status.processing'))
+                  : Text(
+                      tr("button.send_tip"),
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.w700,
