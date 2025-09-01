@@ -430,43 +430,13 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
   );
 }
 
-// --- 小物: ステップ表示用ドット ---
-class _StepDot extends StatelessWidget {
-  final bool active;
-  final String label;
-  const _StepDot({required this.active, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Container(
-          width: 10,
-          height: 10,
-          decoration: BoxDecoration(
-            color: active ? Colors.black87 : Colors.black26,
-            shape: BoxShape.circle,
-          ),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          label,
-          style: TextStyle(
-            color: active ? Colors.black87 : Colors.black54,
-            fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 // ---- ボトムシート本体（分離して Theme 適用を確実に） ----
 class OnboardingSheet extends StatefulWidget {
   final String tenantId;
   final String tenantName;
   final FirebaseFunctions functions;
   const OnboardingSheet({
+    super.key,
     required this.tenantId,
     required this.tenantName,
     required this.functions,
@@ -477,20 +447,92 @@ class OnboardingSheet extends StatefulWidget {
 }
 
 class OnboardingSheetState extends State<OnboardingSheet> {
-  int step = 0; // 0: サブスク, 1: メンバー
+  /// 0: 初期費用, 1: サブスク, 2: Stripe Connect 同意＆作成, 3: メンバー招待
+  int step = 0;
+
+  // ---- Step1(サブスク) ----
   String selectedPlan = 'A';
-  bool creatingCheckout = false;
-  bool inviting = false;
+  bool creatingSubCheckout = false;
+
+  // ---- Step0(初期費用) ----
+  bool creatingInitialFeeCheckout = false;
+
+  // ---- Step2(Connect 同意＆作成) ----
+  bool connectAgree = false;
+  bool creatingConnect = false;
+  bool checkingConnect = false;
+
+  // ---- Step3(メンバー招待) ----
   final inviteCtrl = TextEditingController();
   final invitedEmails = <String>[];
+  bool inviting = false;
 
-  Future<void> _openCheckout() async {
-    if (creatingCheckout) return;
-    setState(() => creatingCheckout = true);
+  @override
+  void dispose() {
+    inviteCtrl.dispose();
+    super.dispose();
+  }
+
+  // =========================================================
+  // Step 0: 初期費用チェックアウトを開く
+  // =========================================================
+  Future<void> _openInitialFeeCheckout() async {
+    if (creatingInitialFeeCheckout) return;
+    setState(() => creatingInitialFeeCheckout = true);
+    try {
+      final res = await widget.functions
+          .httpsCallable('createInitialFeeCheckout')
+          .call({
+            'tenantId': widget.tenantId,
+            'email': FirebaseAuth.instance.currentUser?.email,
+            'name': FirebaseAuth.instance.currentUser?.displayName,
+          });
+      final data = res.data as Map;
+
+      final url = data['url'] as String?;
+      if (url != null && url.isNotEmpty) {
+        await launchUrlString(
+          url,
+          mode: LaunchMode.platformDefault,
+          webOnlyWindowName: '_self', // 同タブ遷移
+        );
+      } else if (data['alreadyPaid'] == true) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('初期費用はすでにお支払い済みです')));
+        setState(() => step = 1); // 次へ
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('初期費用リンクを取得できませんでした')));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('初期費用の決済開始に失敗: $e')));
+    } finally {
+      if (mounted) setState(() => creatingInitialFeeCheckout = false);
+    }
+  }
+
+  // =========================================================
+  // Step 1: サブスク（プラン選択→Checkout）
+  // =========================================================
+  Future<void> _openSubscriptionCheckout() async {
+    if (creatingSubCheckout) return;
+    setState(() => creatingSubCheckout = true);
     try {
       final res = await widget.functions
           .httpsCallable('createSubscriptionCheckout')
-          .call({'tenantId': widget.tenantId, 'plan': selectedPlan});
+          .call({
+            'tenantId': widget.tenantId,
+            'plan': selectedPlan,
+            'email': FirebaseAuth.instance.currentUser?.email,
+            'name': FirebaseAuth.instance.currentUser?.displayName,
+          });
       final data = res.data as Map;
 
       if (data['alreadySubscribed'] == true && data['portalUrl'] != null) {
@@ -507,38 +549,100 @@ class OnboardingSheetState extends State<OnboardingSheet> {
         );
       } else {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              backgroundColor: Colors.white,
-              content: Text(
-                'リンクを取得できませんでした',
-                style: TextStyle(color: Colors.black87),
-              ),
-            ),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('サブスクのリンクを取得できませんでした')));
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.white,
-            content: Text(
-              'チェックアウト作成に失敗: $e',
-              style: const TextStyle(color: Colors.black87),
-            ),
-          ),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('チェックアウト作成に失敗: $e')));
       }
     } finally {
-      if (mounted) setState(() => creatingCheckout = false);
+      if (mounted) setState(() => creatingSubCheckout = false);
     }
   }
 
+  // =========================================================
+  // Step 2: Stripe Connect 同意＆作成
+  // =========================================================
+  Future<void> _openConnectOnboarding() async {
+    if (!connectAgree || creatingConnect) return;
+    setState(() => creatingConnect = true);
+    try {
+      final caller = widget.functions.httpsCallable('upsertConnectedAccount');
+      final payload = {
+        'tenantId': widget.tenantId,
+        'account': {
+          'country': 'JP',
+          'businessType': 'individual', // or 'company'
+          'email': FirebaseAuth.instance.currentUser?.email,
+          'businessProfile': {'product_description': 'チップ受け取り（チッププラットフォーム）'},
+          'tosAccepted': true,
+        },
+      };
+      final res = await caller.call(payload);
+      final data = (res.data as Map?) ?? {};
+      final onboardingUrl = data['onboardingUrl'] as String?;
+      final chargesEnabled = data['chargesEnabled'] == true;
+      final payoutsEnabled = data['payoutsEnabled'] == true;
+
+      if (onboardingUrl != null && onboardingUrl.isNotEmpty) {
+        await launchUrlString(
+          onboardingUrl,
+          mode: LaunchMode.platformDefault,
+          webOnlyWindowName: '_self',
+        );
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Stripe接続が更新されました')));
+        // Firestore 側更新を拾って自動遷移するのでここでは遷移しない
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Stripe接続の開始に失敗: $e')));
+    } finally {
+      if (mounted) setState(() => creatingConnect = false);
+    }
+  }
+
+  Future<void> _checkConnectLatest() async {
+    if (checkingConnect) return;
+    setState(() => checkingConnect = true);
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('tenants')
+          .doc(widget.tenantId)
+          .get();
+      final c = (doc.data()?['connect'] as Map?) ?? {};
+      final ok =
+          (c['charges_enabled'] == true) && (c['payouts_enabled'] == true);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(ok ? '接続は有効です' : 'まだ提出が必要です')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('状態の取得に失敗: $e')));
+    } finally {
+      if (mounted) setState(() => checkingConnect = false);
+    }
+  }
+
+  // =========================================================
+  // Step 3: メンバー招待
+  // =========================================================
   Future<void> _inviteMember() async {
     final email = inviteCtrl.text.trim();
-    if (email.isEmpty) return;
-    if (inviting) return;
+    if (email.isEmpty || inviting) return;
     setState(() => inviting = true);
 
     try {
@@ -551,336 +655,609 @@ class OnboardingSheetState extends State<OnboardingSheet> {
         inviteCtrl.clear();
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.white,
-            content: Text(
-              '招待を送信しました: $email',
-              style: const TextStyle(color: Colors.black87),
-            ),
-          ),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('招待を送信しました: $email')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.white,
-            content: Text(
-              '招待に失敗: $e',
-              style: const TextStyle(color: Colors.black87),
-            ),
-          ),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('招待に失敗: $e')));
       }
     } finally {
       if (mounted) setState(() => inviting = false);
     }
   }
 
+  // =========================================================
+  // UI（Firestore のテナント状態を監視し、自動で次ステップへ進める）
+  // =========================================================
   @override
   Widget build(BuildContext context) {
-    // State内：selectedPlan を使います（例: String selectedPlan = 'A';）
+    final tenantStream = FirebaseFirestore.instance
+        .collection('tenants')
+        .doc(widget.tenantId)
+        .snapshots();
 
-    Widget planChips() {
-      // プラン定義（説明を充実）
-      const plans = <_Plan>[
-        _Plan(
-          code: 'A',
-          title: 'Aプラン',
-          monthly: 0,
-          feePct: 20,
-          features: ['月額無料で今すぐ開始', '決済手数料は20%', 'まずはお試しに最適'],
-        ),
-        _Plan(
-          code: 'B',
-          title: 'Bプラン',
-          monthly: 1980,
-          feePct: 15,
-          features: ['月額1,980円で手数料15%', 'コストと手数料のバランス◎', '小規模〜標準的な店舗向け'],
-        ),
-        _Plan(
-          code: 'C',
-          title: 'Cプラン',
-          monthly: 9800,
-          feePct: 10,
-          features: ['月額9,800円で手数料10%', 'Googleレビュー導線の設置', '公式LINEの友だち追加導線'],
-        ),
-      ];
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: tenantStream,
+      builder: (context, snap) {
+        final m = snap.data?.data() ?? {};
 
-      Widget item(_Plan p) {
-        final sel = selectedPlan == p.code;
-        final bg = sel ? Colors.black : Colors.white;
-        final fg = sel ? Colors.white : Colors.black87;
-        final sub = sel ? Colors.white70 : Colors.black54;
+        // ---- 進行度の判定（Webhook/バックエンド更新を拾う）----
+        final billing = (m['billing'] as Map?) ?? {};
+        final initialFee =
+            (billing['initialFee'] as Map?) ?? (m['initialFee'] as Map? ?? {});
+        final bool initialFeePaid = (initialFee['paid'] == true);
 
-        return Tooltip(
-          message:
-              '${p.title}｜月額: ${p.monthly == 0 ? '無料' : '¥${p.monthly}'}・手数料: ${p.feePct}%',
-          preferBelow: true,
-          child: ChoiceChip(
-            selected: sel,
-            onSelected: (_) => setState(() => selectedPlan = p.code),
-            backgroundColor: Colors.white,
-            selectedColor: Colors.black, // 黒ベタ
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: BorderSide(color: sel ? Colors.black : Colors.black26),
-            ),
-            // label は自由に作れるのでリッチ表示
-            label: ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 220), // つぶれ防止
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-                child: DefaultTextStyle(
-                  style: TextStyle(color: fg, fontSize: 13),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // 上段：プラン名 + 料金
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: sel ? Colors.white : Colors.black,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              p.code,
-                              style: TextStyle(
-                                color: sel ? Colors.black : Colors.white,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              p.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: fg,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 15,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            p.monthly == 0 ? '無料' : '¥${p.monthly}/月',
-                            style: TextStyle(
-                              color: fg,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      // 手数料
-                      Text('手数料 ${p.feePct}%', style: TextStyle(color: sub)),
-                      const SizedBox(height: 6),
-                      // 特典/機能（2～3行に抑えて読みやすく）
-                      ...p.features
-                          .take(3)
-                          .map(
-                            (f) => Padding(
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 1.5,
-                              ),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Icon(Icons.check, size: 14, color: fg),
-                                  const SizedBox(width: 6),
-                                  Expanded(
-                                    child: Text(
-                                      f,
-                                      style: TextStyle(color: fg, height: 1.2),
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            // ChoiceChipの selected/unselected テキスト色は label 側で制御するので labelStyle は未使用
-          ),
-        );
-      }
+        final sub = (m['subscription'] as Map?) ?? {};
+        final String subStatus = (sub['status'] as String? ?? '').toLowerCase();
+        final bool subscriptionActive =
+            (subStatus == 'active' || subStatus == 'trialing');
 
-      return Wrap(
-        spacing: 10,
-        runSpacing: 10,
-        children: plans.map(item).toList(),
-      );
-    }
+        final connect = (m['connect'] as Map?) ?? {};
+        final bool chargesEnabled = connect['charges_enabled'] == true;
+        final bool payoutsEnabled = connect['payouts_enabled'] == true;
+        final bool connectOk = chargesEnabled && payoutsEnabled;
 
-    return DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.75,
-      minChildSize: 0.5,
-      maxChildSize: 0.95,
-      builder: (context, scroll) {
-        return SingleChildScrollView(
-          controller: scroll,
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.black26,
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                '店舗オンボーディング',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.black87,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                widget.tenantName,
-                style: const TextStyle(fontSize: 13, color: Colors.black54),
-              ),
-              const SizedBox(height: 16),
+        // ---- 自動ステップ進行（現在ステップを上書き）----
+        int desiredStep = step;
+        if (desiredStep == 0 && initialFeePaid) desiredStep = 1;
+        if (desiredStep <= 1 && subscriptionActive) desiredStep = 2;
+        if (desiredStep <= 2 && connectOk) desiredStep = 3;
+        if (desiredStep != step) {
+          // build 中の setState を避けるためフレーム後に反映
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) setState(() => step = desiredStep);
+          });
+        }
 
-              // Step 表示
-              Row(
-                children: const [
-                  _StepDot(active: true, label: 'サブスク登録'),
-                  SizedBox(width: 12),
-                  _StepDot(active: false, label: 'メンバー追加'),
-                ],
-              ),
-              const SizedBox(height: 16),
-
-              if (step == 0) ...[
-                const Text(
-                  'プランを選択し、登録へ進んでください。',
-                  style: TextStyle(color: Colors.black87),
-                ),
-                const SizedBox(height: 12),
-                planChips(),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: creatingCheckout ? null : _openCheckout,
-                        icon: creatingCheckout
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.open_in_new),
-                        label: const Text('登録へ進む'),
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.78,
+          minChildSize: 0.5,
+          maxChildSize: 0.96,
+          builder: (context, scroll) {
+            return SingleChildScrollView(
+              controller: scroll,
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // ドラッグハンドル
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.black26,
+                        borderRadius: BorderRadius.circular(99),
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    OutlinedButton(
-                      onPressed: () => setState(() => step = 1),
-                      child: const Text('あとで'),
-                    ),
-                  ],
-                ),
-              ] else ...[
-                const Text(
-                  '店舗の管理者/スタッフをメールで招待できます。',
-                  style: TextStyle(color: Colors.black87),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: inviteCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'メールアドレス',
-                    hintText: 'example@domain.com',
                   ),
-                  keyboardType: TextInputType.emailAddress,
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: inviting ? null : _inviteMember,
-                        icon: inviting
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.send),
-                        label: const Text('招待を送信'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    FilledButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('完了'),
-                    ),
-                  ],
-                ),
-                if (invitedEmails.isNotEmpty) ...[
                   const SizedBox(height: 12),
                   const Text(
-                    '送信済み招待:',
-                    style: TextStyle(fontWeight: FontWeight.w600),
+                    '店舗オンボーディング',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.black87,
+                    ),
                   ),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: invitedEmails
-                        .map(
-                          (e) => Chip(
-                            label: Text(
-                              e,
-                              style: const TextStyle(color: Colors.black87),
-                            ),
-                            visualDensity: VisualDensity.compact,
-                            side: const BorderSide(color: Colors.black26),
-                            backgroundColor: Colors.white,
-                          ),
-                        )
-                        .toList(),
+                  const SizedBox(height: 4),
+                  Text(
+                    widget.tenantName,
+                    style: const TextStyle(fontSize: 13, color: Colors.black54),
                   ),
+                  const SizedBox(height: 16),
+
+                  // ステップ表示
+                  _StepsBar(
+                    steps: const ['初期費用', 'サブスク', 'Stripe接続', 'メンバー'],
+                    activeIndex: step,
+                    done: [
+                      initialFeePaid,
+                      subscriptionActive,
+                      connectOk,
+                      false,
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+
+                  if (step == 0) _buildInitialFeeStepUI(initialFeePaid),
+                  if (step == 1) _buildSubscriptionStepUI(subscriptionActive),
+                  if (step == 2)
+                    _buildConnectStepUI(
+                      chargesEnabled: chargesEnabled,
+                      payoutsEnabled: payoutsEnabled,
+                    ),
+                  if (step == 3) _buildInviteStepUI(),
                 ],
-              ],
-            ],
-          ),
+              ),
+            );
+          },
         );
       },
     );
   }
+
+  // ---- Step 0 UI: 初期費用 ----
+  Widget _buildInitialFeeStepUI(bool alreadyPaid) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'まずは初期費用のお支払いをお願いします。\n同じテナントは同じプラットフォームのカスタマーで管理されます。',
+          style: TextStyle(color: Colors.black87),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: (creatingInitialFeeCheckout || alreadyPaid)
+                    ? null
+                    : _openInitialFeeCheckout,
+                icon: creatingInitialFeeCheckout
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.open_in_new),
+                label: Text(alreadyPaid ? '支払い済み' : '初期費用を支払う'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            OutlinedButton(
+              onPressed: () => setState(() => step = 1),
+              child: const Text('あとで'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // ---- Step 1 UI: サブスク ----
+  Widget _buildSubscriptionStepUI(bool subActive) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'プランを選択し、登録へ進んでください。',
+          style: TextStyle(color: Colors.black87),
+        ),
+        const SizedBox(height: 12),
+        _planChips(),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: (creatingSubCheckout || subActive)
+                    ? null
+                    : _openSubscriptionCheckout,
+                icon: creatingSubCheckout
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.open_in_new),
+                label: Text(subActive ? '登録済み' : 'サブスク登録へ進む'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            OutlinedButton(
+              onPressed: () => setState(() => step = 2),
+              child: const Text('あとで'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // ---- Step 2 UI: Connect 同意＆作成 ----
+  Widget _buildConnectStepUI({
+    required bool chargesEnabled,
+    required bool payoutsEnabled,
+  }) {
+    final ok = chargesEnabled && payoutsEnabled;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'チップを受け取るには、Stripeの「コネクトアカウント」が必要です。\n'
+          '本人確認書類や銀行口座の登録を含みます（Stripe に安全に送信され、当社サーバーには保存されません）。',
+          style: TextStyle(color: Colors.black87),
+        ),
+        const SizedBox(height: 12),
+        CheckboxListTile(
+          value: connectAgree,
+          onChanged: ok
+              ? null
+              : (v) => setState(() => connectAgree = v ?? false),
+          controlAffinity: ListTileControlAffinity.leading,
+          title: const Text(
+            '上記の説明に同意し、Stripe接続を開始します',
+            style: TextStyle(color: Colors.black87),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: (ok || !connectAgree || creatingConnect)
+                    ? null
+                    : _openConnectOnboarding,
+                icon: creatingConnect
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.login),
+                label: Text(ok ? '接続済み' : 'Stripe接続に進む'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            OutlinedButton.icon(
+              onPressed: checkingConnect ? null : _checkConnectLatest,
+              icon: checkingConnect
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.sync),
+              label: const Text('接続状態を確認'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _connectStatusPill(charges: chargesEnabled, payouts: payoutsEnabled),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            OutlinedButton(
+              onPressed: step > 0 ? () => setState(() => step -= 1) : null,
+              child: const Text('戻る'),
+            ),
+            const Spacer(),
+            FilledButton(
+              onPressed: () => setState(() => step = 3),
+              child: const Text('次へ'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // ---- Step 3 UI: メンバー招待 ----
+  Widget _buildInviteStepUI() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          '店舗の管理者/スタッフをメールで招待できます。',
+          style: TextStyle(color: Colors.black87),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: inviteCtrl,
+          decoration: const InputDecoration(
+            labelText: 'メールアドレス',
+            hintText: 'example@domain.com',
+          ),
+          keyboardType: TextInputType.emailAddress,
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: inviting ? null : _inviteMember,
+                icon: inviting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.send),
+                label: const Text('招待を送信'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('完了'),
+            ),
+          ],
+        ),
+        if (invitedEmails.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          const Text('送信済み招待:', style: TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: invitedEmails
+                .map(
+                  (e) => Chip(
+                    label: Text(
+                      e,
+                      style: const TextStyle(color: Colors.black87),
+                    ),
+                    visualDensity: VisualDensity.compact,
+                    side: const BorderSide(color: Colors.black26),
+                    backgroundColor: Colors.white,
+                  ),
+                )
+                .toList(),
+          ),
+        ],
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            OutlinedButton(
+              onPressed: step > 0 ? () => setState(() => step -= 1) : null,
+              child: const Text('戻る'),
+            ),
+            const Spacer(),
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('閉じる'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // ---- パーツ：プラン表示（ChoiceChip）
+  Widget _planChips() {
+    const plans = <_Plan>[
+      _Plan(
+        code: 'A',
+        title: 'Aプラン',
+        monthly: 0,
+        feePct: 20,
+        features: ['月額無料で今すぐ開始', '決済手数料は20%', 'まずはお試しに最適'],
+      ),
+      _Plan(
+        code: 'B',
+        title: 'Bプラン',
+        monthly: 1980,
+        feePct: 15,
+        features: ['月額1,980円で手数料15%', 'コストと手数料のバランス◎', '小規模〜標準的な店舗向け'],
+      ),
+      _Plan(
+        code: 'C',
+        title: 'Cプラン',
+        monthly: 9800,
+        feePct: 10,
+        features: ['月額9,800円で手数料10%', 'Googleレビュー導線の設置', '公式LINEの友だち追加導線'],
+      ),
+    ];
+
+    Widget item(_Plan p) {
+      final sel = selectedPlan == p.code;
+      final fg = sel ? Colors.white : Colors.black87;
+      return ChoiceChip(
+        selected: sel,
+        onSelected: (_) => setState(() => selectedPlan = p.code),
+        backgroundColor: Colors.white,
+        selectedColor: Colors.black,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: sel ? Colors.black : Colors.black26),
+        ),
+        label: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 220),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+            child: DefaultTextStyle(
+              style: TextStyle(color: fg, fontSize: 13),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 上段：コード/タイトル/料金
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: sel ? Colors.white : Colors.black,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          p.code,
+                          style: TextStyle(
+                            color: sel ? Colors.black : Colors.white,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          p.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: fg,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        p.monthly == 0 ? '無料' : '¥${p.monthly}/月',
+                        style: TextStyle(
+                          color: fg,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '手数料 ${p.feePct}%',
+                    style: TextStyle(color: fg.withOpacity(.8)),
+                  ),
+                  const SizedBox(height: 6),
+                  ...p.features
+                      .take(3)
+                      .map(
+                        (f) => Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 1.5),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(Icons.check, size: 14, color: fg),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  f,
+                                  style: TextStyle(color: fg, height: 1.2),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: plans.map(item).toList(),
+    );
+  }
+
+  // ---- パーツ：接続ステータス表示
+  Widget _connectStatusPill({required bool charges, required bool payouts}) {
+    Widget pill(String label, bool ok) {
+      final c = ok ? Colors.green : Colors.red;
+      final icon = ok ? Icons.check_circle : Icons.error;
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: c.withOpacity(.1),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: c.withOpacity(.6)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: c),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(color: c, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        pill('決済(Charges): ${charges ? 'OK' : 'NG'}', charges),
+        pill('出金(Payouts): ${payouts ? 'OK' : 'NG'}', payouts),
+      ],
+    );
+  }
 }
 
-// ===== サポート用ミニモデル（同ファイル内に置いてOK）=====
+// ---- ステップバー（ドット型＋完了状態）
+class _StepsBar extends StatelessWidget {
+  final List<String> steps;
+  final int activeIndex;
+  final List<bool> done;
+  const _StepsBar({
+    required this.steps,
+    required this.activeIndex,
+    required this.done,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        for (int i = 0; i < steps.length; i++) ...[
+          _StepDot(active: i == activeIndex, done: done[i], label: steps[i]),
+          if (i < steps.length - 1)
+            const Icon(Icons.chevron_right, size: 18, color: Colors.black38),
+        ],
+      ],
+    );
+  }
+}
+
+class _StepDot extends StatelessWidget {
+  final bool active;
+  final bool done;
+  final String label;
+  const _StepDot({
+    required this.active,
+    required this.done,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = done ? Colors.green : (active ? Colors.black : Colors.white);
+    final fg = done ? Colors.white : (active ? Colors.white : Colors.black54);
+    final icon = done
+        ? Icons.check
+        : (active ? Icons.radio_button_checked : Icons.circle_outlined);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 18,
+          height: 18,
+          decoration: BoxDecoration(
+            color: bg,
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.black),
+          ),
+          child: Icon(icon, size: 12, color: fg),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w700),
+        ),
+      ],
+    );
+  }
+}
+
+// ---- サポート用ミニモデル
 class _Plan {
   final String code;
   final String title;

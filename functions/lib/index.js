@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.upsertConnectedAccount = exports.listInvoices = exports.openCustomerPortal = exports.createSubscriptionCheckout = exports.revokeInvite = exports.acceptTenantAdmin = exports.inviteTenantAdmin = exports.createAccountOnboardingLink = exports.createConnectAccountForTenant = exports.stripeWebhook = exports.onTipSucceededSendMailV2 = exports.createStoreTipSessionPublic = exports.createTipSessionPublic = exports.RESEND_API_KEY = void 0;
+exports.createInitialFeeCheckout = exports.upsertConnectedAccount = exports.listInvoices = exports.openCustomerPortal = exports.createSubscriptionCheckout = exports.revokeInvite = exports.acceptTenantAdmin = exports.inviteTenantAdmin = exports.createAccountOnboardingLink = exports.createConnectAccountForTenant = exports.stripeWebhook = exports.onTipSucceededSendMailV2 = exports.createStoreTipSessionPublic = exports.createTipSessionPublic = exports.RESEND_API_KEY = void 0;
 const functions = __importStar(require("firebase-functions"));
 const stripe_1 = __importDefault(require("stripe"));
 const firestore_1 = require("firebase-functions/v2/firestore");
@@ -440,7 +440,7 @@ exports.stripeWebhook = functions
         return;
     }
     const stripe = stripeClient();
-    // 通常 / Connect 両対応の検証
+    // 通常 / Connect 両対応で検証
     const secrets = [
         process.env.STRIPE_WEBHOOK_SECRET,
         process.env.STRIPE_CONNECT_WEBHOOK_SECRET,
@@ -471,10 +471,14 @@ exports.stripeWebhook = functions
         handled: false,
     });
     try {
+        // ============================================================
         // 1) Checkout 完了
+        // ============================================================
         if (type === "checkout.session.completed") {
             const session = event.data.object;
-            // サブスク（Checkout）
+            // -----------------------------
+            // A. サブスク（mode === "subscription"）
+            // -----------------------------
             if (session.mode === "subscription") {
                 const tenantId = session.metadata?.tenantId;
                 const plan = session.metadata?.plan;
@@ -511,7 +515,49 @@ exports.stripeWebhook = functions
                 res.sendStatus(200);
                 return; // サブスクはここで終了
             }
-            // チップ決済（mode === "payment"）
+            // -----------------------------
+            // ★★ B. 初期費用（mode === "payment" & kind: "initial_fee"）★★
+            //     ※ チップ処理よりも先に判定して早期 return
+            // -----------------------------
+            if (session.mode === "payment") {
+                // tenantId は metadata または client_reference_id に入っている想定
+                let tenantId = session.metadata?.tenantId ??
+                    session.client_reference_id;
+                // payment_intent.metadata.kind で厳密判定
+                let isInitialFee = false;
+                let paymentIntentId = session.payment_intent;
+                let pi = null;
+                if (paymentIntentId) {
+                    pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+                    const kind = pi.metadata?.kind ?? session.metadata?.kind;
+                    // tenantId が未取得なら PI から補完
+                    if (!tenantId)
+                        tenantId = pi.metadata?.tenantId ?? undefined;
+                    isInitialFee = kind === "initial_fee";
+                }
+                if (isInitialFee && tenantId) {
+                    const tRef = db.collection("tenants").doc(tenantId);
+                    await tRef.set({
+                        billing: {
+                            initialFee: {
+                                status: "paid",
+                                amount: session.amount_total ?? 0, // 最小通貨単位
+                                currency: (session.currency ?? "jpy").toUpperCase(),
+                                stripePaymentIntentId: paymentIntentId ?? null,
+                                stripeCheckoutSessionId: session.id,
+                                paidAt: admin.firestore.FieldValue.serverTimestamp(),
+                                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                            },
+                        },
+                    }, { merge: true });
+                    await docRef.set({ handled: true }, { merge: true });
+                    res.sendStatus(200);
+                    return; // 初期費用はここで終了（チップ処理へは進まない）
+                }
+            }
+            // -----------------------------
+            // C. チップ決済（mode === "payment"）←従来処理
+            // -----------------------------
             const sid = session.id;
             const tenantId = session.metadata?.tenantId;
             const employeeId = session.metadata?.employeeId;
@@ -543,10 +589,7 @@ exports.stripeWebhook = functions
                         (tSnap.exists && tSnap.data()?.name) || "Store";
                 }
                 if (employeeId && !employeeName) {
-                    const eSnap = await tRef
-                        .collection("employees")
-                        .doc(employeeId)
-                        .get();
+                    const eSnap = await tRef.collection("employees").doc(employeeId).get();
                     employeeName =
                         (eSnap.exists && eSnap.data()?.name) || "Staff";
                 }
@@ -559,9 +602,7 @@ exports.stripeWebhook = functions
                     : { type: "store", storeName: storeName };
                 const tipRef = tRef.collection("tips").doc(tipDocId);
                 const tipSnap = await tipRef.get();
-                const existingCreatedAt = tipSnap.exists
-                    ? tipSnap.data()?.createdAt
-                    : null;
+                const existingCreatedAt = tipSnap.exists ? tipSnap.data()?.createdAt : null;
                 // まずコア情報を保存（createdAt は Stripe の確定時刻で固定）
                 await tipRef.set({
                     tenantId,
@@ -593,7 +634,7 @@ exports.stripeWebhook = functions
                         },
                     }, { merge: true });
                 }
-                // 決済に対する実際のStripe手数料とアプリ手数料を保存し、正味額も保存
+                // 実際のStripe手数料とアプリ手数料、正味額も保存
                 try {
                     if (payIntentId) {
                         const pi = await stripe.paymentIntents.retrieve(payIntentId, {
@@ -643,7 +684,9 @@ exports.stripeWebhook = functions
                 }
             }
         }
+        // ============================================================
         // 2) Checkout セッションのその他
+        // ============================================================
         if (type === "checkout.session.expired") {
             const session = event.data.object;
             await db
@@ -664,7 +707,9 @@ exports.stripeWebhook = functions
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             }, { merge: true });
         }
-        // 3) 購読（作成/更新）
+        // ============================================================
+        // 3) 購読（作成/更新/削除）
+        // ============================================================
         if (type === "customer.subscription.created" ||
             type === "customer.subscription.updated") {
             const sub = event.data.object;
@@ -693,7 +738,6 @@ exports.stripeWebhook = functions
                 }, { merge: true });
             }
         }
-        // 3) 購読（削除）
         if (type === "customer.subscription.deleted") {
             const sub = event.data.object;
             const tenantId = sub.metadata?.tenantId;
@@ -710,7 +754,9 @@ exports.stripeWebhook = functions
                 }, { merge: true });
             }
         }
+        // ============================================================
         // 4) 請求書（決済成功/失敗）
+        // ============================================================
         if (type === "invoice.payment_succeeded" ||
             type === "invoice.payment_failed") {
             const inv = event.data.object;
@@ -741,7 +787,9 @@ exports.stripeWebhook = functions
                 }, { merge: true });
             }
         }
+        // ============================================================
         // 5) Connect アカウント状態の同期
+        // ============================================================
         if (type === "account.updated") {
             const acct = event.data.object;
             const qs = await db
@@ -757,6 +805,30 @@ exports.stripeWebhook = functions
                         payouts_enabled: !!acct.payouts_enabled,
                         details_submitted: !!acct.details_submitted,
                         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                    },
+                }, { merge: true });
+            }
+        }
+        // ============================================================
+        // 6) （保険）payment_intent.succeeded でも初期費用を確定
+        //    ※ Checkout イベントが取り逃された場合に備えた冪等ハンドリング
+        // ============================================================
+        if (type === "payment_intent.succeeded") {
+            const pi = event.data.object;
+            const kind = pi.metadata?.kind;
+            const tenantId = pi.metadata?.tenantId;
+            if (kind === "initial_fee" && tenantId) {
+                const tRef = db.collection("tenants").doc(tenantId);
+                await tRef.set({
+                    billing: {
+                        initialFee: {
+                            status: "paid",
+                            amount: pi.amount_received ?? pi.amount ?? 0,
+                            currency: (pi.currency ?? "jpy").toUpperCase(),
+                            stripePaymentIntentId: pi.id,
+                            paidAt: admin.firestore.FieldValue.serverTimestamp(),
+                            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                        },
                     },
                 }, { merge: true });
             }
@@ -1213,4 +1285,93 @@ exports.upsertConnectedAccount = (0, https_1.onCall)({
         due,
         onboardingUrl, // これが返ってきた時だけ最終確認のホスト画面へ遷移
     };
+});
+// Price の取得（環境変数で固定 or 無ければ自動作成）
+async function getOrCreateInitialFeePrice(stripe, currency = "jpy", unitAmount = 3000, // ←初期費用（例）
+productName = "初期費用") {
+    // 1) 環境変数に直接 Price ID を入れておくのが楽
+    const ENV_PRICE = process.env.INITIAL_FEE_PRICE_ID;
+    if (ENV_PRICE)
+        return ENV_PRICE;
+    // 2) 無ければ “product: 初期費用 / price: one_time” を検索→無ければ作成
+    const products = await stripe.products.search({
+        query: `name:'${productName}' AND metadata['kind']:'initial_fee'`,
+        limit: 1,
+    });
+    let productId = products.data[0]?.id;
+    if (!productId) {
+        const p = await stripe.products.create({
+            name: productName,
+            metadata: { kind: "initial_fee" },
+        });
+        productId = p.id;
+    }
+    const prices = await stripe.prices.search({
+        query: `product:'${productId}' AND ` +
+            `currency:'${currency}' AND ` +
+            `active:'true' AND ` +
+            `type:'one_time' AND ` +
+            `unit_amount:'${unitAmount}'`,
+        limit: 1,
+    });
+    if (prices.data[0])
+        return prices.data[0].id;
+    const price = await stripe.prices.create({
+        product: productId,
+        currency,
+        unit_amount: unitAmount,
+        metadata: { kind: "initial_fee" },
+    });
+    return price.id;
+}
+exports.createInitialFeeCheckout = functions
+    .region("us-central1")
+    .runWith({
+    secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL", "INITIAL_FEE_PRICE_ID"],
+})
+    .https.onCall(async (data, context) => {
+    const { tenantId, email, name } = (data || {});
+    if (!tenantId) {
+        throw new functions.https.HttpsError("invalid-argument", "tenantId is required.");
+    }
+    const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
+    const APP_ORIGIN = process.env.FRONTEND_BASE_URL;
+    if (!STRIPE_KEY || !APP_ORIGIN) {
+        throw new functions.https.HttpsError("failed-precondition", "Missing required secrets.");
+    }
+    const stripeFromEnv = () => new stripe_1.default(process.env.STRIPE_SECRET_KEY, { apiVersion: "2023-10-16" });
+    const stripe = stripeFromEnv();
+    // すでに支払い済みなら Checkout を出さない
+    const tRef = db.collection("tenants").doc(tenantId);
+    const tSnap = await tRef.get();
+    if (tSnap.exists && tSnap.data()?.billing?.initialFee?.status === "paid") {
+        return { alreadyPaid: true };
+    }
+    // ★ ensureCustomer のシグネチャに合わせて呼ぶ（Stripe インスタンスは渡さない）
+    const purchaserEmail = email || context.auth?.token?.email;
+    const customerId = await ensureCustomer(tenantId, purchaserEmail, name);
+    // Price 決定
+    const priceId = await getOrCreateInitialFeePrice(stripe);
+    const successUrl = `${APP_ORIGIN}/#/?toast=initial_fee_paid&tenant=${encodeURIComponent(tenantId)}`;
+    const cancelUrl = `${APP_ORIGIN}/#/?toast=initial_fee_canceled&tenant=${encodeURIComponent(tenantId)}`;
+    const session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        customer: customerId,
+        line_items: [{ price: priceId, quantity: 1 }],
+        client_reference_id: tenantId,
+        payment_intent_data: { metadata: { tenantId, kind: "initial_fee" } },
+        success_url: successUrl,
+        cancel_url: cancelUrl,
+    });
+    // 任意: “未決済セッション”を記録
+    await tRef.set({
+        billing: {
+            initialFee: {
+                status: "checkout_open",
+                lastSessionId: session.id,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+        },
+    }, { merge: true });
+    return { url: session.url };
 });
