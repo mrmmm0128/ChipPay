@@ -73,6 +73,7 @@ flutter:
   assets:
     - assets/posters/store_poster.png
     - assets/fonts/NotoSansJP-VariableFont_wght.ttf
+    - assets/fonts/LINESeedJP_A_TTF_Bd.ttf
     - assets/translations/
 
   # An image asset can refer to one or more resolution-specific "variants", see
@@ -86,6 +87,10 @@ flutter:
   # "family" key with the font family name, and a "fonts" key with a
   # list giving the asset and other descriptors for the font. For
   # example:
+  fonts:
+    - family: LINEseed
+      fonts:
+        - asset: assets/fonts/LINESeedJP_A_TTF_Bd.ttf
   # fonts:
   #   - family: Schyler
   #     fonts:

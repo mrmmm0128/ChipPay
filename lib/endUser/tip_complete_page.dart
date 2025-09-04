@@ -1,9 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher_string.dart';
-
-import 'public_store_page.dart';
+import 'package:yourpay/endUser/public_store_page.dart';
+import 'package:yourpay/endUser/utils/design.dart';
 
 class TipCompletePage extends StatefulWidget {
   final String tenantId;
@@ -82,7 +83,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      backgroundColor: Colors.white,
+      backgroundColor: AppPalette.yellow,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -100,13 +101,9 @@ class _TipCompletePageState extends State<TipCompletePage> {
 
   @override
   Widget build(BuildContext context) {
-    final storeLabel = widget.tenantName ?? 'お店';
+    final storeLabel = widget.tenantName ?? tr('success_page.store');
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('チップ'),
-        automaticallyImplyLeading: false,
-      ),
       backgroundColor: Colors.white,
       body: Center(
         child: Padding(
@@ -119,7 +116,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
                 const Icon(Icons.check_circle, size: 80),
                 const SizedBox(height: 12),
                 Text(
-                  'チップを送信しました。',
+                  tr("success_page.success"),
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
                 if (widget.employeeName != null || widget.amount != null) ...[
@@ -127,35 +124,36 @@ class _TipCompletePageState extends State<TipCompletePage> {
                   Text(
                     [
                       if (widget.employeeName != null)
-                        '宛先: ${widget.employeeName}',
-                      if (widget.amount != null) '金額: ¥${widget.amount}',
+                        tr(
+                          'success_page.for',
+                          namedArgs: {"Name": ?widget.employeeName},
+                        ),
+                      if (widget.amount != null)
+                        tr(
+                          "success_page.amount",
+                          namedArgs: {
+                            "Amount": widget.amount?.toString() ?? '',
+                          },
+                        ),
                     ].join(' / '),
                   ),
                 ],
                 const SizedBox(height: 24),
 
                 // ① お店にチップを送る（ボトムシート）
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    icon: const Icon(Icons.store),
-                    label: Text('$storeLabel にチップを送る'),
-                    onPressed: _openStoreTipBottomSheet,
+                _YellowActionButton(
+                  label: tr(
+                    'stripe.tip_for_store1',
+                    namedArgs: {'tenantName': storeLabel},
                   ),
+                  onPressed: _openStoreTipBottomSheet,
                 ),
                 const SizedBox(height: 8),
 
                 // ② 他のスタッフにチップを送る
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.people_alt),
-                    label: const Text(
-                      '他のスタッフにチップを送る',
-                      style: TextStyle(color: Colors.black54),
-                    ),
-                    onPressed: _navigatePublicStorePage,
-                  ),
+                _YellowActionButton(
+                  label: tr('success_page.initiate1'),
+                  onPressed: _navigatePublicStorePage,
                 ),
 
                 const SizedBox(height: 24),
@@ -194,7 +192,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
                       children: [
                         const SizedBox(height: 16),
                         Text(
-                          'ご協力のお願い',
+                          tr("sucess_page.initiate2"),
                           style: Theme.of(context).textTheme.titleMedium,
                           textAlign: TextAlign.left,
                         ),
@@ -204,7 +202,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
                             width: double.infinity,
                             child: OutlinedButton.icon(
                               icon: const Icon(Icons.reviews_outlined),
-                              label: const Text('Google レビューを書く'),
+                              label: Text(tr('sucess_page.initiate21')),
                               onPressed: () => _openUrl(r.googleReviewUrl!),
                             ),
                           ),
@@ -214,7 +212,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
                             width: double.infinity,
                             child: OutlinedButton.icon(
                               icon: const Icon(Icons.chat_bubble_outline),
-                              label: const Text('LINE公式を友だち追加'),
+                              label: Text(tr("sucess_page.initiate22")),
                               onPressed: () => _openUrl(r.lineOfficialUrl!),
                             ),
                           ),
@@ -258,7 +256,7 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
   bool _loading = false;
 
   static const int _maxStoreTip = 1000000; // 最大金額（100万円）
-  final _presets = const [100, 300, 500, 1000, 3000, 5000, 10000];
+  final _presets = const [1000, 3000, 5000, 10000];
 
   void _setAmount(int value) {
     setState(() => _amount = value.clamp(0, _maxStoreTip));
@@ -278,11 +276,11 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
     setState(() => _amount = _amount ~/ 10);
   }
 
-  Future<void> _goToStripe() async {
+  Future<void> _goStripe() async {
     if (_amount <= 0 || _amount > _maxStoreTip) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('1〜1,000,000 円で入力してください')));
+      ).showSnackBar(SnackBar(content: Text(tr('stripe.attention'))));
       return;
     }
 
@@ -307,12 +305,12 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
       } else {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('決済URLの取得に失敗しました')));
+        ).showSnackBar(SnackBar(content: Text(tr('stripe.miss_URL'))));
       }
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('エラー: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(tr("stripe.error", args: [e.toString()]))),
+      );
     } finally {
       setState(() => _loading = false);
     }
@@ -333,8 +331,11 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
               Expanded(
                 child: Text(
                   widget.tenantName == null
-                      ? '店舗にチップ'
-                      : '${widget.tenantName} にチップ',
+                      ? tr("stripe.tip_for_store")
+                      : tr(
+                          "stripe.tip_for_store1",
+                          namedArgs: {"tenantName": ?widget.tenantName},
+                        ),
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
@@ -355,7 +356,10 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.black12),
+              border: Border.all(
+                color: AppPalette.border,
+                width: AppDims.border,
+              ),
             ),
             child: Row(
               children: [
@@ -376,10 +380,9 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                TextButton.icon(
+                IconButton(
                   onPressed: () => _setAmount(0),
                   icon: const Icon(Icons.clear),
-                  label: const Text('クリア'),
                 ),
               ],
             ),
@@ -392,13 +395,18 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
             children: _presets.map((preset) {
               final isSelected = _amount == preset;
               return ChoiceChip(
+                side: BorderSide(
+                  color: AppPalette.border,
+                  width: AppDims.border,
+                ),
+                showCheckmark: false,
                 label: Text('¥$preset'),
                 selected: isSelected,
                 onSelected: (_) => _setAmount(preset),
-                selectedColor: Colors.black,
-                backgroundColor: Colors.grey[200],
+                selectedColor: AppPalette.black,
+                backgroundColor: AppPalette.white,
                 labelStyle: TextStyle(
-                  color: isSelected ? Colors.white : Colors.black,
+                  color: isSelected ? AppPalette.white : AppPalette.black,
                   fontWeight: FontWeight.w600,
                 ),
               );
@@ -415,24 +423,21 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
           // フッター
           Row(
             children: [
-              Expanded(
-                child: OutlinedButton(
+              Flexible(
+                flex: 1,
+                child: _YellowActionButton(
+                  label: tr('button.cancel'),
                   onPressed: _loading ? null : () => Navigator.pop(context),
-                  child: const Text('キャンセル'),
+                  color: AppPalette.white,
                 ),
               ),
               const SizedBox(width: 8),
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: _loading ? null : _goToStripe,
-                  icon: _loading
-                      ? const SizedBox(
-                          height: 16,
-                          width: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.open_in_new),
-                  label: const Text('Stripeへ進む'),
+              Flexible(
+                flex: 2,
+                child: _YellowActionButton(
+                  label: tr('button.send_tip'),
+                  onPressed: _loading ? null : _goStripe,
+                  color: AppPalette.white,
                 ),
               ),
             ],
@@ -443,58 +448,147 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
   }
 }
 
+/// テンキー
 class _Keypad extends StatelessWidget {
-  final void Function(int digit) onTapDigit;
+  final void Function(int d) onTapDigit;
   final VoidCallback onTapDoubleZero;
   final VoidCallback onBackspace;
-
   const _Keypad({
     required this.onTapDigit,
     required this.onTapDoubleZero,
     required this.onBackspace,
   });
 
-  @override
-  Widget build(BuildContext context) {
-    return GridView.count(
-      crossAxisCount: 3,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 8,
-      crossAxisSpacing: 8,
-      childAspectRatio: 1.6,
-      children: [
-        for (var i = 1; i <= 9; i++) _buildButton('$i', () => onTapDigit(i)),
-        _buildButton('00', onTapDoubleZero),
-        _buildButton('0', () => onTapDigit(0)),
-        _buildIconButton(Icons.backspace_outlined, onBackspace),
-      ],
-    );
-  }
-
-  Widget _buildButton(String label, VoidCallback onPressed) {
+  Widget _btn(BuildContext ctx, String label, VoidCallback onPressed) {
     return ElevatedButton(
-      onPressed: onPressed,
       style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        backgroundColor: AppPalette.white,
+        foregroundColor: AppPalette.black,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppDims.radius),
+        ),
+        side: BorderSide(color: AppPalette.border, width: AppDims.border),
         padding: const EdgeInsets.symmetric(vertical: 14),
       ),
+      onPressed: onPressed,
       child: Text(label, style: const TextStyle(fontSize: 18)),
     );
   }
 
-  Widget _buildIconButton(IconData icon, VoidCallback onPressed) {
-    return ElevatedButton(
-      onPressed: onPressed,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        padding: const EdgeInsets.symmetric(vertical: 14),
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(child: _btn(context, '1', () => onTapDigit(1))),
+            const SizedBox(width: 8),
+            Expanded(child: _btn(context, '2', () => onTapDigit(2))),
+            const SizedBox(width: 8),
+            Expanded(child: _btn(context, '3', () => onTapDigit(3))),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(child: _btn(context, '4', () => onTapDigit(4))),
+            const SizedBox(width: 8),
+            Expanded(child: _btn(context, '5', () => onTapDigit(5))),
+            const SizedBox(width: 8),
+            Expanded(child: _btn(context, '6', () => onTapDigit(6))),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(child: _btn(context, '7', () => onTapDigit(7))),
+            const SizedBox(width: 8),
+            Expanded(child: _btn(context, '8', () => onTapDigit(8))),
+            const SizedBox(width: 8),
+            Expanded(child: _btn(context, '9', () => onTapDigit(9))),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(child: _btn(context, '00', onTapDoubleZero)),
+            const SizedBox(width: 8),
+            Expanded(child: _btn(context, '0', () => onTapDigit(0))),
+            const SizedBox(width: 8),
+            Expanded(
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppPalette.white,
+                  foregroundColor: AppPalette.black,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppDims.radius),
+                  ),
+                  side: BorderSide(
+                    color: AppPalette.border,
+                    width: AppDims.border,
+                  ),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                onPressed: onBackspace,
+                child: const Icon(Icons.backspace_outlined, size: 18),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// 黄色×黒の大ボタン（色は任意で上書き可）
+class _YellowActionButton extends StatelessWidget {
+  final String label;
+  final IconData? icon;
+  final VoidCallback? onPressed;
+
+  /// 背景色。未指定(null)なら AppPalette.yellow を使用
+  final Color? color;
+
+  const _YellowActionButton({
+    required this.label,
+    this.icon,
+    this.onPressed,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = color ?? AppPalette.yellow;
+
+    final child = Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        if (icon != null) ...[
+          Icon(icon, color: AppPalette.black),
+          const SizedBox(width: 8),
+        ],
+        Text(label, style: AppTypography.label(color: AppPalette.black)),
+      ],
+    );
+
+    return Material(
+      color: bg, // ← 指定があればその色、なければ黄色
+      borderRadius: BorderRadius.circular(AppDims.radius),
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(AppDims.radius),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 18),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppDims.radius),
+            border: Border.all(color: AppPalette.border, width: AppDims.border),
+          ),
+          child: child,
+        ),
       ),
-      child: Icon(icon, size: 22),
     );
   }
 }

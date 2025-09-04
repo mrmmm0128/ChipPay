@@ -140,19 +140,19 @@ class MyApp extends StatelessWidget {
       );
     }
 
-    // /staff?tid=...&eid=...
-    if (uri.path == '/staff') {
-      return MaterialPageRoute(
-        builder: (_) => const StaffDetailPage(),
-        settings: RouteSettings(
-          name: settings.name,
-          arguments: {
-            'tenantId': uri.queryParameters['tid'],
-            'employeeId': uri.queryParameters['eid'],
-          },
-        ),
-      );
-    }
+    // // /staff?tid=...&eid=...
+    // if (uri.path == '/staff') {
+    //   return MaterialPageRoute(
+    //     builder: (_) => const StaffDetailPage(),
+    //     settings: RouteSettings(
+    //       name: settings.name,
+    //       arguments: {
+    //         'tenantId': uri.queryParameters['tid'],
+    //         'employeeId': uri.queryParameters['eid'],
+    //       },
+    //     ),
+    //   );
+    // }
 
     // それ以外の静的ルート
     final staticRoutes = <String, WidgetBuilder>{
@@ -167,6 +167,7 @@ class MyApp extends StatelessWidget {
       '/admin-invite': (_) => const AcceptInviteScreen(),
       '/qr-all': (_) => const PublicStaffQrListPage(),
       '/qr-builder': (_) => const QrPosterBuilderPage(),
+      '/staff': (_) => const StaffDetailPage(),
       // 開発ミス防止：旧タイポ残っていたらログインへ
       '/chechout-end': (_) => const LoginScreen(),
     };
@@ -195,6 +196,7 @@ class MyApp extends StatelessWidget {
           seedColor: Colors.black,
           brightness: Brightness.light,
         ),
+        fontFamily: 'LINESeed',
       ),
 
       // 初期画面は Root（ここで公開/非公開を振り分け）
