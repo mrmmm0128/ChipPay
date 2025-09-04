@@ -1,19 +1,20 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import * as functions from "firebase-functions";
+import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { onDocumentWritten } from "firebase-functions/v2/firestore";
+import { defineSecret } from "firebase-functions/params";
+import * as admin from "firebase-admin";
 import Stripe from "stripe";
-import { onDocumentWritten } from 'firebase-functions/v2/firestore';
-import { defineSecret } from 'firebase-functions/params';
+import * as crypto from "crypto";
 
-import * as admin from 'firebase-admin';
-if (!admin.apps.length) {
-  admin.initializeApp(); // 1回だけ
-}
+if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
 
+/* ===================== Secrets / Const ===================== */
+export const RESEND_API_KEY = defineSecret("RESEND_API_KEY");
+const APP_ORIGIN = "https://venerable-mermaid-fcf8c8.netlify.app";
 
-export const RESEND_API_KEY = defineSecret('RESEND_API_KEY');
-
-
-/** 必須環境変数チェック（未設定ならわかりやすく失敗させる） */
+/* ===================== Utils ===================== */
 function requireEnv(name: string): string {
   const v = process.env[name];
   if (!v) {
@@ -25,17 +26,17 @@ function requireEnv(name: string): string {
   return v;
 }
 
-function calcApplicationFee(amount: number, feeCfg?: { percent?: number; fixed?: number }) {
-  const p = Math.max(0, Math.min(100, Math.floor(feeCfg?.percent ?? 0))); // 0..100
+function calcApplicationFee(
+  amount: number,
+  feeCfg?: { percent?: number; fixed?: number }
+) {
+  const p = Math.max(0, Math.min(100, Math.floor(feeCfg?.percent ?? 0)));
   const f = Math.max(0, Math.floor(feeCfg?.fixed ?? 0));
-  // JPY: 小数なし最小単位
   const percentPart = Math.floor((amount * p) / 100);
   return percentPart + f;
 }
 
-/** Stripe クライアントは遅延初期化（env 未設定でのモジュールロード失敗を防ぐ） */
 let _stripe: Stripe | null = null;
-
 function stripeClient(): Stripe {
   if (_stripe) return _stripe;
   _stripe = new Stripe(requireEnv("STRIPE_SECRET_KEY"), {
@@ -44,279 +45,89 @@ function stripeClient(): Stripe {
   return _stripe!;
 }
 
+function sha256(s: string) {
+  return crypto.createHash("sha256").update(s).digest("hex");
+}
 
-/** 公開ページ（未ログイン）からのチップ用：Connect 宛先＋手数料対応（スタッフ宛） */
-export const createTipSessionPublic =
-  functions.region("us-central1")
-    .runWith({
-      secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL"],
-      memory: "256MB",
-    })
-    .https.onCall(async (data, _ctx) => {
-      const { tenantId, employeeId, amount, memo = "Tip" } = data as {
-        tenantId?: string;
-        employeeId?: string;
-        amount?: number;
-        memo?: string;
-      };
+function escapeHtml(s: string) {
+  return s.replace(/[&<>'"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" } as any)[c]!
+  );
+}
 
-      if (!tenantId || !employeeId) {
-        throw new functions.https.HttpsError("invalid-argument", "tenantId/employeeId required");
-      }
-      if (!Number.isInteger(amount) || (amount ?? 0) <= 0 || (amount as number) > 1_000_000) {
-        throw new functions.https.HttpsError("invalid-argument", "invalid amount");
-      }
+/* ===================== UID 名前空間 ヘルパー ===================== */
+/**
+ * tenantIndex/{tenantId} => { uid, tenantId, stripeAccountId? }
+ * tenantStripeIndex/{tenantId} => { uid, tenantId, stripeAccountId }
+ */
+type TenantIndexDoc = {
+  uid: string;
+  tenantId: string;
+  stripeAccountId?: string;
+};
 
-      const tRef = db.collection("tenants").doc(tenantId);
-      const tDoc = await tRef.get();
-      if (!tDoc.exists || tDoc.data()!.status !== "active") {
-        throw new functions.https.HttpsError("failed-precondition", "Tenant suspended or not found");
-      }
+function tenantRefByUid(uid: string, tenantId: string) {
+  return db.collection(uid).doc(tenantId);
+}
 
-      const acctId = tDoc.data()?.stripeAccountId as string | undefined;
-      if (!acctId) {
-        throw new functions.https.HttpsError("failed-precondition", "Store not connected to Stripe");
-      }
-      if (!tDoc.data()?.connect?.charges_enabled) {
-        throw new functions.https.HttpsError("failed-precondition", "Store Stripe account is not ready (charges_disabled)");
-      }
+async function tenantRefByIndex(tenantId: string) {
+  const idx = await db.collection("tenantIndex").doc(tenantId).get();
+  if (!idx.exists) throw new Error(`tenantIndex not found for ${tenantId}`);
+  const { uid } = idx.data() as TenantIndexDoc;
+  return tenantRefByUid(uid, tenantId);
+}
 
-      const eDoc = await tRef.collection("employees").doc(employeeId).get();
-      if (!eDoc.exists) {
-        throw new functions.https.HttpsError("not-found", "Employee not found");
-      }
-      const employeeName = (eDoc.data()?.name as string) ?? "Staff";
+async function tenantRefByStripeAccount(acctId: string) {
+  const qs = await db
+    .collection("tenantStripeIndex")
+    .where("stripeAccountId", "==", acctId)
+    .limit(1)
+    .get();
+  if (qs.empty) throw new Error("tenantStripeIndex not found");
+  const { uid, tenantId } = qs.docs[0].data() as TenantIndexDoc;
+  return tenantRefByUid(uid, tenantId);
+}
 
-      // サブスクプランから手数料率を決定（feePercent があるなら優先）
-      const sub = (tDoc.data()?.subscription ?? {}) as { plan?: string; feePercent?: number };
-      const plan = (sub.plan ?? "A").toUpperCase();
-      const percent = typeof sub.feePercent === "number"
-        ? sub.feePercent
-        : plan === "B" ? 15 : plan === "C" ? 10 : 20;
-
-      // 既存の calcApplicationFee を利用（固定額がなければ 0 扱い）
-      const appFee = calcApplicationFee(amount!, { percent, fixed: 0 });
-
-      // tips に pending で先に作成（tipDocId を metadata へ）
-      const tipRef = tRef.collection("tips").doc();
-      await tipRef.set({
-        tenantId,
-        employeeId,
-        amount,
-        currency: "JPY",
-        status: "pending",
-        recipient: { type: "employee", employeeId, employeeName },
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      const stripe = stripeClient();
-      const FRONTEND_BASE_URL = requireEnv("FRONTEND_BASE_URL");
-
-      try {
-        const session = await stripe.checkout.sessions.create({
-          mode: "payment",
-          payment_method_types: ["card", "link"],
-          line_items: [
-            {
-              price_data: {
-                currency: "jpy",
-                product_data: { name: `Tip to ${employeeName}` },
-                unit_amount: amount!,
-              },
-              quantity: 1,
-            },
-          ],
-          success_url: `${FRONTEND_BASE_URL}/#/p?t=${tenantId}&thanks=true`,
-          cancel_url: `${FRONTEND_BASE_URL}/#/p?t=${tenantId}&canceled=true`,
-          metadata: {
-            tenantId,
-            employeeId,
-            employeeName,
-            tipDocId: tipRef.id,
-            tipType: "employee",
-            memo,
-            feePercentApplied: String(percent),
-          },
-          payment_intent_data: {
-            application_fee_amount: appFee,
-            transfer_data: { destination: acctId },
-          },
-        });
-
-        await tRef.collection("tipSessions").doc(session.id).set({
-          status: "created",
-          amount,
-          employeeId,
-          tipDocId: tipRef.id,
-          stripeSessionId: session.id,
-          stripeCheckoutUrl: session.url,
-          feeApplied: appFee,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-
-        return { checkoutUrl: session.url, sessionId: session.id, tipDocId: tipRef.id };
-      } catch (err: any) {
-        throw new functions.https.HttpsError("failed-precondition", err?.message || "Stripe error", {
-          source: "stripe",
-          code: err?.type || "stripe_error",
-        });
-      }
-    });
-
-/** 公開ページ（未ログイン）からのチップ用：Connect 宛先＋手数料対応（店舗宛） */
-export const createStoreTipSessionPublic =
-  functions.region("us-central1")
-    .runWith({
-      secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL"],
-      memory: "256MB",
-    })
-    .https.onCall(async (data, _ctx) => {
-      const { tenantId, amount, memo = "Tip to store" } = data as {
-        tenantId?: string;
-        amount?: number;
-        memo?: string;
-      };
-
-      if (!tenantId) {
-        throw new functions.https.HttpsError("invalid-argument", "tenantId required");
-      }
-      if (!Number.isInteger(amount) || (amount ?? 0) <= 0 || (amount as number) > 1_000_000) {
-        throw new functions.https.HttpsError("invalid-argument", "invalid amount");
-      }
-
-      const tRef = db.collection("tenants").doc(tenantId);
-      const tDoc = await tRef.get();
-      if (!tDoc.exists || tDoc.data()!.status !== "active") {
-        throw new functions.https.HttpsError("failed-precondition", "Tenant suspended or not found");
-      }
-
-      const acctId = tDoc.data()?.stripeAccountId as string | undefined;
-      if (!acctId) {
-        throw new functions.https.HttpsError("failed-precondition", "Store not connected to Stripe");
-      }
-      const chargesEnabled = !!tDoc.data()?.connect?.charges_enabled;
-      if (!chargesEnabled) {
-        throw new functions.https.HttpsError("failed-precondition", "Store Stripe account is not ready (charges_disabled)");
-      }
-
-      // サブスクプランから手数料率を決定
-      const sub = (tDoc.data()?.subscription ?? {}) as { plan?: string; feePercent?: number };
-      const plan = (sub.plan ?? "A").toUpperCase();
-      const percent = typeof sub.feePercent === "number"
-        ? sub.feePercent
-        : plan === "B" ? 15 : plan === "C" ? 10 : 20;
-
-      const appFee = calcApplicationFee(amount!, { percent, fixed: 0 });
-
-      // 店舗宛 tip を pending で先に作成（recipient = store）
-      const storeName = (tDoc.data()?.name as string | undefined) ?? tenantId;
-      const tipRef = tRef.collection("tips").doc();
-      await tipRef.set({
-        tenantId,
-        amount,
-        currency: "JPY",
-        status: "pending",
-        recipient: { type: "store", storeName },
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      const stripe = stripeClient();
-      const FRONTEND_BASE_URL = requireEnv("FRONTEND_BASE_URL");
-
-      const currency = "jpy";
-      const unitAmount = amount as number;
-      const title = memo || `Tip to store ${storeName}`;
-
-      const session = await stripe.checkout.sessions.create({
-        mode: "payment",
-        payment_method_types: ["card", "link"],
-        line_items: [
-          {
-            price_data: {
-              currency,
-              product_data: { name: title },
-              unit_amount: unitAmount,
-            },
-            quantity: 1,
-          },
-        ],
-        success_url: `${FRONTEND_BASE_URL}/#/p?t=${tenantId}&thanks=true`,
-        cancel_url: `${FRONTEND_BASE_URL}/#/p?t=${tenantId}&canceled=true`,
-        metadata: {
-          tenantId,
-          tipDocId: tipRef.id,
-          tipType: "store",
-          storeName,
-          memo,
-          feePercentApplied: String(percent),
-        },
-        payment_intent_data: {
-          transfer_data: { destination: acctId },
-          application_fee_amount: appFee,
-        },
-      });
-
-      await db.collection("tenants").doc(tenantId)
-        .collection("tipSessions").doc(session.id)
-        .set({
-          tenantId,
-          amount: unitAmount,
-          currency: currency.toUpperCase(),
-          status: "created",
-          kind: "store_tip",
-          tipDocId: tipRef.id,
-          stripeCheckoutUrl: session.url,
-          stripeSessionId: session.id,
-          feeApplied: appFee,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
-
-      return { checkoutUrl: session.url, sessionId: session.id, tipDocId: tipRef.id };
-    });
-
-
-        export const onTipSucceededSendMailV2 = onDocumentWritten(
-  {
-    region: 'us-central1',
-    document: 'tenants/{tenantId}/tips/{tipId}',
-    secrets: [RESEND_API_KEY],
-    memory: '256MiB',
-    maxInstances: 10,
-  },
-  async (event) => {
-    const before = event.data?.before?.data() as any | undefined;
-    const after  = event.data?.after?.data()  as any | undefined;
-    if (!after) return;
-
-    // “succeeded” になった瞬間だけ送る
-    const beforeStatus = before?.status;
-    const afterStatus  = after?.status;
-    if (afterStatus !== 'succeeded' || beforeStatus === 'succeeded') return;
-
-    await sendTipNotification(
-      event.params.tenantId,
-      event.params.tipId,
-      RESEND_API_KEY.value()
-    );
+async function upsertTenantIndex(
+  uid: string,
+  tenantId: string,
+  stripeAccountId?: string
+) {
+  await db.collection("tenantIndex").doc(tenantId).set(
+    {
+      uid,
+      tenantId,
+      ...(stripeAccountId ? { stripeAccountId } : {}),
+    },
+    { merge: true }
+  );
+  if (stripeAccountId) {
+    await db
+      .collection("tenantStripeIndex")
+      .doc(tenantId)
+      .set({ uid, tenantId, stripeAccountId }, { merge: true });
   }
-);
+}
 
-// ---- helpers: 当時のルールを選択し、分配額を計算 ----
+/* ===================== Firestore ルール系 ===================== */
+async function assertTenantAdmin(tenantId: string, uid: string) {
+  const mem = await db.doc(`tenants/${tenantId}/members/${uid}`).get();
+  if (mem.exists && mem.data()?.role === "admin") return;
+  const t = await db.doc(`tenants/${tenantId}`).get();
+  const arr: string[] = (t.data()?.memberUids || []) as string[];
+  if (arr.includes(uid)) return;
+  throw new functions.https.HttpsError("permission-denied", "Not tenant admin");
+}
+
+/* ===================== 計算補助 ===================== */
 type DeductionRule = {
-  percent: number;           // 0-100
-  fixed: number;             // 通貨の最小単位（JPYなら円）
+  percent: number;
+  fixed: number;
   effectiveFrom?: FirebaseFirestore.Timestamp | null;
 };
 
-// 履歴: tenants/{tenantId}/storeDeductionHistory に
-// { percent:number, fixed:number, effectiveFrom:Timestamp } を保存している想定。
-// 無ければ tenants/{tenantId}.storeDeduction をフォールバック。
-async function pickEffectiveRule(
-  tenantId: string,
-  at: Date
-): Promise<DeductionRule> {
+async function pickEffectiveRule(tenantId: string, at: Date): Promise<DeductionRule> {
+  // NOTE: こちらは旧 tenants/{tenantId} 階層の履歴。UID 名空間へ移行しない（履歴の置き場所が異なるなら調整）
   const histSnap = await db
     .collection("tenants")
     .doc(tenantId)
@@ -344,7 +155,6 @@ async function pickEffectiveRule(
   };
 }
 
-// バックエンドでの丸めを一元化（合計を超えない・負にならない）
 function splitMinor(amountMinor: number, percent: number, fixedMinor: number) {
   const percentPart = Math.floor(amountMinor * (Math.max(0, percent) / 100));
   const store = Math.min(
@@ -355,38 +165,363 @@ function splitMinor(amountMinor: number, percent: number, fixedMinor: number) {
   return { storeAmount: store, staffAmount: staff };
 }
 
+/* ===================== プラン取得 / 顧客確保 ===================== */
+type Plan = { stripePriceId: string; name?: string; feePercent?: number };
+type TenantSubscription = {
+  plan?: string;
+  status?: string;
+  feePercent?: number;
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
+  currentPeriodEnd?: admin.firestore.Timestamp;
+};
+
+async function getPlanFromDb(planId: string): Promise<Plan> {
+  let snap = await db.collection("billingPlans").doc(planId).get();
+  if (snap.exists) return snap.data() as Plan;
+
+  snap = await db.collection("billing").doc("plans").get();
+  if (snap.exists) {
+    const data = snap.data() || {};
+    const candidate = (data.plans && data.plans[planId]) || data[planId];
+    if (candidate?.stripePriceId) return candidate as Plan;
+  }
+
+  snap = await db.collection("billing").doc("plans").collection("plans").doc(planId).get();
+  if (snap.exists) return snap.data() as Plan;
+
+  throw new functions.https.HttpsError(
+    "not-found",
+    `Plan "${planId}" not found in billingPlans/{id}, billing/plans(plans map), or billing/plans/plans/{id}.`
+  );
+}
+
+async function ensureCustomer(
+  uid: string,
+  tenantId: string,
+  email?: string,
+  name?: string
+): Promise<string> {
+  const stripe = new Stripe(requireEnv("STRIPE_SECRET_KEY"), {
+    apiVersion: "2023-10-16",
+  });
+  const tenantRef = tenantRefByUid(uid, tenantId);
+  const tSnap = await tenantRef.get();
+  const tData = (tSnap.data() || {}) as { subscription?: TenantSubscription };
+
+  const sub = tData.subscription || {};
+  if (sub.stripeCustomerId) return sub.stripeCustomerId;
+
+  const customer = await stripe.customers.create({
+    email,
+    name,
+    metadata: { tenantId, uid },
+  });
+
+  await tenantRef.set(
+    { subscription: { ...(sub || {}), stripeCustomerId: customer.id } },
+    { merge: true }
+  );
+
+  // index の担保
+  await upsertTenantIndex(uid, tenantId);
+  return customer.id;
+}
+
+/* ============================================================
+ *  公開ページ: チップ（スタッフ宛）
+ *  ※ uid 不明 → tenantIndex から逆引き
+ * ==========================================================*/
+export const createTipSessionPublic = functions
+  .region("us-central1")
+  .runWith({
+    secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL"],
+    memory: "256MB",
+  })
+  .https.onCall(async (data) => {
+    const { tenantId, employeeId, amount, memo = "Tip" } = data as {
+      tenantId?: string;
+      employeeId?: string;
+      amount?: number;
+      memo?: string;
+    };
+
+    if (!tenantId || !employeeId) {
+      throw new functions.https.HttpsError("invalid-argument", "tenantId/employeeId required");
+    }
+    if (!Number.isInteger(amount) || (amount ?? 0) <= 0 || (amount as number) > 1_000_000) {
+      throw new functions.https.HttpsError("invalid-argument", "invalid amount");
+    }
+
+    // uid を逆引きして uid/{tenantId} を参照
+    const tRef = await tenantRefByIndex(tenantId);
+    const tDoc = await tRef.get();
+    if (!tDoc.exists || tDoc.data()!.status !== "active") {
+      throw new functions.https.HttpsError("failed-precondition", "Tenant suspended or not found");
+    }
+
+    const acctId = tDoc.data()?.stripeAccountId as string | undefined;
+    if (!acctId) {
+      throw new functions.https.HttpsError("failed-precondition", "Store not connected to Stripe");
+    }
+    if (!tDoc.data()?.connect?.charges_enabled) {
+      throw new functions.https.HttpsError("failed-precondition", "Store Stripe account is not ready (charges_disabled)");
+    }
+
+    const eDoc = await tRef.collection("employees").doc(employeeId).get();
+    if (!eDoc.exists) {
+      throw new functions.https.HttpsError("not-found", "Employee not found");
+    }
+    const employeeName = (eDoc.data()?.name as string) ?? "Staff";
+
+    const sub = (tDoc.data()?.subscription ?? {}) as { plan?: string; feePercent?: number };
+    const plan = (sub.plan ?? "A").toUpperCase();
+    const percent = typeof sub.feePercent === "number"
+      ? sub.feePercent
+      : plan === "B" ? 15 : plan === "C" ? 10 : 20;
+
+    const appFee = calcApplicationFee(amount!, { percent, fixed: 0 });
+
+    const tipRef = tRef.collection("tips").doc();
+    await tipRef.set({
+      tenantId,
+      employeeId,
+      amount,
+      currency: "JPY",
+      status: "pending",
+      recipient: { type: "employee", employeeId, employeeName },
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    const stripe = stripeClient();
+    const FRONTEND_BASE_URL = requireEnv("FRONTEND_BASE_URL");
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card", "link"],
+      line_items: [
+        {
+          price_data: {
+            currency: "jpy",
+            product_data: { name: `Tip to ${employeeName}` },
+            unit_amount: amount!,
+          },
+          quantity: 1,
+        },
+      ],
+      success_url: `${FRONTEND_BASE_URL}/#/p?t=${tenantId}&thanks=true`,
+      cancel_url: `${FRONTEND_BASE_URL}/#/p?t=${tenantId}&canceled=true`,
+      metadata: {
+        tenantId,
+        employeeId,
+        employeeName,
+        tipDocId: tipRef.id,
+        tipType: "employee",
+        memo,
+        feePercentApplied: String(percent),
+      },
+      payment_intent_data: {
+        application_fee_amount: appFee,
+        transfer_data: { destination: acctId },
+      },
+    });
+
+    await tRef.collection("tipSessions").doc(session.id).set({
+      status: "created",
+      amount,
+      employeeId,
+      tipDocId: tipRef.id,
+      stripeSessionId: session.id,
+      stripeCheckoutUrl: session.url,
+      feeApplied: appFee,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return { checkoutUrl: session.url, sessionId: session.id, tipDocId: tipRef.id };
+  });
+
+/* ============================================================
+ *  公開ページ: チップ（店舗宛）
+ *  ※ uid 不明 → tenantIndex から逆引き
+ * ==========================================================*/
+export const createStoreTipSessionPublic = functions
+  .region("us-central1")
+  .runWith({
+    secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL"],
+    memory: "256MB",
+  })
+  .https.onCall(async (data) => {
+    const { tenantId, amount, memo = "Tip to store" } = data as {
+      tenantId?: string;
+      amount?: number;
+      memo?: string;
+    };
+
+    if (!tenantId) {
+      throw new functions.https.HttpsError("invalid-argument", "tenantId required");
+    }
+    if (!Number.isInteger(amount) || (amount ?? 0) <= 0 || (amount as number) > 1_000_000) {
+      throw new functions.https.HttpsError("invalid-argument", "invalid amount");
+    }
+
+    const tRef = await tenantRefByIndex(tenantId);
+    const tDoc = await tRef.get();
+    if (!tDoc.exists || tDoc.data()!.status !== "active") {
+      throw new functions.https.HttpsError("failed-precondition", "Tenant suspended or not found");
+    }
+
+    const acctId = tDoc.data()?.stripeAccountId as string | undefined;
+    if (!acctId) {
+      throw new functions.https.HttpsError("failed-precondition", "Store not connected to Stripe");
+    }
+    const chargesEnabled = !!tDoc.data()?.connect?.charges_enabled;
+    if (!chargesEnabled) {
+      throw new functions.https.HttpsError("failed-precondition", "Store Stripe account is not ready (charges_disabled)");
+    }
+
+    const sub = (tDoc.data()?.subscription ?? {}) as { plan?: string; feePercent?: number };
+    const plan = (sub.plan ?? "A").toUpperCase();
+    const percent = typeof sub.feePercent === "number"
+      ? sub.feePercent
+      : plan === "B" ? 15 : plan === "C" ? 10 : 20;
+
+    const appFee = calcApplicationFee(amount!, { percent, fixed: 0 });
+    const storeName = (tDoc.data()?.name as string | undefined) ?? tenantId;
+
+    // uid を取得（親コレクション名 = uid）
+    const uid = tRef.parent!.id;
+
+    const tipRef = tRef.collection("tips").doc();
+    await tipRef.set({
+      tenantId,
+      amount,
+      currency: "JPY",
+      status: "pending",
+      recipient: { type: "store", storeName },
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    const stripe = stripeClient();
+    const FRONTEND_BASE_URL = requireEnv("FRONTEND_BASE_URL");
+
+    const currency = "jpy";
+    const unitAmount = amount as number;
+    const title = memo || `Tip to store ${storeName}`;
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card", "link"],
+      line_items: [
+        {
+          price_data: {
+            currency,
+            product_data: { name: title },
+            unit_amount: unitAmount,
+          },
+          quantity: 1,
+        },
+      ],
+      success_url: `${FRONTEND_BASE_URL}/#/p?t=${tenantId}&thanks=true`,
+      cancel_url: `${FRONTEND_BASE_URL}/#/p?t=${tenantId}&canceled=true`,
+      metadata: {
+        tenantId,
+        tipDocId: tipRef.id,
+        tipType: "store",
+        storeName,
+        memo,
+        feePercentApplied: String(percent),
+      },
+      payment_intent_data: {
+        transfer_data: { destination: acctId },
+        application_fee_amount: appFee,
+      },
+    });
+
+    await db
+      .collection(uid)
+      .doc(tenantId)
+      .collection("tipSessions")
+      .doc(session.id)
+      .set(
+        {
+          tenantId,
+          amount: unitAmount,
+          currency: currency.toUpperCase(),
+          status: "created",
+          kind: "store_tip",
+          tipDocId: tipRef.id,
+          stripeCheckoutUrl: session.url,
+          stripeSessionId: session.id,
+          feeApplied: appFee,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+    return { checkoutUrl: session.url, sessionId: session.id, tipDocId: tipRef.id };
+  });
+
+/* ===================== チップ成功メール（既存: uid/{tenantId}/tips） ===================== */
+export const onTipSucceededSendMailV2 = onDocumentWritten(
+  {
+    region: "us-central1",
+    document: "{uid}/{tenantId}/tips/{tipId}",
+    secrets: [RESEND_API_KEY],
+    memory: "256MiB",
+    maxInstances: 10,
+  },
+  async (event) => {
+    const before = event.data?.before?.data() as any | undefined;
+    const after = event.data?.after?.data() as any | undefined;
+    if (!after) return;
+
+    const beforeStatus = before?.status;
+    const afterStatus = after?.status;
+    if (afterStatus !== "succeeded" || beforeStatus === "succeeded") return;
+
+    await sendTipNotification(
+      event.params.tenantId,
+      event.params.tipId,
+      RESEND_API_KEY.value(),
+      event.params.uid
+    );
+  }
+);
 
 async function sendTipNotification(
   tenantId: string,
   tipId: string,
-  resendApiKey: string
+  resendApiKey: string,
+  uid: string
 ) {
-  const db = admin.firestore();
-
-  const tipRef = db.collection('tenants').doc(tenantId)
-    .collection('tips').doc(tipId);
+  const tipRef = db.collection(uid).doc(tenantId).collection("tips").doc(tipId);
   const tipSnap = await tipRef.get();
   if (!tipSnap.exists) return;
 
   const tip = tipSnap.data()!;
   const amount: number = (tip.amount as number) ?? 0;
-  const currency = (tip.currency as string)?.toUpperCase() ?? 'JPY';
+  const currency = (tip.currency as string)?.toUpperCase() ?? "JPY";
   const recipient: any = tip.recipient ?? {};
-  const isEmployee = recipient.type === 'employee' || !!tip.employeeId;
+  const isEmployee = recipient.type === "employee" || !!tip.employeeId;
 
-  // 宛先
   const to: string[] = [];
   if (isEmployee) {
     const empId = (tip.employeeId as string) ?? recipient.employeeId;
     if (empId) {
-      const empSnap = await db.collection('tenants').doc(tenantId)
-        .collection('employees').doc(empId).get();
-      const empEmail = empSnap.get('email') as string | undefined;
+      const empSnap = await db
+        .collection(uid)
+        .doc(tenantId)
+        .collection("employees")
+        .doc(empId)
+        .get();
+      const empEmail = empSnap.get("email") as string | undefined;
       if (empEmail) to.push(empEmail);
     }
   } else {
-    const tenSnap = await db.collection('tenants').doc(tenantId).get();
-    const notify = tenSnap.get('notificationEmails') as string[] | undefined;
+    const tenSnap = await db.collection(uid).doc(tenantId).get();
+    const notify = tenSnap.get("notificationEmails") as string[] | undefined;
     if (notify?.length) to.push(...notify);
   }
   if (to.length === 0) {
@@ -397,46 +532,42 @@ async function sendTipNotification(
     if (fallback) to.push(fallback);
   }
   if (to.length === 0) {
-    console.warn('[tip mail] no recipient', { tenantId, tipId });
+    console.warn("[tip mail] no recipient", { tenantId, tipId });
     return;
   }
 
-  // 表示
-  const isJPY = currency === 'JPY';
-  const money = isJPY
-    ? `¥${amount.toLocaleString('ja-JP')}`
-    : `${amount} ${currency}`;
+  const isJPY = currency === "JPY";
+  const money = isJPY ? `¥${amount.toLocaleString("ja-JP")}` : `${amount} ${currency}`;
   const name = isEmployee
-    ? (tip.employeeName ?? recipient.employeeName ?? 'スタッフ')
-    : (tip.storeName ?? recipient.storeName ?? '店舗');
-  const memo = (tip.memo as string) || '';
+    ? tip.employeeName ?? recipient.employeeName ?? "スタッフ"
+    : tip.storeName ?? recipient.storeName ?? "店舗";
+  const memo = (tip.memo as string) || "";
   const createdAt: Date = tip.createdAt?.toDate?.() ?? new Date();
 
-  const subject = isEmployee
-    ? `チップを受け取りました: ${money}`
-    : `店舗宛のチップ: ${money}`;
+  const subject = isEmployee ? `チップを受け取りました: ${money}` : `店舗宛のチップ: ${money}`;
   const text = [
     `受取先: ${name}`,
     `金額: ${money}`,
-    memo ? `メモ: ${memo}` : '',
-    `日時: ${createdAt.toLocaleString('ja-JP')}`,
-  ].filter(Boolean).join('\n');
+    memo ? `メモ: ${memo}` : "",
+    `日時: ${createdAt.toLocaleString("ja-JP")}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const html = `
   <div style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; line-height:1.6; color:#111">
     <h2 style="margin:0 0 12px">🎉 ${subject}</h2>
     <p style="margin:0 0 6px">受取先：<strong>${escapeHtml(name)}</strong></p>
     <p style="margin:0 0 6px">金額：<strong>${escapeHtml(money)}</strong></p>
-    ${memo ? `<p style="margin:0 0 6px">メモ：${escapeHtml(memo)}</p>` : ''}
-    <p style="margin:0 0 6px">日時：${createdAt.toLocaleString('ja-JP')}</p>
+    ${memo ? `<p style="margin:0 0 6px">メモ：${escapeHtml(memo)}</p>` : ""}
+    <p style="margin:0 0 6px">日時：${createdAt.toLocaleString("ja-JP")}</p>
   </div>`;
 
-  // ★ ESM ライブラリは動的 import
-  const { Resend } = await import('resend');
+  const { Resend } = await import("resend");
   const resend = new Resend(resendApiKey);
 
   await resend.emails.send({
-    from: 'YourPay 通知 <sendtip_app@appfromkomeda.jp>', // Resendで認証済みドメインに置換
+    from: "YourPay 通知 <sendtip_app@appfromkomeda.jp>",
     to,
     subject,
     text,
@@ -449,483 +580,409 @@ async function sendTipNotification(
   );
 }
 
-function escapeHtml(s: string) {
-  return s.replace(/[&<>'"]/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' } as any)[c]!
-  );
-}
+/* ===================== Stripe Webhook ===================== */
+export const stripeWebhook = functions
+  .region("us-central1")
+  .runWith({
+    secrets: [
+      "STRIPE_SECRET_KEY",
+      "STRIPE_WEBHOOK_SECRET",
+      "STRIPE_CONNECT_WEBHOOK_SECRET",
+      "FRONTEND_BASE_URL",
+    ],
+    memory: "256MB",
+  })
+  .https.onRequest(async (req, res): Promise<void> => {
+    const sig = req.headers["stripe-signature"] as string | undefined;
+    if (!sig) {
+      res.status(400).send("No signature");
+      return;
+    }
 
+    const stripe = stripeClient();
+    const secrets = [
+      process.env.STRIPE_WEBHOOK_SECRET,
+      process.env.STRIPE_CONNECT_WEBHOOK_SECRET,
+    ].filter(Boolean) as string[];
 
-import { onCall, HttpsError } from "firebase-functions/v2/https";
-import * as crypto from 'crypto';
-
-
-
-const APP_ORIGIN = 'https://venerable-mermaid-fcf8c8.netlify.app';
-
-function sha256(s: string) {
-  return crypto.createHash('sha256').update(s).digest('hex');
-}
-
-async function assertTenantAdmin(tenantId: string, uid: string) {
-  // members/{uid}.role == 'admin' or tenant.memberUids includes uid
-  const mem = await db.doc(`tenants/${tenantId}/members/${uid}`).get();
-  if (mem.exists && (mem.data()?.role === 'admin')) return;
-  const t = await db.doc(`tenants/${tenantId}`).get();
-  const arr: string[] = (t.data()?.memberUids || []) as string[];
-  if (arr.includes(uid)) return;
-  throw new functions.https.HttpsError('permission-denied', 'Not tenant admin');
-}
-
-
-
-
-
-export const stripeWebhook =
-  functions
-    .region("us-central1")
-    .runWith({
-      secrets: [
-        "STRIPE_SECRET_KEY",
-        "STRIPE_WEBHOOK_SECRET",
-        "STRIPE_CONNECT_WEBHOOK_SECRET",
-        "FRONTEND_BASE_URL",
-      ],
-      memory: "256MB",
-    })
-    .https.onRequest(async (req, res): Promise<void> => {
-      const sig = req.headers["stripe-signature"] as string | undefined;
-      if (!sig) {
-        res.status(400).send("No signature");
-        return;
-      }
-
-      const stripe = stripeClient();
-
-      // 通常 / Connect 両対応で検証
-      const secrets = [
-        process.env.STRIPE_WEBHOOK_SECRET,
-        process.env.STRIPE_CONNECT_WEBHOOK_SECRET,
-      ].filter(Boolean) as string[];
-
-      let event: Stripe.Event | null = null;
-      for (const secret of secrets) {
-        try {
-          event = stripe.webhooks.constructEvent(
-            // Firebase Functions は rawBody を提供
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (req as any).rawBody,
-            sig,
-            secret
-          );
-          break;
-        } catch {
-          // 次のシークレットで再トライ
-        }
-      }
-
-      if (!event) {
-        console.error("Webhook signature verification failed for all secrets.");
-        res.status(400).send("Webhook Error: invalid signature");
-        return;
-      }
-
-      const type = event.type;
-      const docRef = db.collection("webhookEvents").doc(event.id);
-      await docRef.set({
-        type,
-        receivedAt: admin.firestore.FieldValue.serverTimestamp(),
-        handled: false,
-      });
-
+    let event: Stripe.Event | null = null;
+    for (const secret of secrets) {
       try {
-        // ============================================================
-        // 1) Checkout 完了
-        // ============================================================
-        if (type === "checkout.session.completed") {
-          const session = event.data.object as Stripe.Checkout.Session;
+        event = stripe.webhooks.constructEvent(
+          (req as any).rawBody,
+          sig,
+          secret
+        );
+        break;
+      } catch {
+        // try next secret
+      }
+    }
 
-          // -----------------------------
-          // A. サブスク（mode === "subscription"）
-          // -----------------------------
-          if (session.mode === "subscription") {
-            const tenantId = session.metadata?.tenantId as string | undefined;
-            const plan = session.metadata?.plan as string | undefined;
-            const subscriptionId = session.subscription as string | undefined;
-            const customerId = (session.customer as string | undefined) ?? undefined;
+    if (!event) {
+      console.error("Webhook signature verification failed for all secrets.");
+      res.status(400).send("Webhook Error: invalid signature");
+      return;
+    }
 
-            if (!tenantId || !subscriptionId) {
-              console.error("subscription checkout completed but missing tenantId or subscriptionId");
-            } else {
-              const sub = await stripe.subscriptions.retrieve(subscriptionId);
+    const type = event.type;
+    const docRef = db.collection("webhookEvents").doc(event.id);
+    await docRef.set({
+      type,
+      receivedAt: admin.firestore.FieldValue.serverTimestamp(),
+      handled: false,
+    });
 
-              // オプション: プラン定義から feePercent を拾う
-              let feePercent: number | undefined;
-              if (plan) {
-                const planSnap = await db.doc(`billing/plans/${plan}`).get();
-                feePercent = planSnap.exists
-                  ? (planSnap.data()?.feePercent as number | undefined)
-                  : undefined;
-              }
+    try {
+      /* ========== 1) Checkout 完了 ========== */
+      if (type === "checkout.session.completed") {
+        const session = event.data.object as Stripe.Checkout.Session;
 
-              await db
-                .collection("tenants")
-                .doc(tenantId)
-                .set(
-                  {
-                    subscription: {
-                      plan,
-                      status: sub.status,
-                      stripeCustomerId: customerId,
-                      stripeSubscriptionId: sub.id,
-                      currentPeriodEnd: admin.firestore.Timestamp.fromMillis(
-                        sub.current_period_end * 1000
-                      ),
-                      ...(typeof feePercent === "number" ? { feePercent } : {}),
-                    },
-                  },
-                  { merge: true }
-                );
-            }
-
-            await docRef.set({ handled: true }, { merge: true });
-            res.sendStatus(200);
-            return; // サブスクはここで終了
-          }
-
-          // -----------------------------
-          // ★★ B. 初期費用（mode === "payment" & kind: "initial_fee"）★★
-          //     ※ チップ処理よりも先に判定して早期 return
-          // -----------------------------
-          if (session.mode === "payment") {
-            // tenantId は metadata または client_reference_id に入っている想定
-            let tenantId =
-              (session.metadata?.tenantId as string | undefined) ??
-              (session.client_reference_id as string | undefined);
-
-            // payment_intent.metadata.kind で厳密判定
-            let isInitialFee = false;
-            let paymentIntentId = session.payment_intent as string | undefined;
-            let pi: Stripe.PaymentIntent | null = null;
-
-            if (paymentIntentId) {
-              pi = await stripe.paymentIntents.retrieve(paymentIntentId);
-              const kind = (pi.metadata?.kind as string | undefined) ?? (session.metadata?.kind as string | undefined);
-              // tenantId が未取得なら PI から補完
-              if (!tenantId) tenantId = (pi.metadata?.tenantId as string | undefined) ?? undefined;
-              isInitialFee = kind === "initial_fee";
-            }
-
-            if (isInitialFee && tenantId) {
-              const tRef = db.collection("tenants").doc(tenantId);
-
-              await tRef.set(
-                {
-                  billing: {
-                    initialFee: {
-                      status: "paid",
-                      amount: session.amount_total ?? 0, // 最小通貨単位
-                      currency: (session.currency ?? "jpy").toUpperCase(),
-                      stripePaymentIntentId: paymentIntentId ?? null,
-                      stripeCheckoutSessionId: session.id,
-                      paidAt: admin.firestore.FieldValue.serverTimestamp(),
-                      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                    },
-                  },
-                },
-                { merge: true }
-              );
-
-              await docRef.set({ handled: true }, { merge: true });
-              res.sendStatus(200);
-              return; // 初期費用はここで終了（チップ処理へは進まない）
-            }
-          }
-
-          // -----------------------------
-          // C. チップ決済（mode === "payment"）←従来処理
-          // -----------------------------
-          const sid = session.id;
+        // A. サブスク
+        if (session.mode === "subscription") {
           const tenantId = session.metadata?.tenantId as string | undefined;
-          const employeeId = session.metadata?.employeeId as string | undefined;
-          let employeeName = session.metadata?.employeeName as string | undefined;
-          const payIntentId = session.payment_intent as string | undefined;
+          const uidMeta = session.metadata?.uid as string | undefined;
+          const plan = session.metadata?.plan as string | undefined;
+          const subscriptionId = session.subscription as string | undefined;
+          const customerId = (session.customer as string | undefined) ?? undefined;
 
-          // Stripe の作成時刻を Firestore Timestamp に（なければイベント作成時刻）
-          const stripeCreatedSec =
-            (session.created as number | undefined) ?? (event.created as number);
-          const createdAtTs = admin.firestore.Timestamp.fromMillis(
-            (stripeCreatedSec ?? Math.floor(Date.now() / 1000)) * 1000
-          );
-
-          if (!tenantId) {
-            console.error("checkout.session.completed: missing tenantId in metadata");
+          if (!tenantId || !subscriptionId) {
+            console.error("subscription checkout completed but missing tenantId or subscriptionId");
           } else {
-            const tRef = db.collection("tenants").doc(tenantId);
+            const sub = await stripe.subscriptions.retrieve(subscriptionId);
 
-            await tRef
-              .collection("tipSessions")
-              .doc(sid)
-              .set(
-                {
-                  status: "paid",
-                  paidAt: admin.firestore.FieldValue.serverTimestamp(),
-                  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                },
-                { merge: true }
-              );
-
-            const tipDocId =
-              (session.metadata?.tipDocId as string | undefined) ||
-              payIntentId ||
-              sid;
-
-            let storeName = session.metadata?.storeName as string | undefined;
-            if (!storeName) {
-              const tSnap = await tRef.get();
-              storeName =
-                (tSnap.exists && (tSnap.data()?.name as string)) || "Store";
-            }
-
-            if (employeeId && !employeeName) {
-              const eSnap = await tRef.collection("employees").doc(employeeId).get();
-              employeeName =
-                (eSnap.exists && (eSnap.data()?.name as string)) || "Staff";
-            }
-
-            const recipient = employeeId
-              ? {
-                  type: "employee",
-                  employeeId,
-                  employeeName: employeeName || "Staff",
-                }
-              : { type: "store", storeName: storeName! };
-
-            const tipRef = tRef.collection("tips").doc(tipDocId);
-            const tipSnap = await tipRef.get();
-            const existingCreatedAt = tipSnap.exists ? tipSnap.data()?.createdAt : null;
-
-            // まずコア情報を保存（createdAt は Stripe の確定時刻で固定）
-            await tipRef.set(
-              {
-                tenantId,
-                sessionId: sid,
-                amount: session.amount_total ?? 0, // 最小通貨単位
-                currency: (session.currency ?? "jpy").toUpperCase(),
-                status: "succeeded",
-                stripePaymentIntentId: payIntentId ?? "",
-                recipient,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                createdAt: existingCreatedAt ?? createdAtTs,
-              },
-              { merge: true }
-            );
-
-            // すでに split 済みかどうかチェック（冪等）
-            const tipAfter = await tipRef.get();
-            const alreadySplit = !!tipAfter.data()?.split?.storeAmount;
-            if (!alreadySplit) {
-              // 当時の控除ルールで split を焼き込み
-              const eff = await pickEffectiveRule(tenantId, createdAtTs.toDate());
-              const totalMinor = (session.amount_total ?? 0) as number;
-              const { storeAmount, staffAmount } = splitMinor(
-                totalMinor,
-                eff.percent,
-                eff.fixed
-              );
-
-              await tipRef.set(
-                {
-                  split: {
-                    percentApplied: eff.percent,
-                    fixedApplied: eff.fixed,
-                    effectiveFrom: eff.effectiveFrom ?? null,
-                    computedAt: admin.firestore.FieldValue.serverTimestamp(),
-                    storeAmount,
-                    staffAmount,
-                  },
-                },
-                { merge: true }
-              );
-            }
-
-            // 実際のStripe手数料とアプリ手数料、正味額も保存
-            try {
-              if (payIntentId) {
-                const pi = await stripe.paymentIntents.retrieve(payIntentId, {
-                  expand: ["latest_charge.balance_transaction"],
-                });
-                const latestCharge = (pi.latest_charge as Stripe.Charge | null) || null;
-                const bt =
-                  latestCharge?.balance_transaction as
-                    | Stripe.BalanceTransaction
-                    | undefined;
-
-                const stripeFee = bt?.fee ?? 0; // 最小単位
-                const stripeFeeCurrency =
-                  bt?.currency?.toUpperCase() ??
-                  (session.currency ?? "jpy").toUpperCase();
-
-                // Destination charge の場合、charge.application_fee_amount に入る
-                const appFeeAmount = latestCharge?.application_fee_amount ?? 0;
-
-                // split から店舗控除を取得（なければ0）
-                const splitNow = (await tipRef.get()).data()?.split ?? {};
-                const storeCut = (splitNow.storeAmount as number | undefined) ?? 0;
-
-                const gross = (session.amount_total ?? 0) as number;
-                const isStaff = !!employeeId;
-
-                // 仕様:
-                // 店舗宛て: 店舗にくるお金 = gross - appFee - stripeFee
-                // スタッフ宛て: スタッフに渡すお金 = gross - appFee - stripeFee - storeCut
-                //               店舗側取り分(控除分)は storeCut
-                const toStore = isStaff
-                  ? storeCut
-                  : Math.max(0, gross - appFeeAmount - stripeFee);
-                const toStaff = isStaff
-                  ? Math.max(0, gross - appFeeAmount - stripeFee - storeCut)
-                  : 0;
-
-                await tipRef.set(
-                  {
-                    fees: {
-                      platform: appFeeAmount,
-                      stripe: {
-                        amount: stripeFee,
-                        currency: stripeFeeCurrency,
-                        balanceTransactionId: bt?.id ?? null,
-                      },
-                    },
-                    net: {
-                      toStore: toStore,
-                      toStaff: toStaff,
-                    },
-                    feesComputedAt: admin.firestore.FieldValue.serverTimestamp(),
-                  },
-                  { merge: true }
-                );
-              }
-            } catch (err) {
-              console.error("Failed to enrich tip with stripe fee:", err);
-            }
-          }
-        }
-
-        // ============================================================
-        // 2) Checkout セッションのその他
-        // ============================================================
-        if (type === "checkout.session.expired") {
-          const session = event.data.object as Stripe.Checkout.Session;
-          await db
-            .collection("tipSessions")
-            .doc(session.id)
-            .set(
-              {
-                status: "expired",
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              },
-              { merge: true }
-            );
-        }
-
-        if (type === "checkout.session.async_payment_failed") {
-          const session = event.data.object as Stripe.Checkout.Session;
-          await db
-            .collection("tipSessions")
-            .doc(session.id)
-            .set(
-              {
-                status: "failed",
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              },
-              { merge: true }
-            );
-        }
-
-        // ============================================================
-        // 3) 購読（作成/更新/削除）
-        // ============================================================
-        if (
-          type === "customer.subscription.created" ||
-          type === "customer.subscription.updated"
-        ) {
-          const sub = event.data.object as Stripe.Subscription;
-          const tenantId = sub.metadata?.tenantId as string | undefined;
-          const plan = sub.metadata?.plan as string | undefined;
-
-          if (tenantId) {
             let feePercent: number | undefined;
             if (plan) {
               const planSnap = await db.doc(`billing/plans/${plan}`).get();
-              feePercent = planSnap.exists
-                ? (planSnap.data()?.feePercent as number | undefined)
-                : undefined;
+              feePercent = planSnap.exists ? (planSnap.data()?.feePercent as number | undefined) : undefined;
             }
 
-            await db
-              .collection("tenants")
-              .doc(tenantId)
-              .set(
-                {
-                  subscription: {
-                    plan,
-                    status: sub.status,
-                    stripeCustomerId: (sub.customer as string) ?? undefined,
-                    stripeSubscriptionId: sub.id,
-                    currentPeriodEnd: admin.firestore.Timestamp.fromMillis(
-                      sub.current_period_end * 1000
-                    ),
-                    ...(typeof feePercent === "number" ? { feePercent } : {}),
-                  },
+            // uid の確定（meta 優先 → index）
+            let uid = uidMeta;
+            if (!uid) {
+              const tRefIdx = await tenantRefByIndex(tenantId);
+              uid = tRefIdx.parent!.id;
+            }
+            const tRef = tenantRefByUid(uid!, tenantId);
+
+            await tRef.set(
+              {
+                subscription: {
+                  plan,
+                  status: sub.status,
+                  stripeCustomerId: customerId,
+                  stripeSubscriptionId: sub.id,
+                  currentPeriodEnd: admin.firestore.Timestamp.fromMillis(sub.current_period_end * 1000),
+                  ...(typeof feePercent === "number" ? { feePercent } : {}),
                 },
-                { merge: true }
-              );
+              },
+              { merge: true }
+            );
+          }
+
+          await docRef.set({ handled: true }, { merge: true });
+          res.sendStatus(200);
+          return;
+        }
+
+        // B. 初期費用（mode=payment & kind=initial_fee）
+        if (session.mode === "payment") {
+          let tenantId =
+            (session.metadata?.tenantId as string | undefined) ??
+            (session.client_reference_id as string | undefined);
+
+          let uidMeta = session.metadata?.uid as string | undefined;
+
+          let isInitialFee = false;
+          const paymentIntentId = session.payment_intent as string | undefined;
+          if (paymentIntentId) {
+            const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+            const kind =
+              (pi.metadata?.kind as string | undefined) ??
+              (session.metadata?.kind as string | undefined);
+            if (!tenantId) tenantId = pi.metadata?.tenantId as string | undefined;
+            if (!uidMeta) uidMeta = pi.metadata?.uid as string | undefined;
+            isInitialFee = kind === "initial_fee";
+          }
+
+          if (isInitialFee && tenantId) {
+            let uid = uidMeta;
+            if (!uid) {
+              const tRefIdx = await tenantRefByIndex(tenantId);
+              uid = tRefIdx.parent!.id;
+            }
+            const tRef = tenantRefByUid(uid!, tenantId);
+
+            await tRef.set(
+              {
+                initialFee: {
+                  status: "paid",
+                  amount: session.amount_total ?? 0,
+                  currency: (session.currency ?? "jpy").toUpperCase(),
+                  stripePaymentIntentId: paymentIntentId ?? null,
+                  stripeCheckoutSessionId: session.id,
+                  paidAt: admin.firestore.FieldValue.serverTimestamp(),
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                },
+              },
+              { merge: true }
+            );
+
+            await docRef.set({ handled: true }, { merge: true });
+            res.sendStatus(200);
+            return;
           }
         }
 
-        if (type === "customer.subscription.deleted") {
-          const sub = event.data.object as Stripe.Subscription;
-          const tenantId = sub.metadata?.tenantId as string | undefined;
+        // C. チップ（mode=payment の通常ルート）
+        const sid = session.id;
+        const tenantIdMeta = session.metadata?.tenantId as string | undefined;
+        const employeeId = session.metadata?.employeeId as string | undefined;
+        let employeeName = session.metadata?.employeeName as string | undefined;
+        const payIntentId = session.payment_intent as string | undefined;
+        let uid = session.metadata?.uid as string | undefined;
 
-          if (tenantId) {
-            await db
-              .collection("tenants")
-              .doc(tenantId)
-              .set(
+        const stripeCreatedSec =
+          (session.created as number | undefined) ?? (event.created as number);
+        const createdAtTs = admin.firestore.Timestamp.fromMillis(
+          (stripeCreatedSec ?? Math.floor(Date.now() / 1000)) * 1000
+        );
+
+        if (!tenantIdMeta) {
+          console.error("checkout.session.completed: missing tenantId in metadata");
+        } else {
+          if (!uid) {
+            const tRefIdx = await tenantRefByIndex(tenantIdMeta);
+            uid = tRefIdx.parent!.id;
+          }
+          const tRef = tenantRefByUid(uid!, tenantIdMeta);
+
+          await tRef
+            .collection("tipSessions")
+            .doc(sid)
+            .set(
+              {
+                status: "paid",
+                paidAt: admin.firestore.FieldValue.serverTimestamp(),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              },
+              { merge: true }
+            );
+
+          const tipDocId =
+            (session.metadata?.tipDocId as string | undefined) || payIntentId || sid;
+
+          let storeName = session.metadata?.storeName as string | undefined;
+          if (!storeName) {
+            const tSnap = await tRef.get();
+            storeName = (tSnap.exists && (tSnap.data()?.name as string)) || "Store";
+          }
+
+          if (employeeId && !employeeName) {
+            const eSnap = await tRef.collection("employees").doc(employeeId).get();
+            employeeName = (eSnap.exists && (eSnap.data()?.name as string)) || "Staff";
+          }
+
+          const recipient = employeeId
+            ? { type: "employee", employeeId, employeeName: employeeName || "Staff" }
+            : { type: "store", storeName: storeName! };
+
+          const tipRef = tRef.collection("tips").doc(tipDocId);
+          const tipSnap = await tipRef.get();
+          const existingCreatedAt = tipSnap.exists ? tipSnap.data()?.createdAt : null;
+
+          await tipRef.set(
+            {
+              tenantId: tenantIdMeta,
+              sessionId: sid,
+              amount: session.amount_total ?? 0,
+              currency: (session.currency ?? "jpy").toUpperCase(),
+              status: "succeeded",
+              stripePaymentIntentId: payIntentId ?? "",
+              recipient,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              createdAt: existingCreatedAt ?? createdAtTs,
+            },
+            { merge: true }
+          );
+
+          const tipAfter = await tipRef.get();
+          const alreadySplit = !!tipAfter.data()?.split?.storeAmount;
+          if (!alreadySplit) {
+            const eff = await pickEffectiveRule(tenantIdMeta, createdAtTs.toDate());
+            const totalMinor = (session.amount_total ?? 0) as number;
+            const { storeAmount, staffAmount } = splitMinor(
+              totalMinor,
+              eff.percent,
+              eff.fixed
+            );
+
+            await tipRef.set(
+              {
+                split: {
+                  percentApplied: eff.percent,
+                  fixedApplied: eff.fixed,
+                  effectiveFrom: eff.effectiveFrom ?? null,
+                  computedAt: admin.firestore.FieldValue.serverTimestamp(),
+                  storeAmount,
+                  staffAmount,
+                },
+              },
+              { merge: true }
+            );
+          }
+
+          try {
+            if (payIntentId) {
+              const pi = await stripe.paymentIntents.retrieve(payIntentId, {
+                expand: ["latest_charge.balance_transaction"],
+              });
+              const latestCharge = (pi.latest_charge as Stripe.Charge | null) || null;
+              const bt =
+                latestCharge?.balance_transaction as
+                  | Stripe.BalanceTransaction
+                  | undefined;
+
+              const stripeFee = bt?.fee ?? 0;
+              const stripeFeeCurrency =
+                bt?.currency?.toUpperCase() ??
+                (session.currency ?? "jpy").toUpperCase();
+
+              const appFeeAmount = latestCharge?.application_fee_amount ?? 0;
+
+              const splitNow = (await tipRef.get()).data()?.split ?? {};
+              const storeCut = (splitNow.storeAmount as number | undefined) ?? 0;
+
+              const gross = (session.amount_total ?? 0) as number;
+              const isStaff = !!employeeId;
+
+              const toStore = isStaff
+                ? storeCut
+                : Math.max(0, gross - appFeeAmount - stripeFee);
+              const toStaff = isStaff
+                ? Math.max(0, gross - appFeeAmount - stripeFee - storeCut)
+                : 0;
+
+              await tipRef.set(
                 {
-                  subscription: {
-                    status: "canceled",
-                    stripeSubscriptionId: sub.id,
-                    currentPeriodEnd: admin.firestore.Timestamp.fromMillis(
-                      sub.current_period_end * 1000
-                    ),
+                  fees: {
+                    platform: appFeeAmount,
+                    stripe: {
+                      amount: stripeFee,
+                      currency: stripeFeeCurrency,
+                      balanceTransactionId: bt?.id ?? null,
+                    },
                   },
+                  net: {
+                    toStore: toStore,
+                    toStaff: toStaff,
+                  },
+                  feesComputedAt: admin.firestore.FieldValue.serverTimestamp(),
                 },
                 { merge: true }
               );
+            }
+          } catch (err) {
+            console.error("Failed to enrich tip with stripe fee:", err);
           }
         }
+      }
 
-        // ============================================================
-        // 4) 請求書（決済成功/失敗）
-        // ============================================================
-        if (
-          type === "invoice.payment_succeeded" ||
-          type === "invoice.payment_failed"
-        ) {
-          const inv = event.data.object as Stripe.Invoice;
-          const customerId = inv.customer as string;
+      /* ========== 2) Checkout その他 ========== */
+      if (type === "checkout.session.expired" || type === "checkout.session.async_payment_failed") {
+        const session = event.data.object as Stripe.Checkout.Session;
+        const tenantId = session.metadata?.tenantId as string | undefined;
+        if (tenantId) {
+          let uid = session.metadata?.uid as string | undefined;
+          if (!uid) {
+            const tRefIdx = await tenantRefByIndex(tenantId);
+            uid = tRefIdx.parent!.id;
+          }
+          await tenantRefByUid(uid!, tenantId)
+            .collection("tipSessions")
+            .doc(session.id)
+            .set(
+              {
+                status: type.endsWith("failed") ? "failed" : "expired",
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              },
+              { merge: true }
+            );
+        }
+      }
 
-          const qs = await db
-            .collection("tenants")
-            .where("subscription.stripeCustomerId", "==", customerId)
-            .limit(1)
-            .get();
+      /* ========== 3) 購読の作成/更新/削除 ========== */
+      if (type === "customer.subscription.created" || type === "customer.subscription.updated") {
+        const sub = event.data.object as Stripe.Subscription;
+        const tenantId = sub.metadata?.tenantId as string | undefined;
+        const plan = sub.metadata?.plan as string | undefined;
+        let uid = sub.metadata?.uid as string | undefined;
 
-          if (!qs.empty) {
-            const tRef = qs.docs[0].ref;
-            await tRef
+        if (tenantId) {
+          if (!uid) {
+            const tRefIdx = await tenantRefByIndex(tenantId);
+            uid = tRefIdx.parent!.id;
+          }
+          let feePercent: number | undefined;
+          if (plan) {
+            const planSnap = await db.doc(`billing/plans/${plan}`).get();
+            feePercent = planSnap.exists ? (planSnap.data()?.feePercent as number | undefined) : undefined;
+          }
+
+          await tenantRefByUid(uid!, tenantId).set(
+            {
+              subscription: {
+                plan,
+                status: sub.status,
+                stripeCustomerId: (sub.customer as string) ?? undefined,
+                stripeSubscriptionId: sub.id,
+                currentPeriodEnd: admin.firestore.Timestamp.fromMillis(sub.current_period_end * 1000),
+                ...(typeof feePercent === "number" ? { feePercent } : {}),
+              },
+            },
+            { merge: true }
+          );
+        }
+      }
+
+      if (type === "customer.subscription.deleted") {
+        const sub = event.data.object as Stripe.Subscription;
+        const tenantId = sub.metadata?.tenantId as string | undefined;
+        let uid = sub.metadata?.uid as string | undefined;
+
+        if (tenantId) {
+          if (!uid) {
+            const tRefIdx = await tenantRefByIndex(tenantId);
+            uid = tRefIdx.parent!.id;
+          }
+          await tenantRefByUid(uid!, tenantId).set(
+            {
+              subscription: {
+                status: "canceled",
+                stripeSubscriptionId: sub.id,
+                currentPeriodEnd: admin.firestore.Timestamp.fromMillis(sub.current_period_end * 1000),
+              },
+            },
+            { merge: true }
+          );
+        }
+      }
+
+      /* ========== 4) 請求書 ========== */
+      if (type === "invoice.payment_succeeded" || type === "invoice.payment_failed") {
+        const inv = event.data.object as Stripe.Invoice;
+        const customerId = inv.customer as string;
+
+        // すべての uid スペースを横断検索は重い → 事前に subscription.stripeCustomerId をテナント doc に保存しているので
+        // tenantIndex 全件 → 1件ずつ見るのは非効率。ここは控えめにサンプル実装として、tenantIndex を走査して最初に見つかったものに書き込み。
+        const idxSnap = await db.collection("tenantIndex").get();
+        for (const d of idxSnap.docs) {
+          const { uid, tenantId } = d.data() as TenantIndexDoc;
+          const t = await db.collection(uid).doc(tenantId).get();
+          if (t.exists && t.get("subscription.stripeCustomerId") === customerId) {
+            await db
+              .collection(uid)
+              .doc(tenantId)
               .collection("invoices")
               .doc(inv.id)
               .set(
@@ -938,179 +995,177 @@ export const stripeWebhook =
                   invoice_pdf: inv.invoice_pdf,
                   created: admin.firestore.Timestamp.fromMillis(inv.created * 1000),
                   period_start: admin.firestore.Timestamp.fromMillis(
-                    ((inv.lines?.data?.[0]?.period?.start ??
-                      inv.created) as number) * 1000
+                    ((inv.lines?.data?.[0]?.period?.start ?? inv.created) as number) * 1000
                   ),
                   period_end: admin.firestore.Timestamp.fromMillis(
-                    ((inv.lines?.data?.[0]?.period?.end ??
-                      inv.created) as number) * 1000
+                    ((inv.lines?.data?.[0]?.period?.end ?? inv.created) as number) * 1000
                   ),
                   updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                 },
                 { merge: true }
               );
+            break;
           }
         }
+      }
 
-        // ============================================================
-        // 5) Connect アカウント状態の同期
-        // ============================================================
-        if (type === "account.updated") {
-          const acct = event.data.object as Stripe.Account;
-          const qs = await db
-            .collection("tenants")
-            .where("stripeAccountId", "==", acct.id)
-            .limit(1)
-            .get();
+      /* ========== 5) Connect アカウント状態 ========== */
+      if (type === "account.updated") {
+        const acct = event.data.object as Stripe.Account;
+        try {
+          const tRef = await tenantRefByStripeAccount(acct.id);
+          await tRef.set(
+            {
+              connect: {
+                charges_enabled: !!acct.charges_enabled,
+                payouts_enabled: !!acct.payouts_enabled,
+                details_submitted: !!acct.details_submitted,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              },
+            },
+            { merge: true }
+          );
+        } catch {
+          console.warn("No tenant found in tenantStripeIndex for", acct.id);
+        }
+      }
 
-          if (!qs.empty) {
-            const tRef = qs.docs[0].ref;
-            await tRef.set(
-              {
-                connect: {
-                  charges_enabled: !!acct.charges_enabled,
-                  payouts_enabled: !!acct.payouts_enabled,
-                  details_submitted: !!acct.details_submitted,
+      /* ========== 6) 保険: PI から初期費用確定 ========== */
+      if (type === "payment_intent.succeeded") {
+        const pi = event.data.object as Stripe.PaymentIntent;
+        const kind = pi.metadata?.kind as string | undefined;
+        const tenantId = pi.metadata?.tenantId as string | undefined;
+        let uid = pi.metadata?.uid as string | undefined;
+
+        if (kind === "initial_fee" && tenantId) {
+          if (!uid) {
+            const tRefIdx = await tenantRefByIndex(tenantId);
+            uid = tRefIdx.parent!.id;
+          }
+          const tRef = tenantRefByUid(uid!, tenantId);
+          await tRef.set(
+            {
+              billing: {
+                initialFee: {
+                  status: "paid",
+                  amount: pi.amount_received ?? pi.amount ?? 0,
+                  currency: (pi.currency ?? "jpy").toUpperCase(),
+                  stripePaymentIntentId: pi.id,
+                  paidAt: admin.firestore.FieldValue.serverTimestamp(),
                   updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                 },
               },
-              { merge: true }
-            );
-          }
+            },
+            { merge: true }
+          );
         }
-
-        // ============================================================
-        // 6) （保険）payment_intent.succeeded でも初期費用を確定
-        //    ※ Checkout イベントが取り逃された場合に備えた冪等ハンドリング
-        // ============================================================
-        if (type === "payment_intent.succeeded") {
-          const pi = event.data.object as Stripe.PaymentIntent;
-          const kind = pi.metadata?.kind as string | undefined;
-          const tenantId = pi.metadata?.tenantId as string | undefined;
-
-          if (kind === "initial_fee" && tenantId) {
-            const tRef = db.collection("tenants").doc(tenantId);
-            await tRef.set(
-              {
-                billing: {
-                  initialFee: {
-                    status: "paid",
-                    amount: pi.amount_received ?? pi.amount ?? 0,
-                    currency: (pi.currency ?? "jpy").toUpperCase(),
-                    stripePaymentIntentId: pi.id,
-                    paidAt: admin.firestore.FieldValue.serverTimestamp(),
-                    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                  },
-                },
-              },
-              { merge: true }
-            );
-          }
-        }
-
-        await docRef.set({ handled: true }, { merge: true });
-        res.sendStatus(200);
-        return;
-      } catch (e) {
-        console.error(e);
-        res.sendStatus(500);
-        return;
       }
+
+      await docRef.set({ handled: true }, { merge: true });
+      res.sendStatus(200);
+      return;
+    } catch (e) {
+      console.error(e);
+      res.sendStatus(500);
+      return;
+    }
+  });
+
+/* ===================== Connect: Express（テナント直・参考） ===================== */
+export const createConnectAccountForTenant = onCall(
+  {
+    region: "us-central1",
+    memory: "256MiB",
+    cors: [APP_ORIGIN, "http://localhost:5173"],
+    secrets: ["STRIPE_SECRET_KEY"],
+  },
+  async (req) => {
+    if (!req.auth) throw new HttpsError("unauthenticated", "auth required");
+    const tenantId = req.data?.tenantId as string | undefined;
+    if (!tenantId) throw new HttpsError("invalid-argument", "tenantId required");
+
+    const stripe = stripeClient();
+
+    // 旧: tenants/{tenantId}
+    // Express 用は“グローバル”で持っている前提だったのでここは保持（必要なら uid 名空間化）
+    const tRef = db.collection("tenants").doc(tenantId);
+    const tSnap = await tRef.get();
+    if (!tSnap.exists) throw new HttpsError("not-found", "tenant not found");
+    const existing = tSnap.data()?.stripeAccountId as string | undefined;
+    if (existing) return { stripeAccountId: existing, already: true };
+
+    const acct = await stripe.accounts.create({
+      type: "express",
+      capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
     });
 
-
-
-    export const createConnectAccountForTenant = onCall(
+    await tRef.set(
       {
-        region: "us-central1",
-        memory: "256MiB",
-        cors: ["https://venerable-mermaid-fcf8c8.netlify.app", "http://localhost:5173"],
-        secrets: ["STRIPE_SECRET_KEY"],
+        stripeAccountId: acct.id,
+        connect: {
+          charges_enabled: !!acct.charges_enabled,
+          payouts_enabled: !!acct.payouts_enabled,
+          details_submitted: !!acct.details_submitted,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
       },
-      async (req) => {
-        if (!req.auth) throw new HttpsError("unauthenticated", "auth required");
-        const tenantId = req.data?.tenantId as string | undefined;
-        if (!tenantId) throw new HttpsError("invalid-argument", "tenantId required");
-    
-        const tRef = db.collection("tenants").doc(tenantId);
-        const tSnap = await tRef.get();
-        if (!tSnap.exists) throw new HttpsError("not-found", "tenant not found");
-        const existing = tSnap.data()?.stripeAccountId as string | undefined;
-        if (existing) return { stripeAccountId: existing, already: true };
-    
-        const stripe = stripeClient();
-        const acct = await stripe.accounts.create({
-          type: "express",
-          capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
-        });
-    
-        await tRef.set({
-          stripeAccountId: acct.id,
-          connect: {
-            charges_enabled: !!acct.charges_enabled,
-            payouts_enabled: !!acct.payouts_enabled,
-            details_submitted: !!acct.details_submitted,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          },
-        }, { merge: true });
-    
-        return { stripeAccountId: acct.id };
-      }
-    );
-    
-    export const createAccountOnboardingLink = onCall(
-      {
-        region: "us-central1",
-        memory: "256MiB",
-        cors: ["https://venerable-mermaid-fcf8c8.netlify.app", "http://localhost:5173"],
-        secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL"],
-      },
-      async (req) => {
-        if (!req.auth) throw new HttpsError("unauthenticated", "auth required");
-        const tenantId = req.data?.tenantId as string | undefined;
-        if (!tenantId) throw new HttpsError("invalid-argument", "tenantId required");
-    
-        const t = await db.collection("tenants").doc(tenantId).get();
-        const acctId = t.data()?.stripeAccountId as string | undefined;
-        if (!acctId) throw new HttpsError("failed-precondition", "no stripeAccountId");
-    
-        const stripe = stripeClient();
-        const BASE = process.env.FRONTEND_BASE_URL!;
-        const link = await stripe.accountLinks.create({
-          account: acctId,
-          type: "account_onboarding",
-          refresh_url: `${BASE}/#/connect-refresh?t=${tenantId}`,
-          return_url: `${BASE}/#/connect-return?t=${tenantId}`,
-        });
-        return { url: link.url };
-      }
+      { merge: true }
     );
 
-    /** 1) 招待を作成してメール送信 */
+    return { stripeAccountId: acct.id };
+  }
+);
+
+export const createAccountOnboardingLink = onCall(
+  {
+    region: "us-central1",
+    memory: "256MiB",
+    cors: [APP_ORIGIN, "http://localhost:5173"],
+    secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL"],
+  },
+  async (req) => {
+    if (!req.auth) throw new HttpsError("unauthenticated", "auth required");
+    const tenantId = req.data?.tenantId as string | undefined;
+    if (!tenantId) throw new HttpsError("invalid-argument", "tenantId required");
+
+    const t = await db.collection("tenants").doc(tenantId).get();
+    const acctId = t.data()?.stripeAccountId as string | undefined;
+    if (!acctId) throw new HttpsError("failed-precondition", "no stripeAccountId");
+
+    const stripe = stripeClient();
+    const BASE = process.env.FRONTEND_BASE_URL!;
+    const link = await stripe.accountLinks.create({
+      account: acctId,
+      type: "account_onboarding",
+      refresh_url: `${BASE}/#/connect-refresh?t=${tenantId}`,
+      return_url: `${BASE}/#/connect-return?t=${tenantId}`,
+    });
+    return { url: link.url };
+  }
+);
+
+/* ===================== 招待（そのまま） ===================== */
 export const inviteTenantAdmin = functions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
-  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in');
+  if (!uid) throw new functions.https.HttpsError("unauthenticated", "Sign in");
 
   const tenantId: string = data?.tenantId;
-  const emailRaw: string = (data?.email || '').toString();
+  const emailRaw: string = (data?.email || "").toString();
   const emailLower = emailRaw.trim().toLowerCase();
-  if (!tenantId || !emailLower.includes('@')) {
-    throw new functions.https.HttpsError('invalid-argument', 'bad tenantId/email');
+  if (!tenantId || !emailLower.includes("@")) {
+    throw new functions.https.HttpsError("invalid-argument", "bad tenantId/email");
   }
   await assertTenantAdmin(tenantId, uid);
 
-  // token作成（メールに入れるのは生token、DBにはhashだけ保存）
-  const token = crypto.randomBytes(32).toString('hex');
+  const token = crypto.randomBytes(32).toString("hex");
   const tokenHash = sha256(token);
-  const expiresAt = admin.firestore.Timestamp.fromDate(
-    new Date(Date.now() + 1000 * 60 * 60 * 24 * 7) // 7日
-  );
+  const expiresAt = admin.firestore.Timestamp.fromDate(new Date(Date.now() + 1000 * 60 * 60 * 24 * 7));
 
   const inviteRef = db.collection(`tenants/${tenantId}/invites`).doc();
   await inviteRef.set({
     emailLower,
     tokenHash,
-    status: 'pending',
+    status: "pending",
     invitedBy: {
       uid,
       email: context.auth?.token?.email || null,
@@ -1121,11 +1176,10 @@ export const inviteTenantAdmin = functions.https.onCall(async (data, context) =>
 
   const acceptUrl = `${APP_ORIGIN}/#/admin-invite?tenantId=${tenantId}&token=${token}`;
 
-  // 送信方法A：Firebase Extension「Firestore Send Email」使用（/mailに積む）
-  await db.collection('mail').add({
+  await db.collection("mail").add({
     to: emailLower,
     message: {
-      subject: '管理者招待のお知らせ',
+      subject: "管理者招待のお知らせ",
       html: `
         <p>管理者として招待されました。</p>
         <p><a href="${acceptUrl}">こちらのリンク</a>を開いて承認してください（7日以内）。</p>
@@ -1134,56 +1188,50 @@ export const inviteTenantAdmin = functions.https.onCall(async (data, context) =>
     },
   });
 
-  // 送信方法B：SendGrid/SES等を直接呼ぶ場合はここでAPIコール
-
   return { ok: true };
 });
 
-/** 2) 受け入れ（ログイン済ユーザーが token を提出） */
 export const acceptTenantAdmin = functions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
-  const userEmail = (context.auth?.token?.email || '').toLowerCase();
+  const userEmail = (context.auth?.token?.email || "").toLowerCase();
   if (!uid || !userEmail) {
-    throw new functions.https.HttpsError('unauthenticated', 'Sign in with email');
+    throw new functions.https.HttpsError("unauthenticated", "Sign-in with email");
   }
 
   const tenantId: string = data?.tenantId;
   const token: string = data?.token;
   if (!tenantId || !token) {
-    throw new functions.https.HttpsError('invalid-argument', 'tenantId/token required');
+    throw new functions.https.HttpsError("invalid-argument", "tenantId/token required");
   }
   const tokenHash = sha256(token);
 
-  // 招待の検証（メール一致・未使用・未失効）
   const invitesSnap = await db
     .collection(`tenants/${tenantId}/invites`)
-    .where('tokenHash', '==', tokenHash)
+    .where("tokenHash", "==", tokenHash)
     .limit(1)
     .get();
   if (invitesSnap.empty) {
-    throw new functions.https.HttpsError('not-found', 'Invite not found');
+    throw new functions.https.HttpsError("not-found", "Invite not found");
   }
   const inviteRef = invitesSnap.docs[0].ref;
   const inv = invitesSnap.docs[0].data();
 
-  if (inv.status !== 'pending') {
-    throw new functions.https.HttpsError('failed-precondition', 'Invite already used/revoked');
+  if (inv.status !== "pending") {
+    throw new functions.https.HttpsError("failed-precondition", "Invite already used/revoked");
   }
   const now = admin.firestore.Timestamp.now();
   if (inv.expiresAt && now.toMillis() > inv.expiresAt.toMillis()) {
-    throw new functions.https.HttpsError('deadline-exceeded', 'Invite expired');
+    throw new functions.https.HttpsError("deadline-exceeded", "Invite expired");
   }
   if (inv.emailLower !== userEmail) {
-    throw new functions.https.HttpsError('permission-denied', 'Email does not match invite');
+    throw new functions.https.HttpsError("permission-denied", "Email does not match invite");
   }
 
-  // すでにadminならスキップ
   const memRef = db.doc(`tenants/${tenantId}/members/${uid}`);
   const mem = await memRef.get();
   if (!mem.exists) {
-    // 追加
     await memRef.set({
-      role: 'admin',
+      role: "admin",
       email: userEmail,
       displayName: context.auth?.token?.name || null,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1194,9 +1242,8 @@ export const acceptTenantAdmin = functions.https.onCall(async (data, context) =>
     });
   }
 
-  // 招待を消費
   await inviteRef.update({
-    status: 'accepted',
+    status: "accepted",
     acceptedBy: uid,
     acceptedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
@@ -1204,261 +1251,97 @@ export const acceptTenantAdmin = functions.https.onCall(async (data, context) =>
   return { ok: true };
 });
 
-/** （任意）招待取消 */
 export const revokeInvite = functions.https.onCall(async (data, context) => {
   const uid = context.auth?.uid;
-  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Sign in');
+  if (!uid) throw new functions.https.HttpsError("unauthenticated", "Sign in");
   const tenantId: string = data?.tenantId;
   const inviteId: string = data?.inviteId;
-  if (!tenantId || !inviteId) throw new functions.https.HttpsError('invalid-argument', 'bad args');
+  if (!tenantId || !inviteId) throw new functions.https.HttpsError("invalid-argument", "bad args");
   await assertTenantAdmin(tenantId, uid);
-  await db.doc(`tenants/${tenantId}/invites/${inviteId}`).update({ status: 'revoked' });
+  await db.doc(`tenants/${tenantId}/invites/${inviteId}`).update({ status: "revoked" });
   return { ok: true };
 });
 
-
-// export const createCheckoutSession =
-//   functions.region("us-central1")
-//   .runWith({ secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL"], memory: "256MB" })
-//   .https.onCall(async (data, ctx) => {
-//     const { tenantId } = requireAuthAndTenant(ctx);
-//     const { amount, currency = "JPY", memo = "" } = data as {
-//       amount: number; currency?: string; memo?: string;
-//     };
-
-//     if (!Number.isInteger(amount) || amount <= 0) {
-//       throw new functions.https.HttpsError("invalid-argument", "amount must be positive integer");
-//     }
-
-//     // テナントの稼働状態を確認
-//     const tDoc = await db.collection("tenants").doc(tenantId).get();
-//     if (!tDoc.exists || tDoc.data()!.status !== "active") {
-//       throw new functions.https.HttpsError("failed-precondition", "Tenant suspended or not found");
-//     }
-
-//     const FRONTEND_BASE_URL = requireEnv("FRONTEND_BASE_URL");
-//     const stripe = stripeClient();
-
-//     try {
-//       // Stripe Checkout Session 作成（Hosted）
-//       const session = await stripe.checkout.sessions.create({
-//         mode: "payment",
-//         payment_method_types: ["card", "link"],
-//         line_items: [
-//           {
-//             price_data: {
-//               currency,
-//               product_data: { name: `Order - ${tDoc.data()!.name}` },
-//               unit_amount: amount,
-//             },
-//             quantity: 1,
-//           },
-//         ],
-//         // Netlifyでも安全なハッシュ方式
-//         success_url: `${FRONTEND_BASE_URL}/#/payer?sid={CHECKOUT_SESSION_ID}`,
-//         cancel_url: `${FRONTEND_BASE_URL}/#/p?t=${tenantId}&canceled=true`,
-//         metadata: { tenantId, memo },
-//       });
-
-//       // Firestore にセッション保存
-//       await db.collection("paymentSessions").doc(session.id).set({
-//         tenantId,
-//         amount,
-//         currency,
-//         status: "pending",
-//         stripeCheckoutUrl: session.url,
-//         stripeSessionId: session.id,
-//         createdAt: admin.firestore.FieldValue.serverTimestamp(),
-//         expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + 30 * 60 * 1000), // 30分
-//         memo,
-//       });
-
-//       return { checkoutUrl: session.url, sessionId: session.id };
-//     } catch (err: any) {
-//       // Stripe 由来の失敗をクライアントに分かりやすく返す
-//       throw new functions.https.HttpsError(
-//         "failed-precondition",
-//         err?.message || "Stripe error",
-//         { source: "stripe", code: err?.type || "stripe_error" }
-//       );
-//     }
-//   });
-    
-
-
-// ---- 環境変数 ----
-// firebase functions:config:set stripe.secret="sk_live_or_test_***" stripe.whsec="whsec_***" app.base_url="https://yourapp.example"
-
-
-// if (!STRIPE_SECRET) {
-//   throw new Error("Missing functions.config().stripe.secret");
-// }
-
-
-
-// Firestore 側のプラン定義： billing/plans/{planId} （例: A / B / C）
-//   - stripePriceId: string（Stripe の recurring price ID）
-//   - feePercent: number（アプリ内で使う手数料表示用など）
-type PlanDoc = { stripePriceId: string; feePercent: number };
-
-// tenant ドキュメント上に保持する購読情報
-type TenantSubscription = {
-  plan?: string;                // 'A' | 'B' | 'C' など
-  status?: string;              // active / trialing / past_due / canceled...
-  feePercent?: number;          // Firestore のプラン doc から複製
-  stripeCustomerId?: string;
-  stripeSubscriptionId?: string;
-  currentPeriodEnd?: admin.firestore.Timestamp;
-};
-
-async function getTenantRef(tenantId: string) {
-  return db.collection("tenants").doc(tenantId);
-}
-
-type Plan = {
-  stripePriceId: string;
-  name?: string;
-  feePercent?: number;
-};
-
-async function getPlanFromDb(planId: string): Promise<Plan> {
-  // ① /billingPlans/{planId} というコレクションに各プランDoc
-  let snap = await db.collection("billingPlans").doc(planId).get();
-  if (snap.exists) return snap.data() as Plan;
-
-  // ② /billing/plans というDocに { A: {...}, B: {...} } のようなフィールドで格納
-  snap = await db.collection("billing").doc("plans").get();
-  if (snap.exists) {
-    const data = snap.data() || {};
-    const candidate =
-      (data.plans && data.plans[planId]) || // {plans: {A:{}, B:{}}}
-      data[planId];                         // {A:{}, B:{}} を直置き
-    if (candidate && candidate.stripePriceId) return candidate as Plan;
-  }
-
-  // ③ /billing/plans/plans/{planId}（サブコレクションにDoc）※必要なら
-  snap = await db.collection("billing").doc("plans").collection("plans").doc(planId).get();
-  if (snap.exists) return snap.data() as Plan;
-
-  throw new functions.https.HttpsError(
-    "not-found",
-    `Plan "${planId}" not found in billingPlans/{id}, billing/plans(plans map), or billing/plans/plans/{id}.`
-  );
-}
-
-// 既存 or 新規の Stripe Customer を返し、tenant に保存
-async function ensureCustomer(tenantId: string, email?: string, name?: string): Promise<string> {
-    const stripe = new Stripe(requireEnv("STRIPE_SECRET_KEY"), {
-    apiVersion: "2023-10-16",
-  });
-  const tenantRef = await getTenantRef(tenantId);
-  const tSnap = await tenantRef.get();
-  const tData = (tSnap.data() || {}) as { subscription?: TenantSubscription; info?: any };
-
-  const sub = tData.subscription || {};
-  if (sub.stripeCustomerId) return sub.stripeCustomerId;
-
-  const customer = await stripe.customers.create({
-    email,
-    name,
-    metadata: { tenantId }
-  });
-
-  await tenantRef.set({
-    subscription: { ...(sub || {}), stripeCustomerId: customer.id }
-  }, { merge: true });
-
-  return customer.id;
-}
-
-// ============ onCall: Checkout セッション生成（定期課金） ============
-// data: { tenantId: string, plan: string, email?: string, name?: string }
+/* ===================== サブスク Checkout ===================== */
 export const createSubscriptionCheckout = functions
   .region("us-central1")
-  .runWith({ secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL"] }) // ★追加
+  .runWith({ secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL"] })
   .https.onCall(async (data, context) => {
+    const uid = context.auth?.uid;
+    if (!uid) throw new functions.https.HttpsError("unauthenticated", "Sign-in required");
+
     const { tenantId, plan, email, name } = (data || {}) as {
-      tenantId: string; plan: string; email?: string; name?: string;
+      tenantId: string;
+      plan: string;
+      email?: string;
+      name?: string;
     };
-    
     if (!tenantId || !plan) {
       throw new functions.https.HttpsError("invalid-argument", "tenantId and plan are required.");
     }
 
-    // Secret Manager から注入された環境変数を直接読む
-    const STRIPE_KEY   = process.env.STRIPE_SECRET_KEY;
-    const APP_ORIGIN   = process.env.FRONTEND_BASE_URL;
-    if (!STRIPE_KEY || !APP_ORIGIN) {
-      throw new functions.https.HttpsError("failed-precondition", "Missing required secrets.");
-    }
-
+    const STRIPE_KEY = process.env.STRIPE_SECRET_KEY!;
+    const APP_BASE = process.env.FRONTEND_BASE_URL!;
     const stripe = new Stripe(STRIPE_KEY, { apiVersion: "2023-10-16" });
 
-    // 以降は既存ロジックそのまま（抜粋）
     const planDoc = await getPlanFromDb(plan);
     const purchaserEmail = email || (context.auth?.token?.email as string | undefined);
-    const customerId = await ensureCustomer(tenantId, purchaserEmail, name);
+    const customerId = await ensureCustomer(uid, tenantId, purchaserEmail, name);
 
-    // createSubscriptionCheckout
-const successUrl = `${APP_ORIGIN}/#/?toast=tenant_created&tenant=${encodeURIComponent(tenantId)}&name=${encodeURIComponent(name || '')}`;
-const cancelUrl  = `${APP_ORIGIN}/#/`;
+    const subs = await stripe.subscriptions.list({
+      customer: customerId,
+      status: "all",
+      limit: 10,
+    });
+    const hasOngoing = subs.data.some((s) =>
+      ["active", "trialing", "past_due", "unpaid"].includes(s.status)
+    );
+    if (hasOngoing) {
+      const portal = await stripe.billingPortal.sessions.create({
+        customer: customerId,
+        return_url: `${APP_BASE}/#/settings?tenant=${encodeURIComponent(tenantId)}`,
+      });
+      return { alreadySubscribed: true, portalUrl: portal.url };
+    }
 
-
-    // 既存のサブスクがあるか Stripe に問い合わせ（価格で縛りたいなら price フィルタも）
-const subs = await stripe.subscriptions.list({
-  customer: customerId,
-  status: 'all', // 'active' だけだと見落とす場合がある
-  limit: 10,
-});
-
-// 1契約までのルール：有効系ステータスがあるなら新規チェックアウトを拒否
-const hasOngoing = subs.data.some(s =>
-  ['active', 'trialing', 'past_due', 'unpaid'].includes(s.status)
-);
-
-if (hasOngoing) {
-  // 既存客は Checkout させず、Billing Portal へ誘導（カード変更/請求履歴/解約/プラン変更）
-  const portal = await stripe.billingPortal.sessions.create({
-    customer: customerId,
-    return_url: `${APP_ORIGIN}/#/settings?tenant=${encodeURIComponent(tenantId)}`
-  });
-  // front 側で「すでに契約中です」と案内しつつ、portal.url を開く
-  return { alreadySubscribed: true, portalUrl: portal.url };
-}
-
+    const successUrl = `${APP_BASE}/stripe-bridge.html#event=subscribed&tenant=${encodeURIComponent(
+      tenantId
+    )}&plan=${encodeURIComponent(plan)}`;
+    const cancelUrl = `${APP_BASE}/stripe-bridge.html#event=subscription_canceled&tenant=${encodeURIComponent(
+      tenantId
+    )}`;
 
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: customerId,
       line_items: [{ price: planDoc.stripePriceId, quantity: 1 }],
       allow_promotion_codes: true,
-      subscription_data: { metadata: { tenantId, plan } },
+      subscription_data: { metadata: { tenantId, plan, uid } },
       success_url: successUrl,
       cancel_url: cancelUrl,
     });
 
+    await upsertTenantIndex(uid, tenantId);
     return { url: session.url };
   });
 
-// ============ onCall: Billing Portal（カード変更・請求履歴表示） ============
+/* ===================== Customer Portal ===================== */
 export const openCustomerPortal = functions
   .region("us-central1")
-  .runWith({ secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL"] }) // ★追加
+  .runWith({ secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL"] })
   .https.onCall(async (data, context) => {
+    const uid = context.auth?.uid;
+    if (!uid) throw new functions.https.HttpsError("unauthenticated", "Sign-in required");
     const { tenantId } = (data || {}) as { tenantId: string };
     if (!tenantId) {
       throw new functions.https.HttpsError("invalid-argument", "tenantId is required.");
     }
 
-    const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
-    const APP_ORIGIN = process.env.FRONTEND_BASE_URL;
-    if (!STRIPE_KEY || !APP_ORIGIN) {
-      throw new functions.https.HttpsError("failed-precondition", "Missing required secrets.");
-    }
-
+    const STRIPE_KEY = process.env.STRIPE_SECRET_KEY!;
+    const APP_BASE = process.env.FRONTEND_BASE_URL!;
     const stripe = new Stripe(STRIPE_KEY, { apiVersion: "2023-10-16" });
 
-    const tenantRef = await getTenantRef(tenantId);
+    const tenantRef = tenantRefByUid(uid, tenantId);
     const t = (await tenantRef.get()).data() as { subscription?: TenantSubscription } | undefined;
     const customerId = t?.subscription?.stripeCustomerId;
     if (!customerId) {
@@ -1467,31 +1350,28 @@ export const openCustomerPortal = functions
 
     const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
-      return_url: `${APP_ORIGIN}/#/store?tenant=${encodeURIComponent(tenantId)}`
+      return_url: `${APP_BASE}/#/store?tenant=${encodeURIComponent(tenantId)}`,
     });
 
     return { url: session.url };
   });
 
-
-// ============ onCall: 請求書一覧（アプリ内でも履歴確認したい場合） ============
+/* ===================== 請求書一覧 ===================== */
 export const listInvoices = functions
   .region("us-central1")
-  .runWith({ secrets: ["STRIPE_SECRET_KEY"] }) // ★追加
+  .runWith({ secrets: ["STRIPE_SECRET_KEY"] })
   .https.onCall(async (data, context) => {
+    const uid = context.auth?.uid;
+    if (!uid) throw new functions.https.HttpsError("unauthenticated", "Sign-in required");
     const { tenantId, limit } = (data || {}) as { tenantId: string; limit?: number };
     if (!tenantId) {
       throw new functions.https.HttpsError("invalid-argument", "tenantId is required.");
     }
 
-    const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
-    if (!STRIPE_KEY) {
-      throw new functions.https.HttpsError("failed-precondition", "Missing STRIPE_SECRET_KEY.");
-    }
-
+    const STRIPE_KEY = process.env.STRIPE_SECRET_KEY!;
     const stripe = new Stripe(STRIPE_KEY, { apiVersion: "2023-10-16" });
 
-    const tenantRef = await getTenantRef(tenantId);
+    const tenantRef = tenantRefByUid(uid, tenantId);
     const t = (await tenantRef.get()).data() as { subscription?: TenantSubscription } | undefined;
     const customerId = t?.subscription?.stripeCustomerId;
     if (!customerId) return { invoices: [] };
@@ -1501,7 +1381,7 @@ export const listInvoices = functions
       limit: Math.min(Math.max(limit ?? 12, 1), 50),
     });
 
-    const invoices = resp.data.map(inv => ({
+    const invoices = resp.data.map((inv) => ({
       id: inv.id,
       number: inv.number,
       amount_due: inv.amount_due,
@@ -1511,20 +1391,19 @@ export const listInvoices = functions
       hosted_invoice_url: inv.hosted_invoice_url,
       invoice_pdf: inv.invoice_pdf,
       period_start: inv.lines?.data?.[0]?.period?.start ?? inv.created,
-      period_end:   inv.lines?.data?.[0]?.period?.end   ?? inv.created,
+      period_end: inv.lines?.data?.[0]?.period?.end ?? inv.created,
       created: inv.created,
     }));
 
     return { invoices };
   });
 
-
-
+/* ===================== Connect: Custom（uid/{tenantId}） ===================== */
 export const upsertConnectedAccount = onCall(
   {
     region: "us-central1",
     memory: "256MiB",
-    cors: ["https://venerable-mermaid-fcf8c8.netlify.app", "http://localhost:5173", "http://localhost:59694"],
+    cors: [APP_ORIGIN, "http://localhost:5173", "http://localhost:59694"],
     secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL"],
   },
   async (req) => {
@@ -1532,15 +1411,14 @@ export const upsertConnectedAccount = onCall(
 
     const uid = req.auth.uid;
     const tenantId = req.data?.tenantId as string | undefined;
-    const form = (req.data?.account || {}) as any; // { businessType, email, individual, company, businessProfile, bankAccountToken, tosAccepted, country }
+    const form = (req.data?.account || {}) as any;
 
     if (!tenantId) throw new HttpsError("invalid-argument", "tenantId required");
 
-    const tRef = db.collection("tenants").doc(tenantId);
+    const tRef = tenantRefByUid(uid, tenantId);
     const tDoc = await tRef.get();
     if (!tDoc.exists) throw new HttpsError("not-found", "tenant not found");
 
-    // ざっくりメンバー確認（任意で厳格化OK）
     const members: string[] = (tDoc.data()?.members ?? []) as string[];
     if (!members.includes(uid)) {
       throw new HttpsError("permission-denied", "not a tenant member");
@@ -1550,17 +1428,13 @@ export const upsertConnectedAccount = onCall(
     let acctId: string | undefined = tDoc.data()?.stripeAccountId;
     const country = form.country || "JP";
 
-    // 1) 未作成なら Custom アカウントを作成
     if (!acctId) {
       const created = await stripe.accounts.create({
         type: "custom",
         country,
         email: form.email,
-        business_type: form.businessType || "individual", // "company" or "individual"
-        capabilities: {
-          card_payments: { requested: true },
-          transfers: { requested: true },
-        },
+        business_type: form.businessType || "individual",
+        capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
       });
       acctId = created.id;
       await tRef.set(
@@ -1571,55 +1445,35 @@ export const upsertConnectedAccount = onCall(
             payouts_enabled: created.payouts_enabled,
           },
         },
-        { merge: true },
+        { merge: true }
       );
+      await upsertTenantIndex(uid, tenantId, acctId); // ★ index
     }
 
-    // 2) 収集した情報でアップデート（アプリ内入力で極力プレフィル）
     const upd: Stripe.AccountUpdateParams = {};
-
     if (form.businessType) upd.business_type = form.businessType;
-
-    if (form.businessProfile) {
-      // 例: { url, product_description, support_phone, mcc }
-      upd.business_profile = form.businessProfile;
-    }
-
-    if (form.individual) {
-      // 例: { first_name_kana, last_name_kana, first_name, last_name, phone, dob, address }
-      upd.individual = form.individual;
-    }
-
-    if (form.company) {
-      // 例: { name, phone, address, executives_provided, directors_provided, tax_id }
-      upd.company = form.company;
-    }
-
-    if (form.bankAccountToken) {
-      // 口座は必ずトークン化してから渡してください（サーバに生の口座番号は置かない）
-      upd.external_account = form.bankAccountToken;
-    }
-
+    if (form.businessProfile) upd.business_profile = form.businessProfile;
+    if (form.individual) upd.individual = form.individual;
+    if (form.company) upd.company = form.company;
+    if (form.bankAccountToken) upd.external_account = form.bankAccountToken;
     if (form.tosAccepted) {
       upd.tos_acceptance = {
         date: Math.floor(Date.now() / 1000),
-        ip: (req.rawRequest.headers["x-forwarded-for"] as string)?.split(",")[0] || req.rawRequest.ip,
+        ip:
+          (req.rawRequest.headers["x-forwarded-for"] as string)?.split(",")[0] ||
+          req.rawRequest.ip,
         user_agent: req.rawRequest.get("user-agent") || undefined,
       };
     }
 
     const updated = await stripe.accounts.update(acctId!, upd);
 
-    // 3) まだ提出が必要な要件が残っているかチェック
     const due = updated.requirements?.currently_due ?? [];
     const pastDue = updated.requirements?.past_due ?? [];
-    const needsHosted =
-      due.length > 0 ||
-      pastDue.length > 0; // ざっくり。細かく document 系だけに絞ってもOK
+    const needsHosted = due.length > 0 || pastDue.length > 0;
 
     let onboardingUrl: string | undefined;
     if (needsHosted) {
-      // 最後の本人確認/追加書類など“Stripeホストでしかできない部分”が残る時だけURLを返す
       const BASE = process.env.FRONTEND_BASE_URL!;
       const link = await stripe.accountLinks.create({
         account: acctId!,
@@ -1630,7 +1484,6 @@ export const upsertConnectedAccount = onCall(
       onboardingUrl = link.url;
     }
 
-    // 4) 状態保存（任意）
     await tRef.set(
       {
         connect: {
@@ -1639,31 +1492,31 @@ export const upsertConnectedAccount = onCall(
           requirements: updated.requirements || null,
         },
       },
-      { merge: true },
+      { merge: true }
     );
+
+    await upsertTenantIndex(uid, tenantId, acctId); // ★ index 保守
 
     return {
       accountId: acctId,
       chargesEnabled: updated.charges_enabled,
       payoutsEnabled: updated.payouts_enabled,
       due,
-      onboardingUrl, // これが返ってきた時だけ最終確認のホスト画面へ遷移
+      onboardingUrl,
     };
-  },
+  }
 );
 
-// Price の取得（環境変数で固定 or 無ければ自動作成）
+/* ===================== 初期費用 Checkout ===================== */
 async function getOrCreateInitialFeePrice(
   stripe: Stripe,
   currency = "jpy",
-  unitAmount = 3000, // ←初期費用（例）
+  unitAmount = 3000,
   productName = "初期費用"
 ): Promise<string> {
-  // 1) 環境変数に直接 Price ID を入れておくのが楽
   const ENV_PRICE = process.env.INITIAL_FEE_PRICE_ID;
   if (ENV_PRICE) return ENV_PRICE;
 
-  // 2) 無ければ “product: 初期費用 / price: one_time” を検索→無ければ作成
   const products = await stripe.products.search({
     query: `name:'${productName}' AND metadata['kind']:'initial_fee'`,
     limit: 1,
@@ -1703,51 +1556,38 @@ export const createInitialFeeCheckout = functions
     secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL", "INITIAL_FEE_PRICE_ID"],
   })
   .https.onCall(async (data, context) => {
+    const uid = context.auth?.uid;
+    if (!uid) {
+      throw new functions.https.HttpsError("unauthenticated", "Sign-in required.");
+    }
+
     const { tenantId, email, name } = (data || {}) as {
       tenantId?: string;
       email?: string;
       name?: string;
     };
     if (!tenantId) {
-      throw new functions.https.HttpsError(
-        "invalid-argument",
-        "tenantId is required."
-      );
-    }
-    
-    const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
-    const APP_ORIGIN = process.env.FRONTEND_BASE_URL;
-    if (!STRIPE_KEY || !APP_ORIGIN) {
-      throw new functions.https.HttpsError(
-        "failed-precondition",
-        "Missing required secrets."
-      );
+      throw new functions.https.HttpsError("invalid-argument", "tenantId is required.");
     }
 
-    const stripeFromEnv = () =>
-  new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2023-10-16" });
+    const STRIPE_KEY = process.env.STRIPE_SECRET_KEY!;
+    const APP_BASE = process.env.FRONTEND_BASE_URL!;
+    const stripe = new Stripe(STRIPE_KEY, { apiVersion: "2023-10-16" });
 
-    const stripe = stripeFromEnv();
-
-    // すでに支払い済みなら Checkout を出さない
-    const tRef = db.collection("tenants").doc(tenantId);
+    const tRef = tenantRefByUid(uid, tenantId);
     const tSnap = await tRef.get();
     if (tSnap.exists && tSnap.data()?.billing?.initialFee?.status === "paid") {
       return { alreadyPaid: true };
     }
 
-    // ★ ensureCustomer のシグネチャに合わせて呼ぶ（Stripe インスタンスは渡さない）
-    const purchaserEmail =
-      email || (context.auth?.token?.email as string | undefined);
-    const customerId = await ensureCustomer(tenantId, purchaserEmail, name);
-
-    // Price 決定
+    const purchaserEmail = email || (context.auth?.token?.email as string | undefined);
+    const customerId = await ensureCustomer(uid, tenantId, purchaserEmail, name);
     const priceId = await getOrCreateInitialFeePrice(stripe);
 
-    const successUrl = `${APP_ORIGIN}/#/?toast=initial_fee_paid&tenant=${encodeURIComponent(
+    const successUrl = `${APP_BASE}/stripe-bridge.html#event=initial_fee_paid&tenant=${encodeURIComponent(
       tenantId
     )}`;
-    const cancelUrl = `${APP_ORIGIN}/#/?toast=initial_fee_canceled&tenant=${encodeURIComponent(
+    const cancelUrl = `${APP_BASE}/stripe-bridge.html#event=initial_fee_canceled&tenant=${encodeURIComponent(
       tenantId
     )}`;
 
@@ -1756,12 +1596,11 @@ export const createInitialFeeCheckout = functions
       customer: customerId,
       line_items: [{ price: priceId, quantity: 1 }],
       client_reference_id: tenantId,
-      payment_intent_data: { metadata: { tenantId, kind: "initial_fee" } },
+      payment_intent_data: { metadata: { tenantId, kind: "initial_fee", uid } },
       success_url: successUrl,
       cancel_url: cancelUrl,
     });
 
-    // 任意: “未決済セッション”を記録
     await tRef.set(
       {
         billing: {
@@ -1775,5 +1614,6 @@ export const createInitialFeeCheckout = functions
       { merge: true }
     );
 
+    await upsertTenantIndex(uid, tenantId);
     return { url: session.url };
   });
