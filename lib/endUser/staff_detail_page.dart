@@ -21,6 +21,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
   String? email;
   String? photoUrl;
   String? tenantName;
+  String? uid;
 
   final _amountCtrl = TextEditingController(text: '500'); // デフォルト500
   bool _loading = false;
@@ -38,6 +39,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
       email = args['email'] as String?;
       photoUrl = args['photoUrl'] as String?;
       tenantName = args['tenantName'] as String?;
+      uid = args["uid"] as String?;
       setState(() {});
     }
   }
@@ -104,7 +106,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
         photoUrl == null ||
         photoUrl!.isEmpty) {
       final empDoc = await FirebaseFirestore.instance
-          .collection('tenants')
+          .collection(uid!)
           .doc(tenantId)
           .collection('employees')
           .doc(employeeId)
@@ -118,7 +120,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
     }
     if (tenantName == null || tenantName!.isEmpty) {
       final tDoc = await FirebaseFirestore.instance
-          .collection('tenants')
+          .collection(uid!)
           .doc(tenantId)
           .get();
       if (tDoc.exists) {
@@ -192,6 +194,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
             amount: amount,
             employeeName: name,
             checkoutUrl: checkoutUrl,
+            uid: uid,
           ),
         ),
       );

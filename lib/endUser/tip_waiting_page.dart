@@ -13,6 +13,7 @@ class TipWaitingPage extends StatefulWidget {
     this.tenantName,
     required this.amount,
     this.employeeName,
+    this.uid,
     required this.checkoutUrl,
   });
 
@@ -22,6 +23,7 @@ class TipWaitingPage extends StatefulWidget {
   final int amount;
   final String? employeeName;
   final String checkoutUrl;
+  final String? uid;
 
   @override
   State<TipWaitingPage> createState() => _TipWaitingPageState();
@@ -57,6 +59,7 @@ class _TipWaitingPageState extends State<TipWaitingPage> {
               tenantName: widget.tenantName,
               amount: widget.amount,
               employeeName: widget.employeeName,
+              uid: widget.uid,
             ),
           ),
         );

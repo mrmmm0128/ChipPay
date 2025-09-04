@@ -124,6 +124,7 @@ class PublicStorePageState extends State<PublicStorePage> {
   String? name;
   String? email;
   String? photoUrl;
+  String? uid;
 
   final _searchCtrl = TextEditingController();
   String _query = '';
@@ -166,6 +167,7 @@ class PublicStorePageState extends State<PublicStorePage> {
     }
     // 2) URL クエリ（/p?t=...）
     tenantId ??= Uri.base.queryParameters['t'];
+    uid ??= Uri.base.queryParameters['u']!;
     // 3) ハッシュ（#/p?t=...）
     if (tenantId == null && Uri.base.fragment.isNotEmpty) {
       final frag = Uri.base.fragment.startsWith('/')
@@ -177,7 +179,7 @@ class PublicStorePageState extends State<PublicStorePage> {
 
     if (tenantId != null && tenantName == null) {
       final doc = await FirebaseFirestore.instance
-          .collection('tenants')
+          .collection(uid!)
           .doc(tenantId)
           .get();
       if (doc.exists) {
@@ -209,7 +211,7 @@ class PublicStorePageState extends State<PublicStorePage> {
     }
 
     final tenantDocStream = FirebaseFirestore.instance
-        .collection('tenants')
+        .collection(uid!)
         .doc(tenantId)
         .snapshots();
 
@@ -343,7 +345,7 @@ class PublicStorePageState extends State<PublicStorePage> {
 
                 StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
-                      .collection('tenants')
+                      .collection(uid!)
                       .doc(tenantId)
                       .collection('employees')
                       .orderBy('createdAt', descending: true)
@@ -440,6 +442,7 @@ class PublicStorePageState extends State<PublicStorePage> {
                                       'name': name,
                                       'email': email,
                                       'photoUrl': photoUrl,
+                                      'uid': uid,
                                     },
                                   );
                                 },

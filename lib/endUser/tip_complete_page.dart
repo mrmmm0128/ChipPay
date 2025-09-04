@@ -11,6 +11,7 @@ class TipCompletePage extends StatefulWidget {
   final String? tenantName;
   final int? amount;
   final String? employeeName;
+  final String? uid;
 
   const TipCompletePage({
     super.key,
@@ -18,6 +19,7 @@ class TipCompletePage extends StatefulWidget {
     this.tenantName,
     this.amount,
     this.employeeName,
+    this.uid,
   });
 
   @override

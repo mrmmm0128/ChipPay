@@ -98,7 +98,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
 
   String _buildStoreUrl() {
     final origin = Uri.base.origin;
-    return '$origin/#/p?t=${widget.tenantId}';
+    return '$origin/#/p?t=${widget.tenantId}&u=${uid}';
   }
 
   // ==== アップロード → Storage 保存 → Firestore 登録 ====
