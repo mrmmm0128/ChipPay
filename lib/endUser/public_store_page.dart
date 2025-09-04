@@ -3,76 +3,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher_string.dart';
-
-/// ===============================================================
-/// スタイル一元管理
-/// ===============================================================
-class AppPalette {
-  // ベース
-  static const Color black = Color(0xFF000000);
-  static const Color white = Color(0xFFFFFFFF);
-
-  // ブランド黄色（画像のトーンに近い少し濃いめ）:
-  // 必要ならここを差し替えるだけで全体が変わります
-  static const Color yellow = Color(0xFFFCC400);
-
-  // 背景
-  static const Color pageBg = Color(0xFFF7F7F7);
-
-  // 枠色・線
-  static const Color border = black;
-
-  // 補助
-  static const Color textPrimary = Colors.black87;
-  static const Color textSecondary = Colors.black54;
-}
-
-class AppDims {
-  static const double border = 5; // 黒太枠
-  static const double radius = 14.0;
-  static const double pad = 16.0;
-}
-
-class AppTypography {
-  // ここを変えるだけでフォント全体を差し替えできます
-  static const String fontFamily = 'Roboto';
-
-  static TextStyle headlineHuge({Color? color}) => TextStyle(
-    fontFamily: fontFamily,
-    fontSize: 32,
-    fontWeight: FontWeight.w900,
-    height: 1.1,
-    color: color ?? AppPalette.black,
-  );
-
-  static TextStyle headlineLarge({Color? color}) => TextStyle(
-    fontFamily: fontFamily,
-    fontSize: 24,
-    fontWeight: FontWeight.w800,
-    color: color ?? AppPalette.textPrimary,
-  );
-
-  static TextStyle label({Color? color, FontWeight weight = FontWeight.w700}) =>
-      TextStyle(
-        fontFamily: fontFamily,
-        fontSize: 14,
-        fontWeight: weight,
-        color: color ?? AppPalette.textPrimary,
-      );
-
-  static TextStyle body({Color? color}) => TextStyle(
-    fontFamily: fontFamily,
-    fontSize: 20,
-    fontWeight: FontWeight.w700,
-    color: color ?? AppPalette.textPrimary,
-  );
-
-  static TextStyle small({Color? color}) => TextStyle(
-    fontFamily: fontFamily,
-    fontSize: 12,
-    color: color ?? AppPalette.textSecondary,
-  );
-}
+import 'package:yourpay/endUser/utils/design.dart';
 
 /// 黒フチ × 黄色の“縁取りテキスト”
 class StrokeText extends StatelessWidget {
@@ -86,7 +17,7 @@ class StrokeText extends StatelessWidget {
     this.text, {
     super.key,
     required this.style,
-    this.strokeWidth = 6,
+    this.strokeWidth = 0.5,
     this.strokeColor = AppPalette.black,
     this.fillColor = AppPalette.yellow,
   });
@@ -112,76 +43,6 @@ class StrokeText extends StatelessWidget {
   }
 }
 
-/// セクションタイトル（下に小さなノッチ付き）
-class SectionHeader extends StatelessWidget {
-  final String title;
-  final IconData? icon;
-  const SectionHeader({super.key, required this.title, this.icon});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        AppDims.pad,
-        20,
-        AppDims.pad,
-        AppDims.pad,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              if (icon != null) ...[
-                Icon(icon, color: AppPalette.textPrimary),
-                const SizedBox(width: 8),
-              ],
-              Text(title, style: AppTypography.label(weight: FontWeight.w800)),
-            ],
-          ),
-          const SizedBox(height: 10),
-          // 直線 + ノッチ
-          Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Container(height: 4, color: AppPalette.black),
-              Positioned(
-                left: 12,
-                top: 4,
-                child: Transform.rotate(
-                  angle: 3.14159, // 逆三角
-                  child: CustomPaint(
-                    painter: _TrianglePainter(color: AppPalette.black),
-                    size: const Size(16, 8),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TrianglePainter extends CustomPainter {
-  final Color color;
-  _TrianglePainter({required this.color});
-  @override
-  void paint(Canvas canvas, Size size) {
-    final p = Paint()..color = color;
-    final path = Path()
-      ..moveTo(0, 0)
-      ..lineTo(size.width, 0)
-      ..lineTo(size.width / 2, size.height)
-      ..close();
-    canvas.drawPath(path, p);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
 class LanguageSelector extends StatelessWidget {
   const LanguageSelector({super.key});
 
@@ -200,10 +61,26 @@ class LanguageSelector extends StatelessWidget {
       value: supportedLocales.contains(currentLocale)
           ? currentLocale
           : const Locale('ja'),
+      dropdownColor: AppPalette.pageBg,
+      underline: Container(
+        height: AppDims.border / 3,
+        color: AppPalette.border,
+      ),
+      iconEnabledColor: AppPalette.black,
+
       items: supportedLocales.map((locale) {
         final label = _getLabel(locale.languageCode);
 
-        return DropdownMenuItem(value: locale, child: Text(label));
+        return DropdownMenuItem(
+          value: locale,
+          child: Text(
+            label,
+            style: AppTypography.label2().copyWith(
+              color: AppPalette.black,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        );
       }).toList(),
       onChanged: (Locale? newLocale) {
         if (newLocale != null) {
@@ -237,12 +114,16 @@ class PublicStorePage extends StatefulWidget {
   const PublicStorePage({super.key});
 
   @override
-  State<PublicStorePage> createState() => _PublicStorePageState();
+  State<PublicStorePage> createState() => PublicStorePageState();
 }
 
-class _PublicStorePageState extends State<PublicStorePage> {
+class PublicStorePageState extends State<PublicStorePage> {
   String? tenantId;
   String? tenantName;
+  String? employeeId;
+  String? name;
+  String? email;
+  String? photoUrl;
 
   final _searchCtrl = TextEditingController();
   String _query = '';
@@ -274,9 +155,14 @@ class _PublicStorePageState extends State<PublicStorePage> {
   Future<void> _loadFromRouteOrQuery() async {
     // 1) Navigator 引数
     final args = ModalRoute.of(context)?.settings.arguments;
-    if (args is Map && args['tenantId'] is String) {
-      tenantId = args['tenantId'] as String;
+    if (args is Map) {
+      tenantId = args['tenantId'] as String?;
+      employeeId = args['employeeId'] as String?;
+      name = args['name'] as String?;
+      email = args['email'] as String?;
+      photoUrl = args['photoUrl'] as String?;
       tenantName = args['tenantName'] as String?;
+      setState(() {});
     }
     // 2) URL クエリ（/p?t=...）
     tenantId ??= Uri.base.queryParameters['t'];
@@ -301,7 +187,7 @@ class _PublicStorePageState extends State<PublicStorePage> {
     if (mounted) setState(() {});
   }
 
-  Future<void> _openStoreTipSheet() async {
+  Future<void> openStoreTipSheet() async {
     if (tenantId == null) return;
     await showModalBottomSheet<void>(
       context: context,
@@ -343,21 +229,22 @@ class _PublicStorePageState extends State<PublicStorePage> {
         return Scaffold(
           backgroundColor: AppPalette.pageBg,
           appBar: AppBar(
-            backgroundColor: AppPalette.yellow,
+            backgroundColor: AppPalette.pageBg,
             foregroundColor: AppPalette.black,
             elevation: 0,
             automaticallyImplyLeading: false,
-            title: Text(
-              tenantName ?? tr('store0'),
-              style: AppTypography.body(),
-            ),
-            bottom: PreferredSize(
-              preferredSize: const Size.fromHeight(1),
-              child: Container(
-                color: AppPalette.border, // 線の色
-                height: AppDims.border,
-              ),
-            ),
+            scrolledUnderElevation: 0,
+            // title: Text(
+            //   tenantName ?? tr('store0'),
+            //   style: AppTypography.body(),
+            // ),
+            // bottom: PreferredSize(
+            //   preferredSize: const Size.fromHeight(1),
+            //   child: Container(
+            //     color: AppPalette.border, // 線の色
+            //     height: AppDims.border,
+            //   ),
+            // ),
             actions: const [
               Padding(
                 padding: EdgeInsets.only(right: 12),
@@ -367,7 +254,12 @@ class _PublicStorePageState extends State<PublicStorePage> {
           ),
           body: SingleChildScrollView(
             controller: _scrollController,
-            padding: const EdgeInsets.only(bottom: 24),
+            padding: const EdgeInsets.only(
+              top: 12,
+              bottom: 24,
+              left: 12,
+              right: 12,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -381,17 +273,28 @@ class _PublicStorePageState extends State<PublicStorePage> {
                       ),
                       children: [
                         WidgetSpan(
+                          alignment: PlaceholderAlignment.baseline, // ← 基準線に揃える
+                          baseline: TextBaseline.ideographic, // ← 日本語に適した基準線
                           child: StrokeText(
                             'チップ',
                             style: AppTypography.headlineHuge(),
-                            strokeWidth: 8,
+                            strokeWidth: 4,
                           ),
                         ),
-                        const TextSpan(text: 'を\n贈ろう'),
+                        TextSpan(
+                          text: 'を\n',
+                          style: AppTypography.headlineLarge(),
+                        ),
+                        TextSpan(
+                          text: '贈ろう',
+                          style: AppTypography.headlineHuge(),
+                        ),
                       ],
                     ),
                   ),
                 ),
+
+                SizedBox(height: 12),
 
                 // ── メンバー ────────────────────────────────
                 _Sectionbar(title: tr('section.members')),
@@ -406,10 +309,12 @@ class _PublicStorePageState extends State<PublicStorePage> {
                     controller: _searchCtrl,
                     decoration: InputDecoration(
                       hintText: tr('button.search_staff'),
-                      hintStyle: AppTypography.small(),
+                      hintStyle: AppTypography.small(
+                        color: AppPalette.textSecondary,
+                      ),
                       prefixIcon: const Icon(
                         Icons.search,
-                        color: AppPalette.black,
+                        color: AppPalette.textSecondary,
                       ),
                       filled: true,
                       fillColor: AppPalette.white,
@@ -556,7 +461,7 @@ class _PublicStorePageState extends State<PublicStorePage> {
                       _showAllMembers
                           ? tr('button.close')
                           : tr('button.see_more'),
-                      style: AppTypography.label(
+                      style: AppTypography.label2(
                         color: AppPalette.textSecondary,
                       ),
                     ),
@@ -568,11 +473,11 @@ class _PublicStorePageState extends State<PublicStorePage> {
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: AppDims.pad),
                   child: SizedBox(
-                    height: 80,
+                    height: 100,
                     child: _YellowActionButton(
                       label: tr('button.send_tip_for_store'),
                       icon: Icons.currency_yen,
-                      onPressed: _openStoreTipSheet,
+                      onPressed: openStoreTipSheet,
                     ),
                   ),
                 ),
@@ -588,7 +493,7 @@ class _PublicStorePageState extends State<PublicStorePage> {
                     child: Column(
                       children: [
                         SizedBox(
-                          height: 60,
+                          height: 100,
                           child: _YellowActionButton(
                             label: tr('button.LINE'),
                             onPressed: lineUrl.isEmpty
@@ -599,9 +504,9 @@ class _PublicStorePageState extends State<PublicStorePage> {
                                   ),
                           ),
                         ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 15),
                         SizedBox(
-                          height: 60,
+                          height: 100,
                           child: _YellowActionButton(
                             label: tr('button.Google_review'),
                             onPressed: googleReviewUrl.isEmpty
@@ -656,10 +561,14 @@ class _YellowActionButton extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         if (icon != null) ...[
-          Icon(icon, color: AppPalette.black),
+          Container(
+            color: AppPalette.white,
+            decoration: BoxDecoration(),
+            child: Icon(icon, color: AppPalette.black),
+          ),
           const SizedBox(width: 8),
         ],
-        Text(label, style: AppTypography.label(color: AppPalette.black)),
+        Text(label, style: AppTypography.label2(color: AppPalette.black)),
       ],
     );
 
@@ -714,7 +623,8 @@ class _Sectionbar extends StatelessWidget {
       padding: margin,
       child: Column(
         children: [
-          Center(child: Text(title, style: AppTypography.label())),
+          Center(child: Text(title, style: AppTypography.label2())),
+          SizedBox(height: 8),
           SizedBox(
             // ノッチ分の高さを確保（線の下に三角が付く）
             height: notchHeight + thickness,
@@ -741,38 +651,47 @@ class _SectionbarPainter extends CustomPainter {
     required this.thickness,
     required this.notchWidth,
     required this.notchHeight,
-    required this.alignX,
+    required this.alignX, // -1.0(left) .. 1.0(right)
   });
 
   final Color color;
   final double thickness;
-  final double notchWidth;
-  final double notchHeight;
+  final double notchWidth; // 水平幅（見た目の“くぼみ”の左右端）
+  final double notchHeight; // 下方向の深さ
   final double alignX;
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 水平線（上端側に描いて、下にノッチを付ける）
-    final linePaint = Paint()
-      ..color = color
-      ..strokeWidth = thickness
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.butt;
+    final y = thickness / 2; // 線の中心Y
+    final r = thickness / 2; // 端の丸みと同じ半径
 
-    // 線のY座標（きれいに出るよう、stroke中心に合わせる）
-    final y = thickness / 2;
-    canvas.drawLine(Offset(0, y), Offset(size.width, y), linePaint);
+    // -1..1 -> [0..width]
+    double cx = ((alignX + 1) / 2) * size.width;
 
-    // ノッチ（塗りつぶし三角形）
-    final cx = ((alignX + 1) / 2) * size.width; // -1..1 → 0..width
+    // ノッチが端の丸みにめり込まないようにクランプ
+    final minCx = r + notchWidth / 2;
+    final maxCx = size.width - r - notchWidth / 2;
+    cx = cx.clamp(minCx, maxCx);
+
+    final left = Offset(r, y);
+    final right = Offset(size.width - r, y);
+
     final path = Path()
-      ..moveTo(cx - notchWidth / 2, y) // 左上（線上）
-      ..lineTo(cx + notchWidth / 2, y) // 右上（線上）
-      ..lineTo(cx, y + notchHeight) // 下の頂点
-      ..close();
+      ..moveTo(left.dx, left.dy)
+      ..lineTo(cx - notchWidth / 2, y) // ノッチ左肩
+      ..lineTo(cx, y + notchHeight) // ノッチ底
+      ..lineTo(cx + notchWidth / 2, y) // ノッチ右肩
+      ..lineTo(right.dx, right.dy); // 右端
 
-    final fill = Paint()..color = color;
-    canvas.drawPath(path, fill);
+    final paintStroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = thickness
+      ..strokeCap = StrokeCap
+          .round // 両端まる
+      ..strokeJoin = StrokeJoin.round; // ノッチ肩の結合を丸く
+
+    canvas.drawPath(path, paintStroke);
   }
 
   @override
@@ -807,7 +726,7 @@ class _RankedMemberCard extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(AppDims.radius),
             border: Border.all(color: AppPalette.black, width: AppDims.border),
@@ -817,22 +736,29 @@ class _RankedMemberCard extends StatelessWidget {
               // 上部ラベル + 細線
               Text(
                 rankLabel,
-                style: AppTypography.label(color: AppPalette.black),
+                style: AppTypography.body(color: AppPalette.black),
               ),
               const SizedBox(height: 4),
-              Container(height: 2, color: AppPalette.black),
+              Container(
+                height: AppDims.border2,
+                decoration: BoxDecoration(
+                  color: AppPalette.black,
+                  borderRadius: BorderRadius.circular(8), // ← ここで角丸指定
+                ),
+              ),
+
               const SizedBox(height: 12),
 
               // アバター
               Container(
-                width: 76,
-                height: 76,
+                width: 84,
+                height: 84,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: AppPalette.white,
                   border: Border.all(
                     color: AppPalette.black,
-                    width: AppDims.border,
+                    width: AppDims.border2,
                   ),
                   image: hasPhoto
                       ? DecorationImage(
