@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 /// ランキング1件分のデータ
@@ -158,13 +159,14 @@ class EmployeeRankTile extends StatelessWidget {
 class _EmployeePhoto extends StatelessWidget {
   final String tenantId;
   final String employeeId;
-  const _EmployeePhoto({required this.tenantId, required this.employeeId});
+  _EmployeePhoto({required this.tenantId, required this.employeeId});
+  final uid = FirebaseAuth.instance.currentUser?.uid;
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<DocumentSnapshot>(
       stream: FirebaseFirestore.instance
-          .collection('tenants')
+          .collection(uid!)
           .doc(tenantId)
           .collection('employees')
           .doc(employeeId)

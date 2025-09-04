@@ -17,6 +17,7 @@ class _LoginScreenState extends State<LoginScreen> {
   // 追加: 名前・会社名
   final _nameCtrl = TextEditingController();
   final _companyCtrl = TextEditingController();
+  final uid = FirebaseAuth.instance.currentUser?.uid;
 
   @override
   void dispose() {
@@ -59,10 +60,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _goToFirstTenantOrStore() async {
-    final qs = await FirebaseFirestore.instance
-        .collection('tenants')
-        .limit(1)
-        .get();
+    final qs = await FirebaseFirestore.instance.collection(uid!).limit(1).get();
 
     if (!mounted) return;
 

@@ -2,18 +2,19 @@
 import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
-import 'package:url_launcher/url_launcher_string.dart';
 
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
 import 'package:barcode/barcode.dart';
+import 'package:yourpay/tenant/newTenant/onboardingSheet.dart';
 
 class StoreQrTab extends StatefulWidget {
   final String tenantId;
@@ -76,6 +77,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
 
   /// ★ 追加：QR の位置（正規化座標 0〜1）。dx=横、dy=縦。中央スタート。
   Offset _qrPos = const Offset(0.5, 0.5);
+  final uid = FirebaseAuth.instance.currentUser?.uid;
 
   @override
   void initState() {
@@ -138,7 +140,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
       }
 
       final postersCol = FirebaseFirestore.instance
-          .collection('tenants')
+          .collection(uid!)
           .doc(widget.tenantId)
           .collection('posters');
 
@@ -262,46 +264,102 @@ class _StoreQrTabState extends State<StoreQrTab> {
     );
   }
 
-  Future<void> _openOnboarding() async {
-    try {
-      final payload = {
-        'tenantId': widget.tenantId,
-        'account': {
-          'country': 'JP',
-          'businessType': 'individual', // or 'company'
-          'businessProfile': {
-            'url': _publicStoreUrl,
-            'product_description': 'チップ受け取り（チッププラットフォーム）',
-          },
-          'tosAccepted': true,
-        },
-      };
+  // ---------- オンボーディング（モーダル/ステッパー） ----------
+  Future<void> startOnboarding(String tenantId, String tenantName) async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true, // シートを大きくできる（DraggableScrollableSheetに最適）
+      isDismissible: false, // 外側タップで閉じない
+      enableDrag: false, // 引っ張っても閉じない
+      useRootNavigator: true, // ルートNavigatorで全画面を覆う（ネスト対策）
+      barrierColor: Colors.black38, // 半透明バリア（背面をブロック）
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetCtx) {
+        // ★ 紫対策：ボトムシート全体を白黒テーマで包む
+        return Theme(
+          data: bwTheme(context),
+          child: OnboardingSheet(
+            tenantId: tenantId,
+            tenantName: tenantName,
+            functions: _functions,
+          ),
+        );
+      },
+    );
+  }
 
-      final res = await _functions
-          .httpsCallable('upsertConnectedAccount')
-          .call(payload);
-
-      final data = (res.data as Map?) ?? const {};
-      final url = data['onboardingUrl'] as String?;
-      final chargesEnabled = data['chargesEnabled'] == true;
-      final payoutsEnabled = data['payoutsEnabled'] == true;
-
-      if (url != null && url.isNotEmpty) {
-        await launchUrlString(url, mode: LaunchMode.externalApplication);
-        return;
-      }
-
-      if (!mounted) return;
-      final msg = chargesEnabled && payoutsEnabled
-          ? 'Stripe接続が完了しました'
-          : 'Stripe接続を更新しました（必要に応じて追加のKYCが求められることがあります）';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Stripe接続に失敗: $e')));
-    }
+  // ---- ここが肝：白×黒テーマ（ポップアップ用のローカルテーマ）----
+  ThemeData bwTheme(BuildContext context) {
+    final base = Theme.of(context);
+    final cs = base.colorScheme;
+    OutlineInputBorder _border(Color c) => OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: BorderSide(color: c),
+    );
+    return base.copyWith(
+      colorScheme: cs.copyWith(
+        primary: Colors.black,
+        secondary: Colors.black,
+        surface: Colors.white,
+        onSurface: Colors.black87,
+        onPrimary: Colors.white,
+        onSecondary: Colors.white,
+        background: Colors.white,
+      ),
+      dialogBackgroundColor: Colors.white,
+      scaffoldBackgroundColor: Colors.white,
+      canvasColor: Colors.white,
+      textTheme: base.textTheme.apply(
+        bodyColor: Colors.black87,
+        displayColor: Colors.black87,
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        labelStyle: const TextStyle(color: Colors.black87),
+        hintStyle: const TextStyle(color: Colors.black54),
+        filled: true,
+        fillColor: Colors.white,
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        border: _border(Colors.black12),
+        enabledBorder: _border(Colors.black12),
+        focusedBorder: _border(Colors.black),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: Colors.black,
+          foregroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.black87,
+          side: const BorderSide(color: Colors.black45),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(foregroundColor: Colors.black87),
+      ),
+      chipTheme: base.chipTheme.copyWith(
+        backgroundColor: Colors.white,
+        selectedColor: Colors.black12,
+        labelStyle: const TextStyle(color: Colors.black87),
+        side: const BorderSide(color: Colors.black26),
+        showCheckmark: false,
+      ),
+      progressIndicatorTheme: const ProgressIndicatorThemeData(
+        color: Colors.black,
+      ),
+      dividerColor: Colors.black12,
+    );
   }
 
   @override
@@ -316,12 +374,12 @@ class _StoreQrTabState extends State<StoreQrTab> {
     );
 
     final tenantDocStream = FirebaseFirestore.instance
-        .collection('tenants')
+        .collection(uid!)
         .doc(widget.tenantId)
         .snapshots();
 
     final postersStream = FirebaseFirestore.instance
-        .collection('tenants')
+        .collection(uid!)
         .doc(widget.tenantId)
         .collection('posters')
         .orderBy('createdAt', descending: true)
@@ -332,8 +390,6 @@ class _StoreQrTabState extends State<StoreQrTab> {
       builder: (context, tenantSnap) {
         final data = tenantSnap.data?.data() as Map<String, dynamic>?;
 
-        final hasAccount =
-            ((data?['stripeAccountId'] as String?)?.isNotEmpty ?? false);
         final connected =
             (data?['connect']?['charges_enabled'] as bool?) ?? false;
 
@@ -565,8 +621,11 @@ class _StoreQrTabState extends State<StoreQrTab> {
                           subtitle: const Text('接続後にQRを作成できます。'),
                           trailing: FilledButton(
                             style: primary,
-                            onPressed: _openOnboarding,
-                            child: Text(hasAccount ? '続きから再開' : 'Stripeに接続'),
+                            onPressed: () => startOnboarding(
+                              widget.tenantId,
+                              widget.tenantName!,
+                            ),
+                            child: Text("新規登録を完"),
                           ),
                         ),
                       )

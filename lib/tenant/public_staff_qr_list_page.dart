@@ -1,5 +1,6 @@
 // lib/public/public_staff_qr_list_page.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
@@ -15,6 +16,7 @@ class _PublicStaffQrListPageState extends State<PublicStaffQrListPage> {
 
   final _searchCtrl = TextEditingController();
   String _query = '';
+  final uid = FirebaseAuth.instance.currentUser?.uid;
 
   @override
   void initState() {
@@ -49,7 +51,7 @@ class _PublicStaffQrListPageState extends State<PublicStaffQrListPage> {
     }
 
     final q = FirebaseFirestore.instance
-        .collection('tenants')
+        .collection(uid!)
         .doc(tenantId)
         .collection('employees')
         .orderBy('createdAt', descending: true);

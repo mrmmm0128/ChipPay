@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Returning…</title>
+  <meta name="robots" content="noindex" />
+  <style>body{font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif;margin:20px;color:#222}</style>
+</head>
+<body>
+<script>
+(function(){
+  // 例: #event=subscribed&tenant=abc&plan=C
+  var hash = location.hash.replace(/^#\/?/, '');
+  var params = new URLSearchParams(hash);
+  var event = params.get('event');
+  var payload = {};
+  params.forEach((v, k) => payload[k] = v);
+
+  function notifyOpener(){
+    // 1) postMessage（最優先）
+    try {
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage({type:'stripe:event', event, payload}, location.origin);
+        window.opener.focus();
+        return true;
+      }
+    } catch(_) {}
+
+    // 2) BroadcastChannel（同一オリジンであれば使える）
+    try {
+      var bc = new BroadcastChannel('stripe_events');
+      bc.postMessage({event, payload});
+      bc.close();
+      return true;
+    } catch(_) {}
+
+    // 3) localStorage ストレージイベント
+    try {
+      localStorage.setItem('stripe_event', JSON.stringify({event, payload, ts: Date.now()}));
+      return true;
+    } catch(_) {}
+
+    return false;
+  }
+
+  var ok = notifyOpener();
+
+  try { window.close(); } catch(_) {}
+
+  // タブが閉じられない場合のフォールバック表示
+  setTimeout(function(){
+    document.body.innerHTML =
+      '<p>元の画面に戻りました。タブを閉じて続行してください。</p>' +
+      '<p><a href="'+ location.origin +'">アプリに戻る</a></p>';
+  }, 300);
+})();
+</script>
+</body>
+</html>

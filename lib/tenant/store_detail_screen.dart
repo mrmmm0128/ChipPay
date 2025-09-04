@@ -2,12 +2,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:yourpay/tenant/newTenant/onboardingSheet.dart';
 import 'package:yourpay/tenant/store_detail/drawer.dart';
 import 'package:yourpay/tenant/store_detail/tabs/srore_home_tab.dart';
 import 'package:yourpay/tenant/store_detail/tabs/store_qr_tab.dart';
 import 'package:yourpay/tenant/store_detail/tabs/store_setting_tab.dart';
 import 'package:yourpay/tenant/store_detail/tabs/store_staff_tab.dart';
-import 'package:yourpay/tenant/tenant_switch_bar.dart';
+import 'package:yourpay/tenant/newTenant/tenant_switch_bar.dart';
 
 class StoreDetailScreen extends StatefulWidget {
   const StoreDetailScreen({super.key});
@@ -24,6 +25,7 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
   String? publicStoreUrl;
   bool loading = false;
   int _currentIndex = 0;
+  final uid = FirebaseAuth.instance.currentUser?.uid;
 
   String? tenantId;
   String? tenantName;
@@ -109,7 +111,7 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
       if (name.isEmpty) return;
 
       try {
-        final ref = FirebaseFirestore.instance.collection('tenants').doc();
+        final ref = FirebaseFirestore.instance.collection(uid!).doc();
         await ref.set({
           'name': name,
           'members': [_uid], // 旧互換
@@ -198,7 +200,7 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
         });
         if (nameArg == null) {
           final doc = await FirebaseFirestore.instance
-              .collection('tenants')
+              .collection(uid!)
               .doc(id)
               .get();
           if (doc.exists) {
@@ -217,7 +219,7 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
       if (idFromClaims != null) {
         setState(() => tenantId = idFromClaims);
         final doc = await FirebaseFirestore.instance
-            .collection('tenants')
+            .collection(uid!)
             .doc(idFromClaims)
             .get();
         if (doc.exists) {
@@ -229,10 +231,7 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
 
   // ---- 店舗切替（Drawerから呼ばれる） -----------------------------------
   Future<void> _handleChangeTenant(String id) async {
-    final doc = await FirebaseFirestore.instance
-        .collection('tenants')
-        .doc(id)
-        .get();
+    final doc = await FirebaseFirestore.instance.collection(uid!).doc(id).get();
     final name = (doc.data()?['name'] as String?) ?? '店舗';
     if (!mounted) return;
     setState(() {
@@ -245,7 +244,7 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
   Future<List<TenantOption>> _loadTenantOptionsFallback() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return [];
-    final col = FirebaseFirestore.instance.collection('tenants');
+    final col = FirebaseFirestore.instance.collection(uid);
     final seen = <String>{};
     final out = <TenantOption>[];
 
@@ -373,7 +372,7 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
       drawer: isNarrow
           ? StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance
-                  .collection('tenants')
+                  .collection(uid!)
                   .where(
                     'memberUids',
                     arrayContains: FirebaseAuth.instance.currentUser?.uid,

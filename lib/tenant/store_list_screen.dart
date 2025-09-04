@@ -16,7 +16,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
   bool _creating = false;
   String? _justCreatedId; // 直近に作成したテナントをハイライト
   final _functions = FirebaseFunctions.instanceFor(region: 'us-central1');
-
+  final uid = FirebaseAuth.instance.currentUser?.uid;
   @override
   void dispose() {
     _nameCtrl.dispose();
@@ -34,9 +34,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
     setState(() => _creating = true);
     try {
       final user = FirebaseAuth.instance.currentUser!;
-      final ref = FirebaseFirestore.instance
-          .collection('tenants')
-          .doc(); // 自動ID
+      final ref = FirebaseFirestore.instance.collection(uid!).doc(); // 自動ID
       await ref.set({
         'name': name,
         'status': 'active',
@@ -213,7 +211,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
     }
 
     final stream = FirebaseFirestore.instance
-        .collection('tenants')
+        .collection(uid)
         .where('memberUids', arrayContains: uid)
         .snapshots();
 

@@ -1,6 +1,7 @@
 // lib/tenant/store_detail/staff_detail_screen.dart
 import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -25,6 +26,7 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
   final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _commentCtrl = TextEditingController();
+  final uid = FirebaseAuth.instance.currentUser?.uid;
 
   Uint8List? _newPhotoBytes;
   String? _newPhotoName;
@@ -195,7 +197,7 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final empRef = FirebaseFirestore.instance
-        .collection('tenants')
+        .collection(uid!)
         .doc(widget.tenantId)
         .collection('employees')
         .doc(widget.employeeId);

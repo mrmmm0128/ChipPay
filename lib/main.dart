@@ -21,7 +21,6 @@ import 'package:yourpay/tenant/store_admin_add/accept_invite_screen.dart';
 import 'package:yourpay/tenant/store_list_screen.dart';
 import 'tenant/login_screens.dart';
 import 'tenant/store_detail_screen.dart';
-import 'tenant/admin_console_screen.dart';
 import 'endUser/payer_landing_screen.dart';
 
 // ===== Firebase options（そのままでOK） =====
@@ -283,12 +282,9 @@ class _StoreOrAdminSwitcherState extends State<StoreOrAdminSwitcher> {
   Widget build(BuildContext context) {
     if (_role == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-    if (_role == 'superadmin') {
-      return const AdminConsoleScreen();
     } else {
       // TODO: 店舗ダッシュボード等へ遷移させる（今はログイン画面に戻す）
-      return const LoginScreen();
+      return const StoreDetailScreen();
     }
   }
 }

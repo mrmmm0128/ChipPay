@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'package:yourpay/fonts/jp_font.dart';
@@ -53,6 +54,8 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
     return (percentPart + f.toInt()).clamp(0, amount);
   }
 
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+
   @override
   void initState() {
     super.initState();
@@ -76,7 +79,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
     if (name.isEmpty && tid != null && tid.isNotEmpty) {
       try {
         final doc = await FirebaseFirestore.instance
-            .collection('tenants')
+            .collection(uid!)
             .doc(tid)
             .get();
         name = (doc.data()?['name'] as String?) ?? '';
@@ -222,7 +225,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
 
       // 現行の手数料設定（古いレコードのフォールバック用）
       final tSnap = await FirebaseFirestore.instance
-          .collection('tenants')
+          .collection(uid!)
           .doc(widget.tenantId)
           .get();
       final tData = tSnap.data() ?? {};
@@ -243,7 +246,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
 
       // 期間の Tips を取得
       final qs = await FirebaseFirestore.instance
-          .collection('tenants')
+          .collection(uid!)
           .doc(widget.tenantId)
           .collection('tips')
           .where('status', isEqualTo: 'succeeded')
@@ -825,7 +828,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
     // 期間境界で tips クエリ（ストリーム）
     final bounds = _rangeBounds();
     Query tipsQ = FirebaseFirestore.instance
-        .collection('tenants')
+        .collection(uid!)
         .doc(widget.tenantId)
         .collection('tips')
         .where('status', isEqualTo: 'succeeded');

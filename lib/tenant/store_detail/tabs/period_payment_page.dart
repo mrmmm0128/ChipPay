@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:yourpay/tenant/store_detail/card_shell.dart';
 
@@ -25,6 +26,7 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
   final _searchCtrl = TextEditingController();
   String _search = '';
   Timer? _debounce;
+  final uid = FirebaseAuth.instance.currentUser?.uid;
 
   @override
   void initState() {
@@ -71,7 +73,7 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
 
   Query _buildQuery() {
     Query q = FirebaseFirestore.instance
-        .collection('tenants')
+        .collection(uid!)
         .doc(widget.tenantId)
         .collection('tips')
         .where('status', isEqualTo: 'succeeded');
