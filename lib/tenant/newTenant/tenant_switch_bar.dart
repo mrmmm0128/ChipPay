@@ -320,12 +320,12 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
           // ドロップダウン項目（下書きラベル付与）
           final items = docs.map((d) {
             final data = d.data();
-            final isDraft = (data['status'] == 'nonactive');
+            //final isDraft = (data['status'] == 'nonactive');
             final name = (data['name'] ?? '(no name)').toString();
             return DropdownMenuItem<String>(
               value: d.id,
               child: Text(
-                isDraft ? '$name（下書き）' : name,
+                name,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(color: Colors.black87),
               ),
@@ -467,13 +467,13 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                     style: _outlineSmall,
                   ),
                 const SizedBox(width: 8),
-                if (!selectedIsDraft)
-                  OutlinedButton.icon(
-                    onPressed: createTenantDialog,
-                    icon: const Icon(Icons.add, size: 18),
-                    label: const Text('新規作成'),
-                    style: _outlineSmall,
-                  ),
+
+                OutlinedButton.icon(
+                  onPressed: createTenantDialog,
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('新規作成'),
+                  style: _outlineSmall,
+                ),
               ],
             ),
           );

@@ -153,39 +153,66 @@ class PublicStorePageState extends State<PublicStorePage> {
     _loadFromRouteOrQuery();
   }
 
+  // 追加：クエリ取得ヘルパー（? と # 両方対応）
+  String? _getParam(String key) {
+    // 1) 先に ? クエリ
+    final v1 = Uri.base.queryParameters[key];
+    if (v1 != null && v1.isNotEmpty) return v1;
+
+    // 2) 次に # の中（/#/p?t=...&u=... みたいな形）
+    final frag = Uri.base.fragment;
+    if (frag.isNotEmpty) {
+      final s = frag.startsWith('/')
+          ? frag.substring(1)
+          : frag; // "/p?..." → "p?..."
+      final f = Uri.tryParse(s);
+      final v2 = f?.queryParameters[key];
+      if (v2 != null && v2.isNotEmpty) return v2;
+    }
+    return null;
+  }
+
   Future<void> _loadFromRouteOrQuery() async {
-    // 1) Navigator 引数
+    // 1) Navigator args（あれば優先）
     final args = ModalRoute.of(context)?.settings.arguments;
     if (args is Map) {
-      tenantId = args['tenantId'] as String?;
-      employeeId = args['employeeId'] as String?;
-      name = args['name'] as String?;
-      email = args['email'] as String?;
-      photoUrl = args['photoUrl'] as String?;
-      tenantName = args['tenantName'] as String?;
-      setState(() {});
-    }
-    // 2) URL クエリ（/p?t=...）
-    tenantId ??= Uri.base.queryParameters['t'];
-    uid ??= Uri.base.queryParameters['u']!;
-    // 3) ハッシュ（#/p?t=...）
-    if (tenantId == null && Uri.base.fragment.isNotEmpty) {
-      final frag = Uri.base.fragment.startsWith('/')
-          ? Uri.base.fragment.substring(1)
-          : Uri.base.fragment;
-      final fUri = Uri.parse(frag);
-      tenantId = fUri.queryParameters['t'];
+      tenantId = args['tenantId'] as String? ?? tenantId;
+      employeeId = args['employeeId'] as String? ?? employeeId;
+      name = args['name'] as String? ?? name;
+      email = args['email'] as String? ?? email;
+      photoUrl = args['photoUrl'] as String? ?? photoUrl;
+      tenantName = args['tenantName'] as String? ?? tenantName;
+      uid = args['uid'] as String? ?? uid;
     }
 
-    if (tenantId != null && tenantName == null) {
-      final doc = await FirebaseFirestore.instance
-          .collection(uid!)
-          .doc(tenantId)
-          .get();
-      if (doc.exists) {
-        tenantName = (doc.data()!['name'] as String?) ?? '店舗';
+    // 2) URL（? と # の両方を見る）
+    tenantId ??= _getParam('t');
+    uid ??= _getParam('u');
+
+    // 3) uid がまだ無い → tenantIndex から逆引き（公開可の前提）
+    if (uid == null && tenantId != null) {
+      try {
+        final idx = await FirebaseFirestore.instance
+            .collection('tenantIndex')
+            .doc(tenantId!)
+            .get();
+        uid = idx.data()?['uid'] as String?;
+      } catch (_) {
+        /* 無視 */
       }
     }
+
+    // 4) 店舗名の解決（両方そろってから）
+    if (tenantId != null && uid != null && tenantName == null) {
+      final doc = await FirebaseFirestore.instance
+          .collection(uid!)
+          .doc(tenantId!)
+          .get();
+      if (doc.exists) {
+        tenantName = (doc.data()?['name'] as String?) ?? '店舗';
+      }
+    }
+
     if (mounted) setState(() {});
   }
 
@@ -206,8 +233,13 @@ class PublicStorePageState extends State<PublicStorePage> {
 
   @override
   Widget build(BuildContext context) {
+    // tenantId 不明 → 404 表示（現状どおり）
     if (tenantId == null) {
       return Scaffold(body: Center(child: Text(tr("status.not_found"))));
+    }
+    // uid がまだ解決できていない → ローディング表示にして Firestore を触らない
+    if (uid == null) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     final tenantDocStream = FirebaseFirestore.instance
@@ -219,7 +251,7 @@ class PublicStorePageState extends State<PublicStorePage> {
       stream: tenantDocStream,
       builder: (context, tSnap) {
         final tData = tSnap.data?.data();
-        final subType = (tData?['subscription']?['type'] as String?)
+        final subType = (tData?['subscription']?['plan'] as String?)
             ?.toUpperCase();
         final isTypeC = subType == 'C';
 
@@ -604,8 +636,8 @@ class _Sectionbar extends StatelessWidget {
     this.notchHeight = 10,
     this.margin = const EdgeInsets.only(
       top: 12,
-      left: 12,
-      right: 12,
+      left: 10,
+      right: 10,
       bottom: 4,
     ),
     this.alignment = Alignment.center, // 左寄せ=Alignment.centerLeft, 右寄せ=...Right

@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:firebase_auth/firebase_auth.dart'; // ★ 追加
 import 'package:yourpay/tenant/store_detail/card_shell.dart';
+import 'package:yourpay/tenant/widget/trial_progress_bar.dart';
 
 class StoreSettingsTab extends StatefulWidget {
   final String tenantId;
@@ -45,17 +46,6 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
     _storePercentCtrl.dispose();
     _storeFixedCtrl.dispose();
     super.dispose();
-  }
-
-  // 初期表示に Firestore から読み込む（周辺のスナップショットがあるならそこから代入でもOK）
-  Future<void> _loadCPerks(DocumentReference tenantRef) async {
-    final snap = await tenantRef.get();
-    final data = (snap.data() as Map<String, dynamic>?);
-    final cPerks = (data?['c_perks'] as Map<String, dynamic>?) ?? {};
-    setState(() {
-      _thanksPhotoUrl = cPerks['thanksPhotoUrl'] as String?;
-      _thanksVideoUrl = cPerks['thanksVideoUrl'] as String?;
-    });
   }
 
   Future<void> _pickAndUploadPhoto(DocumentReference tenantRef) async {
@@ -358,20 +348,56 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
     }
   }
 
-  Future<void> _changePlan(DocumentReference tenantRef, String plan) async {
+  Future<void> _changePlan(DocumentReference tenantRef, String newPlan) async {
     setState(() => _updatingPlan = true);
     try {
-      final res = await _functions
-          .httpsCallable('createSubscriptionCheckout')
-          .call({'tenantId': widget.tenantId, 'plan': plan});
+      // 現在の購読情報を取得
+      final tSnap = await tenantRef.get();
+      final tData = tSnap.data() as Map<String, dynamic>?;
+
+      final sub = (tData?['subscription'] as Map<String, dynamic>?) ?? {};
+      final subId = sub['stripeSubscriptionId'] as String?;
+      final status =
+          (sub['status'] as String?) ?? ''; // 'trialing' / 'active' など
+
+      if (subId == null || subId.isEmpty) {
+        // まだサブスクが無い → 初回登録（90日トライアル開始）。Checkoutへ遷移。
+        final res = await _functions
+            .httpsCallable('createSubscriptionCheckout')
+            .call(<String, dynamic>{
+              'tenantId': widget.tenantId,
+              'plan': newPlan,
+            });
+        final data = res.data as Map;
+        final url = data['url'] as String?;
+        if (url == null) {
+          throw 'Checkout URLが取得できませんでした。';
+        }
+        await launchUrlString(url, webOnlyWindowName: '_self');
+        return;
+      }
+
+      // サブスクあり → プラン差し替え（トライアルならtrial維持、それ以外は差額課金なしで次回から反映）
+      final applyWhen = (status == 'trialing')
+          ? 'trial_now'
+          : 'immediate_no_proration';
+
+      final res = await _functions.httpsCallable('changeSubscriptionPlan').call(
+        <String, dynamic>{
+          'subscriptionId': subId,
+          'newPlan': newPlan, // "A" | "B" | "C"
+          'applyWhen': applyWhen, // バックエンドの拡張版に対応
+        },
+      );
+
       final data = res.data as Map;
-      if (data['alreadySubscribed'] == true) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('すでに契約中です。支払い情報や請求はポータルで確認/変更できます。')),
-        );
-        await launchUrlString(data['portalUrl'], webOnlyWindowName: '_self');
+      if (data['ok'] == true) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('プランを $newPlan に変更しました。')));
       } else {
-        await launchUrlString(data['url'], webOnlyWindowName: '_self');
+        throw '変更APIの応答が不正です。';
       }
     } catch (e) {
       if (!mounted) return;
@@ -581,8 +607,10 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
     );
 
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+
     final tenantRef = FirebaseFirestore.instance
-        .collection('tenants')
+        .collection(uid!)
         .doc(widget.tenantId);
 
     return Theme(
@@ -622,6 +650,17 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
             }
             if (_storeFixedCtrl.text.isEmpty && store['fixed'] != null) {
               _storeFixedCtrl.text = '${store['fixed']}';
+            }
+
+            // ここを修正：subscription.trial から取り出す
+            final trialMap = (sub['trial'] as Map?)?.cast<String, dynamic>();
+            DateTime? trialStart;
+            DateTime? trialEnd;
+            if (trialMap != null) {
+              final tsStart = trialMap['trialStart'];
+              final tsEnd = trialMap['trialEnd'];
+              if (tsStart is Timestamp) trialStart = tsStart.toDate();
+              if (tsEnd is Timestamp) trialEnd = tsEnd.toDate();
             }
 
             return ListView(
@@ -679,6 +718,15 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                           ],
                         ),
                         const SizedBox(height: 16),
+
+                        TrialProgressBar(
+                          trialStart: trialStart, // なくてもOK
+                          trialEnd: trialEnd!, // できれば渡す
+                          totalDays: 90, // デフォルト90日
+                          onTap: () {},
+                        ),
+
+                        const SizedBox(height: 10),
 
                         PlanPicker(
                           selected: _selectedPlan!,

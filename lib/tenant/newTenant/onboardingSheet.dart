@@ -189,7 +189,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
     try {
       // tenants/{id} を直接読み直して、Webhook反映を素早くUIに反映
       final t = await FirebaseFirestore.instance
-          .collection('tenants')
+          .collection(uid)
           .doc(widget.tenantId)
           .get();
 
@@ -347,7 +347,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
     setState(() => _checkingConnect = true);
     try {
       final doc = await FirebaseFirestore.instance
-          .collection('tenants')
+          .collection(uid)
           .doc(widget.tenantId)
           .get();
       final c = (doc.data()?['connect'] as Map?) ?? {};
@@ -383,11 +383,6 @@ class OnboardingSheetState extends State<OnboardingSheet> {
           'uid': uid,
           'email': FirebaseAuth.instance.currentUser?.email,
         },
-        'subscription': {
-          'status': _subscribedLocal ? 'active' : 'inactive',
-          'plan': selectedPlan,
-        },
-        'initialFee': {'status': _initialFeePaidLocal ? 'paid' : 'unpaid'},
         'updatedAt': FieldValue.serverTimestamp(),
         'createdAt': FieldValue.serverTimestamp(), // merge時は初回のみ実質更新
       }, SetOptions(merge: true));
@@ -425,8 +420,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
           'uid': uid,
           'email': FirebaseAuth.instance.currentUser?.email,
         },
-        'subscription': {'status': 'active', 'plan': selectedPlan},
-        'initialFee': {'status': _initialFeePaidLocal ? 'paid' : 'unpaid'},
+
         'updatedAt': FieldValue.serverTimestamp(),
       };
       await ref.set(data, SetOptions(merge: true));
@@ -482,7 +476,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
   Widget build(BuildContext context) {
     // tenants/{id} が存在すれば購読（Webhook反映を自動で拾う）
     final tenantStream = FirebaseFirestore.instance
-        .collection('tenants')
+        .collection(uid)
         .doc(widget.tenantId)
         .snapshots();
 

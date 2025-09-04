@@ -94,8 +94,8 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
   _loadMyTenants() async {
     final uid = FirebaseAuth.instance.currentUser!.uid;
     final qs = await FirebaseFirestore.instance
-        .collection('tenants')
-        .where('members', arrayContains: uid)
+        .collection(uid)
+        .where('members')
         .get();
     return qs.docs;
   }
@@ -240,38 +240,33 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              '全スタッフQR一覧（共有用URL）',
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
-                color: Colors.black87,
+            Center(
+              child: const Text(
+                'スタッフのQRコードの一覧をURLから閲覧、ダウンロードできます',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
               ),
             ),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
               children: [
-                OutlinedButton.icon(
-                  style: outlinedBtnStyle,
-                  onPressed: () => launchUrlString(
-                    url,
-                    mode: LaunchMode.externalApplication,
+                Center(
+                  child: OutlinedButton.icon(
+                    style: outlinedBtnStyle,
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: url));
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('URLをコピーしました')),
+                        );
+                      }
+                    },
+                    icon: const Icon(Icons.copy),
+                    label: const Text('URLをコピー'),
                   ),
-                  icon: const Icon(Icons.open_in_new),
-                  label: const Text('リンクを開く'),
-                ),
-                OutlinedButton.icon(
-                  style: outlinedBtnStyle,
-                  onPressed: () async {
-                    await Clipboard.setData(ClipboardData(text: url));
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('URLをコピーしました')),
-                      );
-                    }
-                  },
-                  icon: const Icon(Icons.copy),
-                  label: const Text('URLをコピー'),
                 ),
               ],
             ),
@@ -406,12 +401,6 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
   }
 }
 
-/// ===============================================================
-/// 追加・変更ダイアログ（タブ付き）
-///  - タブ1: 新規作成 / グローバル（staff/{email}）取り込み
-///  - タブ2: 他店舗から取り込み（自分がメンバーのテナント）
-///    → 店舗選択は**スクロール可能な専用ダイアログ**で選択
-/// ===============================================================
 class _AddStaffDialog extends StatefulWidget {
   final String currentTenantId;
 
@@ -743,9 +732,10 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
       widget.prefilledPhotoUrlFromGlobal,
     );
     try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
       final user = FirebaseAuth.instance.currentUser!;
       final empRef = FirebaseFirestore.instance
-          .collection('tenants')
+          .collection(uid!)
           .doc(tenantId)
           .collection('employees')
           .doc();
@@ -756,7 +746,7 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
         final contentType = _detectContentType(widget.empPhotoName);
         final ext = contentType.split('/').last;
         final storageRef = FirebaseStorage.instance.ref().child(
-          'tenants/$tenantId/employees/${empRef.id}/photo.$ext',
+          '$uid/$tenantId/employees/${empRef.id}/photo.$ext',
         );
         await storageRef.putData(
           widget.empPhotoBytes!,

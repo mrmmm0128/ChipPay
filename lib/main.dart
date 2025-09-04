@@ -139,20 +139,6 @@ class MyApp extends StatelessWidget {
       );
     }
 
-    // // /staff?tid=...&eid=...
-    // if (uri.path == '/staff') {
-    //   return MaterialPageRoute(
-    //     builder: (_) => const StaffDetailPage(),
-    //     settings: RouteSettings(
-    //       name: settings.name,
-    //       arguments: {
-    //         'tenantId': uri.queryParameters['tid'],
-    //         'employeeId': uri.queryParameters['eid'],
-    //       },
-    //     ),
-    //   );
-    // }
-
     // それ以外の静的ルート
     final staticRoutes = <String, WidgetBuilder>{
       '/': (_) => const Root(),
