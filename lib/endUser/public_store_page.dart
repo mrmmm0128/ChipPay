@@ -598,7 +598,7 @@ class _YellowActionButton extends StatelessWidget {
         if (icon != null) ...[
           Container(
             color: AppPalette.white,
-            decoration: BoxDecoration(),
+            //decoration: BoxDecoration(),
             child: Icon(icon, color: AppPalette.black),
           ),
           const SizedBox(width: 8),
@@ -636,8 +636,8 @@ class _Sectionbar extends StatelessWidget {
     this.notchHeight = 10,
     this.margin = const EdgeInsets.only(
       top: 12,
-      left: 10,
-      right: 10,
+      left: 12,
+      right: 12,
       bottom: 4,
     ),
     this.alignment = Alignment.center, // 左寄せ=Alignment.centerLeft, 右寄せ=...Right

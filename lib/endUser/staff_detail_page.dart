@@ -230,8 +230,11 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
     return Scaffold(
       backgroundColor: AppPalette.yellow,
       appBar: AppBar(
-        backgroundColor: AppPalette.yellow,
+        backgroundColor: Colors.transparent, // ← 透明
+        surfaceTintColor: Colors.transparent, // M3 のティントも無効化
+        shadowColor: Colors.transparent, // 念のため影も消す
         foregroundColor: AppPalette.black,
+        toolbarHeight: 30,
         elevation: 0,
         scrolledUnderElevation: 0,
       ),
