@@ -8,6 +8,8 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:firebase_auth/firebase_auth.dart'; // ★ 追加
 import 'package:yourpay/tenant/store_detail/card_shell.dart';
+import 'package:yourpay/tenant/store_detail/show_video_preview.dart';
+import 'package:yourpay/tenant/widget/c_perk.dart';
 import 'package:yourpay/tenant/widget/trial_progress_bar.dart';
 
 class StoreSettingsTab extends StatefulWidget {
@@ -968,241 +970,26 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                         const SizedBox(height: 16),
 
                         // ── Cプラン特典（現在の契約がCのときだけ表示） ─────────────
+                        // ── Cプラン特典（現在の契約がCのときだけ表示） ─────────────
                         if (currentPlan == 'C') ...[
-                          const Divider(height: 1),
-                          const SizedBox(height: 16),
-                          const Text(
-                            'Cプランの特典（表示用リンク）',
-                            style: TextStyle(fontWeight: FontWeight.w600),
+                          buildCPerksSection(
+                            tenantRef: tenantRef,
+                            lineUrlCtrl: _lineUrlCtrl,
+                            reviewUrlCtrl: _reviewUrlCtrl,
+                            uploadingPhoto: _uploadingPhoto,
+                            uploadingVideo: _uploadingVideo,
+                            savingExtras: _savingExtras,
+                            thanksPhotoPreviewBytes: _thanksPhotoPreviewBytes,
+                            thanksPhotoUrlLocal: _thanksPhotoUrl,
+                            thanksVideoUrlLocal: _thanksVideoUrl,
+                            onSaveExtras: () => _saveExtras(tenantRef),
+                            onPickPhoto: () => _pickAndUploadPhoto(tenantRef),
+                            onDeletePhoto: () => _deleteThanksPhoto(tenantRef),
+                            onPickVideo: () => _pickAndUploadVideo(tenantRef),
+                            onDeleteVideo: () => _deleteThanksVideo(tenantRef),
+                            onPreviewVideo: showVideoPreview,
+                            primaryBtnStyle: primaryBtnStyle,
                           ),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: _lineUrlCtrl,
-                            decoration: const InputDecoration(
-                              labelText: '公式LINEリンク（任意）',
-                              hintText: 'https://lin.ee/xxxxx',
-                            ),
-                            keyboardType: TextInputType.url,
-                          ),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: _reviewUrlCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'Googleレビューリンク（任意）',
-                              hintText: 'https://g.page/r/xxxxx/review',
-                            ),
-                            keyboardType: TextInputType.url,
-                          ),
-
-                          // ===== 感謝メディア（写真／動画）ここから =====
-                          const SizedBox(height: 16),
-                          const Divider(height: 1),
-                          const SizedBox(height: 16),
-                          const Text(
-                            'Cプランの特典（感謝の写真・動画）',
-                            style: TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                          const SizedBox(height: 8),
-
-                          // 写真
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // プレビュー
-                              Container(
-                                width: 96,
-                                height: 96,
-                                color: Colors.grey.shade200,
-                                alignment: Alignment.center,
-                                child: _uploadingPhoto
-                                    ? const SizedBox(
-                                        width: 24,
-                                        height: 24,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : (() {
-                                        if (_thanksPhotoPreviewBytes != null) {
-                                          return Image.memory(
-                                            _thanksPhotoPreviewBytes!,
-                                            fit: BoxFit.cover,
-                                          );
-                                        }
-                                        if (_thanksPhotoUrl != null) {
-                                          return Image.network(
-                                            _thanksPhotoUrl!,
-                                            fit: BoxFit.cover,
-                                          );
-                                        }
-                                        return const Icon(
-                                          Icons.photo,
-                                          size: 32,
-                                        );
-                                      })(),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text('感謝の写真（JPG/PNG・5MBまで）'),
-                                    const SizedBox(height: 8),
-                                    Wrap(
-                                      spacing: 8,
-                                      runSpacing: 8,
-                                      children: [
-                                        FilledButton.icon(
-                                          onPressed: _uploadingPhoto
-                                              ? null
-                                              : () => _pickAndUploadPhoto(
-                                                  tenantRef,
-                                                ),
-                                          icon: const Icon(Icons.file_upload),
-                                          label: Text(
-                                            _thanksPhotoUrl == null
-                                                ? '写真を選ぶ'
-                                                : '写真を差し替え',
-                                          ),
-                                        ),
-                                        if (_thanksPhotoUrl != null)
-                                          OutlinedButton.icon(
-                                            onPressed: _uploadingPhoto
-                                                ? null
-                                                : () => _deleteThanksPhoto(
-                                                    tenantRef,
-                                                  ),
-                                            icon: const Icon(
-                                              Icons.delete_outline,
-                                            ),
-                                            label: const Text('写真を削除'),
-                                          ),
-                                        if (_thanksPhotoUrl != null)
-                                          OutlinedButton.icon(
-                                            onPressed: () => launchUrlString(
-                                              _thanksPhotoUrl!,
-                                              mode: LaunchMode
-                                                  .externalApplication,
-                                            ),
-                                            icon: const Icon(Icons.open_in_new),
-                                            label: const Text('写真を開く'),
-                                          ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-
-                          const SizedBox(height: 16),
-
-                          // 動画
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Container(
-                                width: 96,
-                                height: 96,
-                                color: Colors.grey.shade200,
-                                alignment: Alignment.center,
-                                child: _uploadingVideo
-                                    ? const SizedBox(
-                                        width: 24,
-                                        height: 24,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const Icon(Icons.movie, size: 32),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text('感謝の動画（MP4/MOV/WEBM・50MBまで）'),
-                                    const SizedBox(height: 8),
-                                    Wrap(
-                                      spacing: 8,
-                                      runSpacing: 8,
-                                      children: [
-                                        FilledButton.icon(
-                                          onPressed: _uploadingVideo
-                                              ? null
-                                              : () => _pickAndUploadVideo(
-                                                  tenantRef,
-                                                ),
-                                          icon: const Icon(Icons.file_upload),
-                                          label: Text(
-                                            _thanksVideoUrl == null
-                                                ? '動画を選ぶ'
-                                                : '動画を差し替え',
-                                          ),
-                                        ),
-                                        if (_thanksVideoUrl != null)
-                                          OutlinedButton.icon(
-                                            onPressed: _uploadingVideo
-                                                ? null
-                                                : () => _deleteThanksVideo(
-                                                    tenantRef,
-                                                  ),
-                                            icon: const Icon(
-                                              Icons.delete_outline,
-                                            ),
-                                            label: const Text('動画を削除'),
-                                          ),
-                                        if (_thanksVideoUrl != null)
-                                          OutlinedButton.icon(
-                                            onPressed: () => launchUrlString(
-                                              _thanksVideoUrl!,
-                                              mode: LaunchMode
-                                                  .externalApplication,
-                                            ),
-                                            icon: const Icon(Icons.open_in_new),
-                                            label: const Text('動画を開く'),
-                                          ),
-                                      ],
-                                    ),
-                                    if (_thanksVideoUrl != null) ...[
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        '保存URL: $_thanksVideoUrl',
-                                        style: Theme.of(
-                                          context,
-                                        ).textTheme.bodySmall,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-
-                          const SizedBox(height: 12),
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: FilledButton.icon(
-                              style: primaryBtnStyle,
-                              onPressed: _savingExtras
-                                  ? null
-                                  : () => _saveExtras(tenantRef),
-                              icon: _savingExtras
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: Colors.white,
-                                      ),
-                                    )
-                                  : const Icon(Icons.link),
-                              label: const Text('特典を保存'),
-                            ),
-                          ),
-                          // ===== 感謝メディアここまで =====
                         ],
 
                         const SizedBox(height: 16),
@@ -1763,5 +1550,32 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
         ),
       ),
     );
+  }
+}
+
+class _InfoLine extends StatelessWidget {
+  final String text;
+  const _InfoLine(this.text);
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: const [
+        Icon(Icons.info_outline, size: 16, color: Colors.black54),
+        SizedBox(width: 6),
+        Expanded(
+          child: Text('', style: TextStyle(color: Colors.black54)),
+        ),
+      ],
+    ).copyWithText(text); // 下の extension を使ってテキスト差し替え
+  }
+}
+
+extension on Row {
+  Row copyWithText(String t) {
+    final children = List<Widget>.from(this.children);
+    children[2] = Expanded(
+      child: Text(t, style: const TextStyle(color: Colors.black54)),
+    );
+    return Row(children: children);
   }
 }
