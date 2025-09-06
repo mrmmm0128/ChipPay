@@ -117,10 +117,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
               children: [
                 const Icon(Icons.check_circle, size: 80),
                 const SizedBox(height: 12),
-                Text(
-                  tr("success_page.success"),
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
+                Text(tr("success_page.success"), style: AppTypography.label()),
                 if (widget.employeeName != null || widget.amount != null) ...[
                   const SizedBox(height: 8),
                   Text(
@@ -138,6 +135,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
                           },
                         ),
                     ].join(' / '),
+                    style: AppTypography.body(),
                   ),
                 ],
                 const SizedBox(height: 24),
@@ -427,7 +425,7 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
             children: [
               Flexible(
                 flex: 1,
-                child: _YellowActionButton(
+                child: _YellowActionButton2(
                   label: tr('button.cancel'),
                   onPressed: _loading ? null : () => Navigator.pop(context),
                   color: AppPalette.white,
@@ -545,6 +543,7 @@ class _Keypad extends StatelessWidget {
 }
 
 /// 黄色×黒の大ボタン（色は任意で上書き可）
+/// テキストがオーバーフローしそうな場合は自動で縮小して収めます。
 class _YellowActionButton extends StatelessWidget {
   final String label;
   final IconData? icon;
@@ -564,31 +563,105 @@ class _YellowActionButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final bg = color ?? AppPalette.yellow;
 
-    final child = Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        if (icon != null) ...[
-          Icon(icon, color: AppPalette.black),
-          const SizedBox(width: 8),
-        ],
-        Text(label, style: AppTypography.label(color: AppPalette.black)),
-      ],
-    );
-
     return Material(
-      color: bg, // ← 指定があればその色、なければ黄色
+      color: bg,
       borderRadius: BorderRadius.circular(AppDims.radius),
+      clipBehavior: Clip.antiAlias, // 角丸内にリップルをクリップ
       child: InkWell(
         onTap: onPressed,
         borderRadius: BorderRadius.circular(AppDims.radius),
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 18),
+          padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
           alignment: Alignment.center,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(AppDims.radius),
             border: Border.all(color: AppPalette.border, width: AppDims.border),
           ),
-          child: child,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (icon != null) ...[
+                Icon(icon, color: AppPalette.black),
+                const SizedBox(width: 8),
+              ],
+              // ★ ここがポイント：Flexible + FittedBox(scaleDown)
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown, // 収まらない時だけ縮小
+                  alignment: Alignment.center,
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    // overflow は不要（縮小で収めるため）。保険で付けたいなら TextOverflow.ellipsis を。
+                    style: AppTypography.label(color: AppPalette.black),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 黄色×黒の大ボタン（色は任意で上書き可）
+/// テキストがオーバーフローしそうな場合は自動で縮小して収めます。
+class _YellowActionButton2 extends StatelessWidget {
+  final String label;
+  final IconData? icon;
+  final VoidCallback? onPressed;
+
+  /// 背景色。未指定(null)なら AppPalette.yellow を使用
+  final Color? color;
+
+  const _YellowActionButton2({
+    required this.label,
+    this.icon,
+    this.onPressed,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = color ?? AppPalette.yellow;
+
+    return Material(
+      color: bg,
+      borderRadius: BorderRadius.circular(AppDims.radius),
+      clipBehavior: Clip.antiAlias, // 角丸内にリップルをクリップ
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(AppDims.radius),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppDims.radius),
+            border: Border.all(color: AppPalette.border, width: AppDims.border),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (icon != null) ...[
+                Icon(icon, color: AppPalette.black),
+                const SizedBox(width: 8),
+              ],
+              // ★ ここがポイント：Flexible + FittedBox(scaleDown)
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown, // 収まらない時だけ縮小
+                  alignment: Alignment.center,
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    // overflow は不要（縮小で収めるため）。保険で付けたいなら TextOverflow.ellipsis を。
+                    style: AppTypography.label2(color: AppPalette.black),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

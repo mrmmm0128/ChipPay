@@ -597,11 +597,19 @@ class _YellowActionButton extends StatelessWidget {
       children: [
         if (icon != null) ...[
           Container(
-            color: AppPalette.white,
-            //decoration: BoxDecoration(),
-            child: Icon(icon, color: AppPalette.black),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppPalette.white,
+              shape: BoxShape.circle, // ← 正円
+              border: Border.all(
+                color: AppPalette.black,
+                width: AppDims.border2,
+              ),
+            ),
+            child: Icon(icon, color: AppPalette.black, weight: 3200),
           ),
-          const SizedBox(width: 8),
+
+          const SizedBox(width: 16),
         ],
         Text(label, style: AppTypography.label2(color: AppPalette.black)),
       ],
@@ -1054,7 +1062,7 @@ class _Keypad extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 14),
       ),
       onPressed: onPressed,
-      child: Text(label, style: const TextStyle(fontSize: 18)),
+      child: Text(label, style: AppTypography.label()),
     );
   }
 
