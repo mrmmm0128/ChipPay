@@ -22,8 +22,14 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
   final _functions = FirebaseFunctions.instanceFor(region: 'us-central1');
   List<Map<String, dynamic>> _invoices = [];
   bool _loadingInvoices = false;
+  DateTime? _effectiveFromLocal; // 予約の適用開始（未指定なら翌月1日 0:00）
+  String _fmtDate(DateTime d) =>
+      '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')} '
+      '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
 
-  String? _selectedPlan; // 'A'|'B'|'C'
+  String? _selectedPlan;
+  bool _changingPlan = false;
+  String? _pendingPlan;
   final _lineUrlCtrl = TextEditingController();
   final _reviewUrlCtrl = TextEditingController();
   bool _updatingPlan = false;
@@ -37,7 +43,13 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
   String? _thanksVideoUrl;
   bool _uploadingPhoto = false;
   bool _uploadingVideo = false;
-  Uint8List? _thanksPhotoPreviewBytes; // 新規選択時のプレビュー用（任意）
+  Uint8List? _thanksPhotoPreviewBytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _effectiveFromLocal = _firstDayOfNextMonth();
+  }
 
   @override
   void dispose() {
@@ -46,6 +58,45 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
     _storePercentCtrl.dispose();
     _storeFixedCtrl.dispose();
     super.dispose();
+  }
+
+  void _enterChangeMode() {
+    setState(() {
+      _changingPlan = true;
+      _pendingPlan = _selectedPlan; // 現在値から開始
+    });
+  }
+
+  void _cancelChangeMode() {
+    setState(() {
+      _changingPlan = false;
+      _pendingPlan = null;
+    });
+  }
+
+  // state 内にメソッドを1つ用意
+  void _onPlanChanged(String v) {
+    if (!_changingPlan) return; // ロック中は無視
+    setState(() => _pendingPlan = v); // 変更モード時のみ反映
+  }
+
+  Future<void> _applyPlanChange(DocumentReference tenantRef) async {
+    if (_pendingPlan == null || _pendingPlan == _selectedPlan) return;
+    // 既存の処理を利用する場合は、選択値を噛ませてから呼ぶ
+    setState(
+      () => _selectedPlan = _pendingPlan,
+    ); // ← 既存関数が _selectedPlan を読む想定なら
+    await _showStripeFeeNoticeAndProceed(
+      tenantRef,
+    ); // 引数に plan を渡せるなら { plan: _pendingPlan! } でOK
+    // 成功後はモード終了（画面リロードで currentPlan が更新される前提）
+    if (mounted) {
+      setState(() {
+        _changingPlan = false;
+        // _pendingPlan はクリア（currentPlan の最新化は上位の Stream/再読込に任せる）
+        _pendingPlan = null;
+      });
+    }
   }
 
   Future<void> _pickAndUploadPhoto(DocumentReference tenantRef) async {
@@ -113,6 +164,148 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
     } finally {
       if (mounted) setState(() => _uploadingPhoto = false);
     }
+  }
+
+  Future<void> _showInvoicesDialog(BuildContext context) async {
+    // まだ読み込んでいなければ先に取得
+    if (_invoices.isEmpty && !_loadingInvoices) {
+      await _loadInvoices(widget.tenantId);
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, sbSet) {
+          String _fmtYMD(DateTime d) =>
+              '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')}';
+
+          Widget _list() {
+            if (_loadingInvoices) {
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: CircularProgressIndicator(),
+                ),
+              );
+            }
+            if (_invoices.isEmpty) {
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text(
+                    '請求履歴はまだありません',
+                    style: TextStyle(color: Colors.black87),
+                  ),
+                ),
+              );
+            }
+
+            return ListView.separated(
+              itemCount: _invoices.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (_, i) {
+                final inv = _invoices[i];
+
+                final amount =
+                    (inv['amount_paid'] ?? inv['amount_due'] ?? 0) as num;
+                final cur = (inv['currency'] ?? 'JPY').toString().toUpperCase();
+                final number = (inv['number'] ?? inv['id'] ?? '').toString();
+                final url = inv['hosted_invoice_url'] as String?;
+                final pdf = inv['invoice_pdf'] as String?;
+
+                // created は「秒」想定 / Firestore Timestamp 両対応
+                int createdMs = 0;
+                final createdRaw = inv['created'];
+                if (createdRaw is int) {
+                  createdMs = createdRaw * 1000;
+                } else if (createdRaw is double) {
+                  createdMs = (createdRaw * 1000).round();
+                } else if (createdRaw is Timestamp) {
+                  createdMs = createdRaw.millisecondsSinceEpoch;
+                }
+                final created = DateTime.fromMillisecondsSinceEpoch(createdMs);
+                final ymd = _fmtYMD(created);
+
+                return ListTile(
+                  dense: true,
+                  title: Text(
+                    '請求 #$number（$ymd）',
+                    style: const TextStyle(color: Colors.black87),
+                  ),
+                  subtitle: Text(
+                    '支払額: ${(amount / 100).toStringAsFixed(2)} $cur  •  状態: ${inv['status']}',
+                    style: const TextStyle(color: Colors.black54),
+                  ),
+                  trailing: Wrap(
+                    spacing: 8,
+                    children: [
+                      if (pdf != null)
+                        IconButton(
+                          tooltip: 'PDFを開く',
+                          icon: const Icon(Icons.picture_as_pdf),
+                          onPressed: () => launchUrlString(
+                            pdf,
+                            mode: LaunchMode.externalApplication,
+                          ),
+                        ),
+                      if (url != null)
+                        IconButton(
+                          tooltip: '請求書ページを開く',
+                          icon: const Icon(Icons.open_in_new),
+                          onPressed: () => launchUrlString(
+                            url,
+                            mode: LaunchMode.externalApplication,
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              },
+            );
+          }
+
+          return AlertDialog(
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.transparent,
+            title: Row(
+              children: [
+                const Text(
+                  'サブスクリプション請求履歴',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const Spacer(),
+                OutlinedButton.icon(
+                  onPressed: _loadingInvoices
+                      ? null
+                      : () async {
+                          await _loadInvoices(widget.tenantId);
+                          sbSet(() {}); // ダイアログ内だけ再描画
+                        },
+                  icon: _loadingInvoices
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh),
+                  label: const Text('更新'),
+                ),
+              ],
+            ),
+            content: SizedBox(width: 640, height: 460, child: _list()),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text(
+                  '閉じる',
+                  style: TextStyle(color: Colors.black87),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   Future<void> _pickAndUploadVideo(DocumentReference tenantRef) async {
@@ -271,11 +464,18 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
     if (p > 100) p = 100;
     if (f < 0) f = 0;
 
+    // 適用開始日時（未指定なら翌月1日）
+    var eff = _effectiveFromLocal ?? _firstDayOfNextMonth();
+
+    // もし過去が選ばれたら「今」に寄せる（必要なければ削除）
+    final now = DateTime.now();
+    if (eff.isBefore(now)) {
+      eff = now;
+    }
+
     setState(() => _savingStoreCut = true);
     try {
-      final eff = _firstDayOfNextMonth();
       await tenantRef.set({
-        // ★ 変更：即時反映せず pending に保存し、適用開始時刻を持たせる
         'storeDeductionPending': {
           'percent': p,
           'fixed': f,
@@ -285,11 +485,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            '店舗控除（次回 ${eff.year}/${eff.month.toString().padLeft(2, '0')} から）を保存しました',
-          ),
-        ),
+        SnackBar(content: Text('店舗控除を保存しました（${_fmtDate(eff)} から適用）')),
       );
     } catch (e) {
       if (!mounted) return;
@@ -698,6 +894,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // ── 上段：現在のステータス ────────────────────────────
                         Row(
                           children: [
                             PlanChip(label: '現在', dark: true),
@@ -717,24 +914,61 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                               ),
                           ],
                         ),
+
                         const SizedBox(height: 16),
 
+                        // ── トライアル進捗（必要に応じてnullガード調整） ───────────
                         TrialProgressBar(
-                          trialStart: trialStart, // なくてもOK
-                          trialEnd: trialEnd!, // できれば渡す
-                          totalDays: 90, // デフォルト90日
+                          trialStart: trialStart,
+                          trialEnd: trialEnd!, // 非null前提のまま踏襲
+                          totalDays: 90,
                           onTap: () {},
                         ),
 
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 12),
 
-                        PlanPicker(
-                          selected: _selectedPlan!,
-                          onChanged: (v) => setState(() => _selectedPlan = v),
+                        // ── プラン選択（「サブスクを変更」を押すまで操作不可） ─────
+                        Builder(
+                          builder: (_) {
+                            final effectivePickerValue = _changingPlan
+                                ? (_pendingPlan ?? currentPlan)
+                                : currentPlan;
+
+                            return Stack(
+                              children: [
+                                AbsorbPointer(
+                                  absorbing: !_changingPlan,
+                                  child: Opacity(
+                                    opacity: _changingPlan ? 1.0 : 0.5,
+                                    child: PlanPicker(
+                                      selected: effectivePickerValue,
+                                      onChanged: _onPlanChanged, // 常に渡す（中で無視する）
+                                    ),
+                                  ),
+                                ),
+                                if (!_changingPlan)
+                                  Positioned.fill(
+                                    child: IgnorePointer(
+                                      child: Container(
+                                        alignment: Alignment.center,
+                                        child: const Text(
+                                          '「サブスクを変更」を押すと選べます',
+                                          style: TextStyle(
+                                            color: Colors.black54,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            );
+                          },
                         ),
 
-                        if (_selectedPlan == 'C') ...[
-                          const SizedBox(height: 16),
+                        const SizedBox(height: 16),
+
+                        // ── Cプラン特典（現在の契約がCのときだけ表示） ─────────────
+                        if (currentPlan == 'C') ...[
                           const Divider(height: 1),
                           const SizedBox(height: 16),
                           const Text(
@@ -947,7 +1181,6 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                             ],
                           ),
 
-                          // ===== 感謝メディアここまで =====
                           const SizedBox(height: 12),
                           Align(
                             alignment: Alignment.centerRight,
@@ -966,49 +1199,80 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                       ),
                                     )
                                   : const Icon(Icons.link),
-                              // ここは「特典を保存」に名称変更（リンク＋メディア全体の保存の意味合いに）
                               label: const Text('特典を保存'),
                             ),
                           ),
+                          // ===== 感謝メディアここまで =====
                         ],
 
                         const SizedBox(height: 16),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: FilledButton.icon(
-                                style: primaryBtnStyle,
-                                onPressed: _updatingPlan
-                                    ? null
-                                    : () => _showStripeFeeNoticeAndProceed(
-                                        tenantRef,
-                                      ),
-                                icon: _updatingPlan
-                                    ? const SizedBox(
-                                        width: 16,
-                                        height: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Colors.white, // 黒ボタン上なので白
-                                        ),
-                                      )
-                                    : const Icon(Icons.autorenew),
-                                label: Text(
-                                  currentPlan == _selectedPlan
-                                      ? '再設定/再購読'
-                                      : '変更',
+
+                        // ── 操作ボタン群 ────────────────────────────────
+                        if (!_changingPlan) ...[
+                          // 通常時：変更モードへ
+                          Row(
+                            children: [
+                              Expanded(
+                                child: FilledButton.icon(
+                                  style: primaryBtnStyle,
+                                  onPressed: _updatingPlan
+                                      ? null
+                                      : _enterChangeMode,
+                                  icon: const Icon(Icons.tune),
+                                  label: const Text('サブスクを変更'),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 12),
-                            OutlinedButton.icon(
-                              style: outlinedBtnStyle,
-                              onPressed: _openCustomerPortal,
-                              icon: const Icon(Icons.credit_card),
-                              label: const Text('サブスク登録を管理'),
-                            ),
-                          ],
-                        ),
+                              const SizedBox(width: 12),
+                              OutlinedButton.icon(
+                                style: outlinedBtnStyle,
+                                onPressed: _openCustomerPortal,
+                                icon: const Icon(Icons.credit_card),
+                                label: const Text('サブスク登録を管理'),
+                              ),
+                            ],
+                          ),
+                        ] else ...[
+                          // 変更モード：適用／キャンセル
+                          Row(
+                            children: [
+                              Expanded(
+                                child: FilledButton.icon(
+                                  style: primaryBtnStyle,
+                                  onPressed:
+                                      (_updatingPlan ||
+                                          (_pendingPlan == null) ||
+                                          (_pendingPlan == currentPlan))
+                                      ? null
+                                      : () => _applyPlanChange(tenantRef),
+                                  icon: _updatingPlan
+                                      ? const SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white,
+                                          ),
+                                        )
+                                      : const Icon(Icons.check_circle),
+                                  label: Text(
+                                    (_pendingPlan == currentPlan)
+                                        ? '変更なし'
+                                        : 'このプランに変更',
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              OutlinedButton.icon(
+                                style: outlinedBtnStyle,
+                                onPressed: _updatingPlan
+                                    ? null
+                                    : _cancelChangeMode,
+                                icon: const Icon(Icons.close),
+                                label: const Text('やめる'),
+                              ),
+                            ],
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -1051,7 +1315,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                               width: double.infinity,
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
-                                color: const Color(0xFFF5F5F5),
+                                color: Colors.orange.withOpacity(0.16),
                                 borderRadius: BorderRadius.circular(10),
                                 border: Border.all(color: Colors.black12),
                               ),
@@ -1060,7 +1324,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                   const Icon(
                                     Icons.schedule,
                                     size: 18,
-                                    color: Colors.black54,
+                                    color: Colors.orange,
                                   ),
                                   const SizedBox(width: 8),
                                   Expanded(
@@ -1100,6 +1364,142 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                             ),
                           ],
                         ),
+                        const SizedBox(height: 7),
+
+                        StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                          stream: tenantRef.snapshots(),
+                          builder: (context, snap) {
+                            final data = snap.data?.data() ?? {};
+
+                            final active =
+                                (data['storeDeduction'] as Map?) ?? {};
+                            final pending =
+                                (data['storeDeductionPending'] as Map?) ?? {};
+
+                            final activePercent = (active['percent'] ?? 0)
+                                .toString();
+
+                            final pendingPercent = (pending['percent'] ?? 0)
+                                .toString();
+
+                            final pendingStart =
+                                (pending['effectiveFrom'] is Timestamp)
+                                ? (pending['effectiveFrom'] as Timestamp)
+                                      .toDate()
+                                : null;
+
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // 現在の値
+                                Row(
+                                  children: [
+                                    const Icon(Icons.info_outline, size: 18),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      '現在：$activePercent%',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+
+                                // 予約中
+                                Row(
+                                  children: [
+                                    const Icon(Icons.schedule, size: 18),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        (pending.isEmpty)
+                                            ? '予約中の変更はありません'
+                                            : '予約中：$pendingPercent%（${_fmtDate(pendingStart!)} から）',
+                                      ),
+                                    ),
+                                    if (pending.isNotEmpty)
+                                      TextButton.icon(
+                                        onPressed: () async {
+                                          await tenantRef.update({
+                                            'storeDeductionPending':
+                                                FieldValue.delete(),
+                                          });
+                                          if (!context.mounted) return;
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            const SnackBar(
+                                              content: Text('変更予約を取り消しました'),
+                                            ),
+                                          );
+                                        },
+                                        icon: const Icon(Icons.clear),
+                                        label: const Text('変更予約を取消'),
+                                      ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+
+                                // // 適用開始日時ピッカー
+                                // Row(
+                                //   children: [
+                                //     const Text('適用開始：'),
+                                //     const SizedBox(width: 8),
+                                //     OutlinedButton.icon(
+                                //       onPressed: () async {
+                                //         // 日付選択
+                                //         final now = DateTime.now();
+                                //         final init =
+                                //             _effectiveFromLocal ??
+                                //             _firstDayOfNextMonth();
+                                //         final pickedDate = await showDatePicker(
+                                //           context: context,
+                                //           initialDate: init.isAfter(now)
+                                //               ? init
+                                //               : now,
+                                //           firstDate: now.subtract(
+                                //             const Duration(days: 0),
+                                //           ),
+                                //           lastDate: DateTime(now.year + 3),
+                                //         );
+                                //         if (pickedDate == null) return;
+
+                                //         // 時刻選択（任意。不要ならこのブロックを削って 00:00 固定でもOK）
+                                //         final pickedTime = await showTimePicker(
+                                //           context: context,
+                                //           initialTime: const TimeOfDay(
+                                //             hour: 0,
+                                //             minute: 0,
+                                //           ),
+                                //         );
+
+                                //         final eff = DateTime(
+                                //           pickedDate.year,
+                                //           pickedDate.month,
+                                //           pickedDate.day,
+                                //           pickedTime?.hour ?? 0,
+                                //           pickedTime?.minute ?? 0,
+                                //         );
+                                //         setState(
+                                //           () => _effectiveFromLocal = eff,
+                                //         );
+                                //       },
+                                //       icon: const Icon(Icons.calendar_today),
+                                //       label: Text(
+                                //         _effectiveFromLocal == null
+                                //             ? '未設定'
+                                //             : _fmtDate(_effectiveFromLocal!),
+                                //       ),
+                                //     ),
+                                //   ],
+                                // ),
+                                const SizedBox(height: 12),
+                              ],
+                            );
+                          },
+                        ),
+
                         const SizedBox(height: 12),
                         Align(
                           alignment: Alignment.centerRight,
@@ -1117,7 +1517,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                     ),
                                   )
                                 : const Icon(Icons.save),
-                            label: const Text('店舗控除を保存'),
+                            label: const Text('店舗が差し引く金額割合を保存'),
                             style: FilledButton.styleFrom(
                               backgroundColor: Colors.black,
                               foregroundColor: Colors.white,
@@ -1134,7 +1534,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
 
                 const SizedBox(height: 24),
                 const Text(
-                  '請求履歴',
+                  'サブスクリプション請求履歴',
                   style: TextStyle(
                     fontWeight: FontWeight.w700,
                     color: Colors.black87,
@@ -1144,71 +1544,21 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                 CardShell(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: OutlinedButton.icon(
-                            onPressed: () => _loadInvoices(widget.tenantId),
-                            icon: _loadingInvoices
-                                ? const SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      // ★ テーマで黒87になる
-                                    ),
-                                  )
-                                : const Icon(Icons.refresh),
-                            label: const Text('更新'),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        if (_invoices.isEmpty && !_loadingInvoices)
-                          const Text(
-                            '請求履歴はまだありません',
-                            style: TextStyle(color: Colors.black87),
-                          ),
-                        if (_invoices.isNotEmpty)
-                          ..._invoices.map((inv) {
-                            final amount =
-                                inv['amount_paid'] ?? inv['amount_due'] ?? 0;
-                            final cur = (inv['currency'] ?? 'jpy')
-                                .toString()
-                                .toUpperCase();
-                            final number = inv['number'] ?? inv['id'];
-                            final url = inv['hosted_invoice_url'];
-                            final created = DateTime.fromMillisecondsSinceEpoch(
-                              (inv['created'] ?? 0) * 1000,
-                            );
-                            final ym =
-                                '${created.year}/${created.month.toString().padLeft(2, '0')}';
-
-                            return ListTile(
-                              contentPadding: EdgeInsets.zero,
-                              title: Text('請求 #$number（$ym）'),
-                              subtitle: Text(
-                                '支払額: ${(amount / 100).toStringAsFixed(2)} $cur  •  状態: ${inv['status']}',
-                              ),
-                              trailing: (url != null)
-                                  ? IconButton(
-                                      icon: const Icon(Icons.open_in_new),
-                                      onPressed: () => launchUrlString(
-                                        url,
-                                        mode: LaunchMode.platformDefault,
-                                        webOnlyWindowName: '_self',
-                                      ),
-                                    )
-                                  : null,
-                            );
-                          }),
-                      ],
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: OutlinedButton.icon(
+                        onPressed: _loadingInvoices
+                            ? null
+                            : () => _showInvoicesDialog(context),
+                        icon: const Icon(Icons.receipt_long),
+                        label: const Text('請求履歴を確認'),
+                      ),
                     ),
                   ),
                 ),
 
                 const SizedBox(height: 16),
+                // 既存: 管理者一覧タイトル
                 const Text(
                   '管理者一覧',
                   style: TextStyle(
@@ -1217,11 +1567,133 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                   ),
                 ),
                 const SizedBox(height: 8),
+
                 CardShell(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                     child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
+                        // ① 承認待ちの招待一覧
+                        StreamBuilder<QuerySnapshot>(
+                          stream: tenantRef
+                              .collection('invites')
+                              .where('status', isEqualTo: 'pending')
+                              .snapshots(),
+                          builder: (context, invSnap) {
+                            final invites = invSnap.data?.docs ?? const [];
+                            if (invSnap.connectionState ==
+                                ConnectionState.waiting) {
+                              return const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 8),
+                                child: LinearProgressIndicator(),
+                              );
+                            }
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  '承認待ちの招待',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                if (invites.isEmpty)
+                                  const Text(
+                                    '承認待ちはありません',
+                                    style: TextStyle(color: Colors.black54),
+                                  )
+                                else
+                                  ...invites.map((d) {
+                                    final m = d.data() as Map<String, dynamic>;
+                                    final email =
+                                        (m['emailLower'] as String?) ?? '';
+                                    final expTs = m['expiresAt'];
+                                    final exp = expTs is Timestamp
+                                        ? expTs.toDate()
+                                        : null;
+                                    return ListTile(
+                                      dense: true,
+                                      contentPadding: EdgeInsets.zero,
+                                      leading: const Icon(
+                                        Icons.pending_actions,
+                                        color: Colors.orange,
+                                      ),
+                                      title: Text(
+                                        email,
+                                        style: const TextStyle(
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                      subtitle: exp == null
+                                          ? null
+                                          : Text(
+                                              '有効期限: ${exp.year}/${exp.month.toString().padLeft(2, '0')}/${exp.day.toString().padLeft(2, '0')}',
+                                              style: const TextStyle(
+                                                color: Colors.black54,
+                                              ),
+                                            ),
+                                      trailing: Wrap(
+                                        spacing: 8,
+                                        children: [
+                                          TextButton.icon(
+                                            onPressed: () async {
+                                              // 再送（同じメールで再度invitation → バックエンド側でトークン更新＆送信）
+                                              await _functions
+                                                  .httpsCallable(
+                                                    'inviteTenantAdmin',
+                                                  )
+                                                  .call({
+                                                    'tenantId': widget.tenantId,
+                                                    'email': email,
+                                                  });
+                                              if (!mounted) return;
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text('招待メールを再送しました'),
+                                                ),
+                                              );
+                                            },
+                                            icon: const Icon(Icons.send),
+                                            label: const Text('再送'),
+                                          ),
+                                          TextButton.icon(
+                                            onPressed: () async {
+                                              await _functions
+                                                  .httpsCallable(
+                                                    'cancelTenantAdminInvite',
+                                                  )
+                                                  .call({
+                                                    'tenantId': widget.tenantId,
+                                                    'inviteId': d.id,
+                                                  });
+                                              if (!mounted) return;
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text('招待を取り消しました'),
+                                                ),
+                                              );
+                                            },
+                                            icon: const Icon(Icons.close),
+                                            label: const Text('取消'),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }),
+                                const Divider(height: 24),
+                              ],
+                            );
+                          },
+                        ),
+
+                        // ② 承認済みの管理者一覧（あなたの既存コードそのまま）
                         StreamBuilder<QuerySnapshot>(
                           stream: tenantRef.collection('members').snapshots(),
                           builder: (context, memSnap) {
@@ -1241,6 +1713,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                               );
                             }
 
+                            // フォールバック（memberUids をまだ使う場合）
                             final uids =
                                 (data['memberUids'] as List?)?.cast<String>() ??
                                 const <String>[];
@@ -1271,6 +1744,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                             );
                           },
                         ),
+
                         Align(
                           alignment: Alignment.centerRight,
                           child: TextButton.icon(
@@ -1279,41 +1753,6 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                             label: const Text('管理者を追加（メール招待）'),
                           ),
                         ),
-
-                        // 一番下にログアウト
-                        const SizedBox(height: 24),
-                        SafeArea(
-                          top: false,
-                          child: SizedBox(
-                            width: double.infinity,
-                            child: OutlinedButton.icon(
-                              onPressed: _loggingOut ? null : _logout,
-                              icon: _loggingOut
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        // ★ テーマで黒87になる
-                                      ),
-                                    )
-                                  : const Icon(Icons.logout),
-                              label: const Text('ログアウト'),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: Colors.black87,
-                                side: const BorderSide(color: Colors.black87),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 12,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
                       ],
                     ),
                   ),

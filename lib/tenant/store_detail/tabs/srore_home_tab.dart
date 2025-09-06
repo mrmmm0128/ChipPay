@@ -88,7 +88,11 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
 
     final msg = name.isNotEmpty ? '$name のサブスクリプションを登録しました' : '店舗を作成しました';
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg, style: TextStyle(fontFamily: 'LINEseed')),
+      ),
+    );
 
     // （任意）URLの一度きりパラメータを消しておく → Webのみ使うならコメントアウト外す
     // try {

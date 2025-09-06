@@ -38,12 +38,13 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
 
   String _staffTipUrl(String tenantId, String employeeId, {int? initAmount}) {
     final qp = <String, String>{
+      'u': uid!,
       't': tenantId,
       'e': employeeId,
       if (initAmount != null) 'a': '$initAmount',
     };
     final query = Uri(queryParameters: qp).query;
-    return '$_publicBase/#/staff?$query';
+    return '$_publicBase/#/store/staff?$query';
   }
 
   Future<void> _pickNewPhoto() async {
@@ -116,7 +117,7 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
         final contentType = _detectContentType(_newPhotoName);
         final ext = contentType.split('/').last;
         final storageRef = FirebaseStorage.instance.ref().child(
-          'tenants/${widget.tenantId}/employees/${widget.employeeId}/photo.$ext',
+          '${uid}/${widget.tenantId}/employees/${widget.employeeId}/photo.$ext',
         );
         await storageRef.putData(
           _newPhotoBytes!,

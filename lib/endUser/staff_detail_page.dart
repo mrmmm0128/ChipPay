@@ -62,39 +62,65 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
   }
 
   void _initFromUrlIfNeeded() {
+    // すでに埋まっていれば二度目は何もしない
     if (tenantId != null && employeeId != null) return;
 
     final uri = Uri.base;
 
-    // 通常のクエリ（?key=value）
+    // 1) 通常のクエリ（?key=value）
     final qp1 = uri.queryParameters;
 
-    // ハッシュルーター（/#/staff?key=value）内のクエリも拾う
-    final frag = uri.fragment; // 例: "/staff?t=xxx&e=yyy"
+    // 2) ハッシュルーター（/#/store/staff?key=value）内のクエリ
+    //    例: fragment = "/store/staff?u=xxx&t=yyy&e=zzz&a=1000"
+    final frag = uri.fragment;
     Map<String, String> qp2 = {};
     final qIndex = frag.indexOf('?');
     if (qIndex >= 0 && qIndex < frag.length - 1) {
       qp2 = Uri.splitQueryString(frag.substring(qIndex + 1));
     }
 
-    String? pick(String a, String b) {
-      return qp2[a] ?? qp2[b] ?? qp1[a] ?? qp1[b];
+    // 3) 予防的に、ハッシュ直前にクエリがある稀パターンも拾う（/#/?k=v）
+    //    一般的ではないが念のためマージ
+    final merged = <String, String>{};
+    merged.addAll(qp1);
+    merged.addAll(qp2);
+
+    // 複数キー候補のうち最初に見つかった値を返す
+    String? pickAny(List<String> keys) {
+      for (final k in keys) {
+        final v = merged[k];
+        if (v != null && v.isNotEmpty) return v;
+      }
+      return null;
     }
 
-    tenantId = tenantId ?? pick('t', 'tenantId');
-    employeeId = employeeId ?? pick('e', 'employeeId');
-    name = name ?? pick('name', 'n');
-    email = email ?? pick('email', 'mail');
-    photoUrl = photoUrl ?? pick('photoUrl', 'p');
-    tenantName = tenantName ?? pick('tenantName', 'store');
+    final u = pickAny(['u', 'uid', 'user']); // 送信元ユーザーID（任意）
+    final t = pickAny(['t', 'tenantId']); // テナントID
+    final e = pickAny(['e', 'employeeId']); // 従業員ID
+    final a = pickAny(['a', 'amount']); // 初期金額（任意）
 
-    // 初期金額（任意）
-    final initAmount = pick('a', 'amount');
-    if (initAmount != null && initAmount.isNotEmpty) {
-      _amountCtrl.text = initAmount;
+    // 既存の別名キーも継続サポート
+    name = name ?? pickAny(['name', 'n']);
+    email = email ?? pickAny(['email', 'mail']);
+    photoUrl = photoUrl ?? pickAny(['photoUrl', 'p']);
+    tenantName = tenantName ?? pickAny(['tenantName', 'store']);
+
+    // 反映
+    tenantId = tenantId ?? t;
+    employeeId = employeeId ?? e;
+
+    // deep link に含まれる uid を保持したい場合は専用フィールドへ（例）
+    // 既にサインイン済みの uid を上書きしたくないので別変数に格納推奨
+    if (u != null) {
+      // 例: refUid / inviterUid / deepLinkUid など、プロジェクトに合わせて命名
+      uid = u; // <- クラスに String? deepLinkUid; を用意しておく
     }
 
-    setState(() {});
+    if (a != null) {
+      _amountCtrl.text = a;
+    }
+
+    if (mounted) setState(() {});
     _maybeFetchFromFirestore();
   }
 

@@ -694,26 +694,38 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                 // ==== 下部アクション（保存ボタン） ====
                 Row(
                   children: [
-                    OutlinedButton.icon(
-                      onPressed: _savingDraft
-                          ? null
-                          : () async {
-                              await _saveDraft(); // ① 下書き保存（進捗とplanも保存）
-                              if (!mounted) return;
-                              Navigator.of(
-                                context,
-                                rootNavigator: true,
-                              ).pop('draftSaved'); // ② モーダルを閉じる
-                            },
-                      icon: _savingDraft
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.save_outlined),
-                      label: const Text('下書き保存'),
-                    ),
+                    if (_registered)
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          Navigator.of(context).pop(); // ② モーダルを閉じる
+                        },
+
+                        label: const Text('戻る'),
+                      ),
+                    if (!_registered)
+                      OutlinedButton.icon(
+                        onPressed: _savingDraft
+                            ? null
+                            : () async {
+                                await _saveDraft(); // ① 下書き保存（進捗とplanも保存）
+                                if (!mounted) return;
+                                Navigator.of(
+                                  context,
+                                  rootNavigator: true,
+                                ).pop('draftSaved'); // ② モーダルを閉じる
+                              },
+                        icon: _savingDraft
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.save_outlined),
+                        label: const Text('下書き保存'),
+                      ),
+
                     const Spacer(),
                     FilledButton.icon(
                       onPressed:

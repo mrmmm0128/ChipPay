@@ -135,7 +135,12 @@ class _LoginScreenState extends State<LoginScreen> {
         await cred.user?.sendEmailVerification();
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('登録しました。確認メールを送信しました。メール認証後にログインできます。')),
+          const SnackBar(
+            content: Text(
+              '登録しました。確認メールを送信しました。メール認証後にログインできます。',
+              style: TextStyle(fontFamily: 'LINEseed'),
+            ),
+          ),
         );
         // 登録直後はログインさせない
       } else {
@@ -176,9 +181,14 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('パスワード再設定メールを送信しました。')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'パスワード再設定メールを送信しました。',
+            style: TextStyle(fontFamily: 'LINEseed'),
+          ),
+        ),
+      );
     } on FirebaseAuthException catch (e) {
       setState(() => _error = _friendlyAuthError(e));
     }
@@ -307,6 +317,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 title,
                                 style: const TextStyle(
                                   fontSize: 22,
+                                  fontFamily: 'LINEseed',
                                   fontWeight: FontWeight.w600,
                                   color: Colors.black87,
                                 ),
@@ -338,6 +349,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                   style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w600,
+                                    fontFamily: 'LINEseed',
                                     color: Colors.black87,
                                   ),
                                 ),
@@ -469,11 +481,6 @@ class _LoginScreenState extends State<LoginScreen> {
                               },
                             ),
                             const SizedBox(height: 8),
-                            TextFormField(
-                              controller: _companyCtrl,
-                              decoration: _input('会社名（任意）'),
-                              style: const TextStyle(color: Colors.black87),
-                            ),
                           ],
 
                           // ★ 追加：ログイン時のみ「ログイン状態を保持する」
@@ -497,7 +504,10 @@ class _LoginScreenState extends State<LoginScreen> {
                                 const Expanded(
                                   child: Text(
                                     'ログイン状態を保持する',
-                                    style: TextStyle(color: Colors.black87),
+                                    style: TextStyle(
+                                      color: Colors.black87,
+                                      fontFamily: 'LINEseed',
+                                    ),
                                   ),
                                 ),
 
@@ -549,6 +559,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                                 TextDecoration.underline,
                                             color: Colors.black,
                                             fontWeight: FontWeight.w600,
+                                            fontFamily: 'LINEseed',
                                           ),
                                           recognizer: TapGestureRecognizer()
                                             ..onTap = () {
@@ -594,7 +605,10 @@ class _LoginScreenState extends State<LoginScreen> {
                                   Expanded(
                                     child: Text(
                                       _error!,
-                                      style: const TextStyle(color: Colors.red),
+                                      style: const TextStyle(
+                                        color: Colors.red,
+                                        fontFamily: 'LINEseed',
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -617,7 +631,10 @@ class _LoginScreenState extends State<LoginScreen> {
                                       strokeWidth: 2,
                                     ),
                                   )
-                                : Text(actionLabel),
+                                : Text(
+                                    actionLabel,
+                                    style: TextStyle(fontFamily: 'LINEseed'),
+                                  ),
                           ),
 
                           const SizedBox(height: 8),
@@ -631,7 +648,10 @@ class _LoginScreenState extends State<LoginScreen> {
                                 style: TextButton.styleFrom(
                                   foregroundColor: Colors.black87,
                                 ),
-                                child: const Text('パスワードをお忘れですか？'),
+                                child: const Text(
+                                  'パスワードをお忘れですか？',
+                                  style: TextStyle(fontFamily: 'LINEseed'),
+                                ),
                               ),
                             ),
                         ],
@@ -673,6 +693,7 @@ class _ModeChip extends StatelessWidget {
             style: TextStyle(
               color: active ? Colors.white : Colors.black87,
               fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+              fontFamily: 'LINEseed',
             ),
           ),
         ),

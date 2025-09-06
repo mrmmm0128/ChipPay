@@ -466,6 +466,16 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                     label: const Text('続きから'),
                     style: _outlineSmall,
                   ),
+                if (!selectedIsDraft)
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      // ダイアログ省略で即再開
+                      await startOnboarding(_selectedId!, selectedName ?? '');
+                    },
+
+                    label: const Text('初期登録状況'),
+                    style: _outlineSmall,
+                  ),
                 const SizedBox(width: 8),
 
                 OutlinedButton.icon(

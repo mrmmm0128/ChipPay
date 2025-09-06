@@ -6,7 +6,6 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // クリップボード
-import 'package:url_launcher/url_launcher_string.dart'; // 外部リンク
 import 'package:yourpay/tenant/store_detail/staff_detail.dart';
 import 'package:yourpay/tenant/store_detail/staff_entry.dart';
 
@@ -27,7 +26,7 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
   String? _prefilledPhotoUrlFromGlobal;
   Uint8List? _empPhotoBytes;
   String? _empPhotoName;
-
+  final uid = FirebaseAuth.instance.currentUser?.uid;
   bool _addingEmp = false;
 
   // 公開ページのベースURL（末尾スラなし）
@@ -81,7 +80,7 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
     String email,
   ) async {
     final q = await FirebaseFirestore.instance
-        .collection('tenants')
+        .collection(uid!)
         .doc(tenantId)
         .collection('employees')
         .where('email', isEqualTo: _normalizeEmail(email))
@@ -304,7 +303,7 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
               Expanded(
                 child: StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
-                      .collection('tenants')
+                      .collection(uid!)
                       .doc(widget.tenantId)
                       .collection('employees')
                       .orderBy('createdAt', descending: true)
@@ -413,7 +412,7 @@ class _AddStaffDialog extends StatefulWidget {
   String? empPhotoName;
   String? prefilledPhotoUrlFromGlobal;
 
-  // 状態反映
+  // 状態反映（親へ通知）
   final void Function(
     bool adding,
     Uint8List? bytes,
@@ -465,6 +464,11 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
     with SingleTickerProviderStateMixin {
   late TabController _tab;
 
+  // ── ダイアログ内ローカル状態（★ 追加） ─────────────────────
+  Uint8List? _localPhotoBytes;
+  String? _localPhotoName;
+  String? _localPrefilledPhotoUrl;
+
   // タブ2（他店舗から取り込み）用
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _myTenants = [];
   String? _selectedTenantId; // 現在の店舗以外
@@ -475,6 +479,12 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
   void initState() {
     super.initState();
     _tab = TabController(length: 2, vsync: this);
+
+    // 親の初期値をローカルにコピー（★ 重要）
+    _localPhotoBytes = widget.empPhotoBytes;
+    _localPhotoName = widget.empPhotoName;
+    _localPrefilledPhotoUrl = widget.prefilledPhotoUrlFromGlobal;
+
     _prepareMyTenants();
   }
 
@@ -487,6 +497,7 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
 
   Future<void> _prepareMyTenants() async {
     final tenants = await widget.loadMyTenants();
+    if (!mounted) return;
     setState(() {
       _myTenants = tenants
           .where((d) => d.id != widget.currentTenantId)
@@ -538,8 +549,16 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
         }
         return;
       }
-      widget.onLocalStateChanged(false, bytes, f.name, null); // 手元画像を優先
-      setState(() {});
+
+      // ローカル状態を更新（★ これで即プレビュー反映）
+      setState(() {
+        _localPhotoBytes = bytes;
+        _localPhotoName = f.name;
+        _localPrefilledPhotoUrl = null; // 手元画像を優先
+      });
+
+      // 親にも通知（必要なら）
+      widget.onLocalStateChanged(false, bytes, f.name, null);
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(
@@ -565,6 +584,8 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
       ).showSnackBar(const SnackBar(content: Text('一致するスタッフは見つかりませんでした')));
       return;
     }
+
+    if (!mounted) return;
     await showDialog<void>(
       context: context,
       builder: (_) => Theme(
@@ -631,19 +652,25 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
             ),
             FilledButton(
               onPressed: () {
-                // フィールドに反映（写真はURL保持）
+                // フィールドに反映
                 widget.nameCtrl.text =
                     (data['name'] as String?) ?? widget.nameCtrl.text;
                 widget.commentCtrl.text =
                     (data['comment'] as String?) ?? widget.commentCtrl.text;
-                widget.onLocalStateChanged(
-                  false,
-                  null,
-                  null,
-                  (data['photoUrl'] as String?) ?? '',
-                ); // URL優先に切替
+
+                final url = (data['photoUrl'] as String?) ?? '';
+
+                // ローカル状態を URL 優先に切り替え（★）
+                setState(() {
+                  _localPhotoBytes = null;
+                  _localPhotoName = null;
+                  _localPrefilledPhotoUrl = url;
+                });
+
+                // 親にも通知（任意）
+                widget.onLocalStateChanged(false, null, null, url);
+
                 Navigator.pop(context);
-                setState(() {});
               },
               style: FilledButton.styleFrom(
                 backgroundColor: Colors.black,
@@ -692,18 +719,17 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
           },
         );
         if (same == true) {
-          if (context.mounted) {
-            Navigator.pop(context); // ダイアログを閉じる
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => StaffDetailScreen(
-                  tenantId: widget.currentTenantId,
-                  employeeId: dup.id,
-                ),
+          if (!mounted) return;
+          Navigator.pop(context); // ダイアログを閉じる
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => StaffDetailScreen(
+                tenantId: widget.currentTenantId,
+                employeeId: dup.id,
               ),
-            );
-          }
+            ),
+          );
           return;
         }
         // 別人として続行
@@ -725,12 +751,14 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
     required String email,
     required String comment,
   }) async {
+    // 親へ進捗通知（ローカル状態で）
     widget.onLocalStateChanged(
       true,
-      widget.empPhotoBytes,
-      widget.empPhotoName,
-      widget.prefilledPhotoUrlFromGlobal,
+      _localPhotoBytes,
+      _localPhotoName,
+      _localPrefilledPhotoUrl,
     );
+
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid;
       final user = FirebaseAuth.instance.currentUser!;
@@ -740,21 +768,21 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
           .collection('employees')
           .doc();
 
-      // 写真アップロード
+      // 写真アップロード（★ ローカル状態を使用）
       String photoUrl = '';
-      if (widget.empPhotoBytes != null) {
-        final contentType = _detectContentType(widget.empPhotoName);
+      if (_localPhotoBytes != null) {
+        final contentType = _detectContentType(_localPhotoName);
         final ext = contentType.split('/').last;
         final storageRef = FirebaseStorage.instance.ref().child(
           '$uid/$tenantId/employees/${empRef.id}/photo.$ext',
         );
         await storageRef.putData(
-          widget.empPhotoBytes!,
+          _localPhotoBytes!,
           SettableMetadata(contentType: contentType),
         );
         photoUrl = await storageRef.getDownloadURL();
-      } else if ((widget.prefilledPhotoUrlFromGlobal ?? '').isNotEmpty) {
-        photoUrl = widget.prefilledPhotoUrlFromGlobal!;
+      } else if ((_localPrefilledPhotoUrl ?? '').isNotEmpty) {
+        photoUrl = _localPrefilledPhotoUrl!;
       }
 
       await empRef.set({
@@ -778,30 +806,30 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
         }, SetOptions(merge: true));
       }
 
-      if (context.mounted) {
+      if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('社員を追加しました')));
       }
     } catch (e) {
-      if (context.mounted) {
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('追加に失敗: $e')));
       }
     } finally {
+      // 親へ完了通知（ローカル状態で）
       widget.onLocalStateChanged(
         false,
-        widget.empPhotoBytes,
-        widget.empPhotoName,
-        widget.prefilledPhotoUrlFromGlobal,
+        _localPhotoBytes,
+        _localPhotoName,
+        _localPrefilledPhotoUrl,
       );
     }
   }
 
   // ============= タブ2：他店舗から取り込み =============
-
   String _selectedTenantName() {
     if (_selectedTenantId == null) return '店舗を選択';
     final idx = _myTenants.indexWhere((d) => d.id == _selectedTenantId);
@@ -811,15 +839,14 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
   }
 
   Future<void> _openTenantPickerDialog() async {
-    // ダイアログ内検索を初期化
     _tenantSearchCtrl.text = '';
+    if (!mounted) return;
     await showDialog<void>(
       context: context,
       builder: (ctx) {
         String localQuery = '';
         return StatefulBuilder(
           builder: (ctx, setLocal) {
-            // フィルタ済み一覧
             final list = _myTenants.where((d) {
               if (localQuery.isEmpty) return true;
               final name = (d.data()['name'] ?? '').toString().toLowerCase();
@@ -847,7 +874,7 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
                 content: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 560),
                   child: SizedBox(
-                    height: 420, // ← スクロール領域の高さ
+                    height: 420,
                     child: Column(
                       children: [
                         TextField(
@@ -935,11 +962,12 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
     }
 
     // 選択済み店舗のストリーム（未選択時はプレースホルダ表示）
+    final uidVar = FirebaseAuth.instance.currentUser?.uid;
     final selectedId = _selectedTenantId;
     final employeesStream = (selectedId == null)
         ? null
         : FirebaseFirestore.instance
-              .collection('tenants')
+              .collection(uidVar!)
               .doc(selectedId)
               .collection('employees')
               .orderBy('createdAt', descending: true)
@@ -1114,12 +1142,22 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
                               widget.nameCtrl.text = name;
                               widget.emailCtrl.text = email;
                               widget.commentCtrl.text = comment;
+
+                              // ローカル状態を URL で更新（★）
+                              setState(() {
+                                _localPhotoBytes = null;
+                                _localPhotoName = null;
+                                _localPrefilledPhotoUrl = photoUrl;
+                              });
+
+                              // 親にも通知（任意）
                               widget.onLocalStateChanged(
                                 false,
                                 null,
                                 null,
                                 photoUrl,
                               );
+
                               // タブ1に切り替え
                               _tab.animateTo(0);
                               ScaffoldMessenger.of(context).showSnackBar(
@@ -1127,7 +1165,6 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
                                   content: Text('フォームに取り込みました（取り込み先は現在の店舗）'),
                                 ),
                               );
-                              setState(() {});
                             },
                             icon: const Icon(Icons.download),
                             label: const Text('取り込む'),
@@ -1154,12 +1191,12 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
 
   @override
   Widget build(BuildContext context) {
-    final photoProvider = (widget.empPhotoBytes != null)
-        ? MemoryImage(widget.empPhotoBytes!)
-        : ((widget.prefilledPhotoUrlFromGlobal ?? '').isNotEmpty
-                  ? NetworkImage(widget.prefilledPhotoUrlFromGlobal!)
-                  : null)
-              as ImageProvider<Object>?;
+    // 表示は常にローカル状態を参照（★ 重要）
+    final ImageProvider<Object>? photoProvider = (_localPhotoBytes != null)
+        ? MemoryImage(_localPhotoBytes!)
+        : ((_localPrefilledPhotoUrl?.isNotEmpty ?? false)
+              ? NetworkImage(_localPrefilledPhotoUrl!)
+              : null);
 
     return Theme(
       data: Theme.of(context).copyWith(
@@ -1219,7 +1256,7 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                SizedBox(height: 16, child: Container()),
+                const SizedBox(height: 16),
                 SizedBox(
                   height: 420,
                   child: TabBarView(

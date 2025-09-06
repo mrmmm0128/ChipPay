@@ -196,7 +196,7 @@ class _PublicStaffQrListPageState extends State<PublicStaffQrListPage> {
                             final origin =
                                 '${base.scheme}://${base.host}${base.hasPort ? ':${base.port}' : ''}';
                             final url =
-                                '$origin/#/qr-builder?t=$tenantId&e=$empId';
+                                '$origin/#/qr-all/qr-builder?t=$tenantId&e=$empId';
                             await launchUrlString(url);
                           },
                         );

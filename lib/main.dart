@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -15,8 +13,8 @@ import 'package:yourpay/endUser/tip_complete_page.dart';
 import 'package:yourpay/tenant/account_detail_screen.dart';
 import 'package:yourpay/endUser/public_store_page.dart';
 import 'package:yourpay/endUser/staff_detail_page.dart';
-import 'package:yourpay/tenant/public_staff_qr_list_page.dart';
-import 'package:yourpay/tenant/qr_poster_build_page.dart';
+import 'package:yourpay/tenant/staff_qr/public_staff_qr_list_page.dart';
+import 'package:yourpay/tenant/staff_qr/qr_poster_build_page.dart';
 import 'package:yourpay/tenant/store_admin_add/accept_invite_screen.dart';
 import 'package:yourpay/tenant/store_list_screen.dart';
 import 'tenant/login_screens.dart';
@@ -88,14 +86,6 @@ Future<void> main() async {
   );
 }
 
-Future<void> _connectToEmulatorsIfDebug() async {
-  if (kDebugMode) {
-    FirebaseFirestore.instance.useFirestoreEmulator('localhost', 8080);
-    FirebaseFunctions.instance.useFunctionsEmulator('localhost', 5001);
-    await FirebaseAuth.instance.useAuthEmulator('localhost', 9099);
-  }
-}
-
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
@@ -145,15 +135,14 @@ class MyApp extends StatelessWidget {
       '/login': (_) => const LoginScreen(),
       '/stores': (_) => const StoreListScreen(),
       '/store': (_) => const StoreDetailScreen(),
+      '/store/staff': (_) => const StaffDetailPage(),
       '/account': (_) => const AccountDetailScreen(),
       '/admin-login': (_) => const AdminLoginScreen(),
       '/admin': (_) => const AdminDashboardScreen(),
       '/admin/tenant': (_) => const AdminTenantDetailScreen(),
       '/admin-invite': (_) => const AcceptInviteScreen(),
       '/qr-all': (_) => const PublicStaffQrListPage(),
-      '/qr-builder': (_) => const QrPosterBuilderPage(),
-      '/staff': (_) => const StaffDetailPage(),
-      // 開発ミス防止：旧タイポ残っていたらログインへ
+      'qr-all/qr-builder': (_) => const QrPosterBuilderPage(),
       '/chechout-end': (_) => const LoginScreen(),
     };
 

@@ -83,7 +83,10 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
       builder: (_) => Theme(
         data: _bwTheme(context),
         child: AlertDialog(
-          title: const Text('新しい店舗を作成'),
+          title: const Text(
+            '新しい店舗を作成',
+            style: TextStyle(fontFamily: 'LINEseed'),
+          ),
           content: TextField(
             controller: nameCtrl,
             decoration: const InputDecoration(
@@ -95,11 +98,14 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('キャンセル'),
+              child: const Text(
+                'キャンセル',
+                style: TextStyle(fontFamily: 'LINEseed'),
+              ),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('作成'),
+              child: const Text('作成', style: TextStyle(fontFamily: 'LINEseed')),
             ),
           ],
         ),
@@ -134,7 +140,10 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             backgroundColor: Colors.white,
-            content: Text('店舗を作成しました', style: TextStyle(color: Colors.black87)),
+            content: Text(
+              '店舗を作成しました',
+              style: TextStyle(color: Colors.black87, fontFamily: 'LINEseed'),
+            ),
           ),
         );
 
@@ -147,7 +156,10 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
             backgroundColor: Colors.white,
             content: Text(
               '作成に失敗: $e',
-              style: const TextStyle(color: Colors.black87),
+              style: const TextStyle(
+                color: Colors.black87,
+                fontFamily: 'LINEseed',
+              ),
             ),
           ),
         );
@@ -293,9 +305,11 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
       });
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('エラー: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('エラー: $e', style: TextStyle(fontFamily: 'LINEseed')),
+        ),
+      );
     } finally {
       if (mounted) setState(() => loading = false);
     }
@@ -326,9 +340,13 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
         toolbarHeight: 60,
         titleSpacing: 16,
         title: Text(
-          "tipri",
+          "Tipri",
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+          style: const TextStyle(
+            fontWeight: FontWeight.w600,
+            fontSize: 17,
+            fontFamily: 'LINEseed',
+          ),
         ),
         leading: isNarrow
             ? IconButton(
