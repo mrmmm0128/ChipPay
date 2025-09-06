@@ -256,9 +256,9 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
     return Scaffold(
       backgroundColor: AppPalette.yellow,
       appBar: AppBar(
-        backgroundColor: Colors.transparent, // ← 透明
-        surfaceTintColor: Colors.transparent, // M3 のティントも無効化
-        shadowColor: Colors.transparent, // 念のため影も消す
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: Colors.transparent,
         foregroundColor: AppPalette.black,
         toolbarHeight: 30,
         elevation: 0,
@@ -267,252 +267,246 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            return SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(0, 4, 0, 0),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  minHeight: constraints.maxHeight - 40,
-                ),
-                child: Column(
-                  children: [
-                    Container(
-                      padding: EdgeInsets.fromLTRB(12, 0, 12, 0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
+            // 画面が小さい時は少しだけコンパクトに
+            final compact = constraints.maxHeight < 720;
+            final avatar = compact ? 56.0 : 72.0;
+            final amountFs = compact ? 24.0 : 28.0;
+            final yenFs = compact ? 26.0 : 30.0;
+            final sendBtnH = compact ? 64.0 : 80.0;
+
+            return Column(
+              children: [
+                // ===== 上段（プロフィール・金額・送信）: 内容に合わせて高さ確保 =====
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // プロフィール
+                      Column(
                         children: [
-                          // ===== プロフィールカード =====
-                          Column(
-                            children: [
-                              Container(
-                                width: 72,
-                                height: 72,
-                                decoration: BoxDecoration(
-                                  color: AppPalette.white,
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: AppPalette.black,
-                                    width: AppDims.border2,
-                                  ),
-                                ),
-                                child: CircleAvatar(
-                                  backgroundColor: AppPalette.white,
-                                  radius: 36,
-                                  backgroundImage:
-                                      (photoUrl != null && photoUrl!.isNotEmpty)
-                                      ? NetworkImage(photoUrl!)
-                                      : null,
-                                  child: (photoUrl == null || photoUrl!.isEmpty)
-                                      ? const Icon(
-                                          Icons.person,
-                                          size: 36,
-                                          color: AppPalette.black,
-                                        )
-                                      : null,
-                                ),
-                              ),
-                              Text(title, style: AppTypography.label()),
-                            ],
-                          ),
-
-                          const SizedBox(height: 14),
-
-                          // ===== 金額カード（表示＋プリセット）=====
                           Container(
-                            decoration: cardDecoration,
-                            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Container(
-                                  padding: EdgeInsets.symmetric(horizontal: 12),
-                                  child: Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Text(
-                                        tr("validation.value"),
-                                        style: AppTypography.body(),
-                                      ),
-                                      TextButton.icon(
-                                        style: TextButton.styleFrom(
-                                          foregroundColor: AppPalette.black,
-                                          padding:
-                                              EdgeInsets.zero, // 内部のpaddingをゼロに
-                                          minimumSize: Size(
-                                            0,
-                                            0,
-                                          ), // サイズ制約も外す（必要なら）
-                                          tapTargetSize: MaterialTapTargetSize
-                                              .shrinkWrap, // タップ領域も縮める
-                                        ),
-                                        onPressed: () => _setAmount(0),
-                                        icon: const Icon(
-                                          Icons.clear,
-                                          size: 20,
-                                        ), // アイコンサイズを明示
-                                        label: Text(
-                                          tr("validation.clear"),
-                                          style: AppTypography.body(),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 2,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: AppPalette.white,
-                                    borderRadius: BorderRadius.circular(18),
-                                    border: Border.all(
-                                      color: AppPalette.black,
-                                      width: AppDims.border,
-                                    ),
-                                  ),
-                                  child: Container(
-                                    padding: EdgeInsets.symmetric(
-                                      vertical: 8,
-                                      horizontal: 12,
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        Text(
-                                          '¥',
-                                          style: TextStyle(
-                                            fontSize: 30,
-                                            fontFamily: 'LINEseed',
-                                            fontWeight: FontWeight.w700,
-                                            color: AppPalette.black,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: Text(
-                                            _fmt(_currentAmount()),
-                                            textAlign: TextAlign.right,
-                                            style: TextStyle(
-                                              fontFamily: 'LINEseed',
-                                              fontSize: 28,
-                                              color: AppPalette.textPrimary,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                Wrap(
-                                  spacing: 2,
-                                  alignment: WrapAlignment.spaceBetween,
-                                  children: presets.map((v) {
-                                    final active = _currentAmount() == v;
-                                    return ChoiceChip(
-                                      materialTapTargetSize:
-                                          MaterialTapTargetSize.shrinkWrap,
-                                      label: Text(
-                                        '¥${_fmt(v)}',
-                                        style: AppTypography.small(),
-                                      ),
-                                      selected: active,
-                                      showCheckmark: false,
-                                      side: BorderSide(
-                                        width: 0,
-                                        color: AppPalette.yellow,
-                                      ),
-                                      backgroundColor: AppPalette.yellow,
-                                      selectedColor: AppPalette.black,
-                                      labelStyle: TextStyle(
-                                        color: active
-                                            ? AppPalette.white
-                                            : AppPalette.black,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                      onSelected: (_) => _setAmount(v),
-                                      visualDensity: const VisualDensity(
-                                        vertical: -2,
-                                      ), // 👈 ここを追加
-                                    );
-                                  }).toList(),
-                                ),
-                              ],
-                            ),
-                          ),
-                          SizedBox(height: 8),
-
-                          SizedBox(
-                            height: 80,
-                            child: Padding(
-                              padding: const EdgeInsets.all(
-                                0,
-                              ), // ← ボタンが潰れないよう余白
-                              child: FilledButton.icon(
-                                onPressed: _loading ? null : _sendTip,
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: AppPalette.white,
-                                  foregroundColor: AppPalette.black,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(18),
-                                    side: const BorderSide(
-                                      color: AppPalette.black,
-                                      width: AppDims.border,
-                                    ),
-                                  ),
-                                ),
-                                label: _loading
-                                    ? Text(tr('status.processing'))
-                                    : Text(
-                                        tr("button.send_tip"),
-                                        style: AppTypography.label(),
-                                      ),
+                            width: avatar,
+                            height: avatar,
+                            decoration: BoxDecoration(
+                              color: AppPalette.white,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: AppPalette.black,
+                                width: AppDims.border2,
                               ),
                             ),
+                            child: CircleAvatar(
+                              backgroundColor: AppPalette.white,
+                              radius: avatar / 2,
+                              backgroundImage:
+                                  (photoUrl != null && photoUrl!.isNotEmpty)
+                                  ? NetworkImage(photoUrl!)
+                                  : null,
+                              child: (photoUrl == null || photoUrl!.isEmpty)
+                                  ? const Icon(
+                                      Icons.person,
+                                      size: 36,
+                                      color: AppPalette.black,
+                                    )
+                                  : null,
+                            ),
                           ),
+                          const SizedBox(height: 6),
+                          Text(title, style: AppTypography.label()),
                         ],
                       ),
-                    ),
 
-                    const SizedBox(height: 14),
+                      const SizedBox(height: 10),
 
-                    // ===== キーパッドカード =====
-                    Column(
-                      children: [
-                        Column(
+                      // 金額カード
+                      Container(
+                        decoration: cardDecoration,
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Container(
-                              decoration: BoxDecoration(
-                                color: AppPalette.white,
-                                borderRadius: BorderRadius.only(
-                                  topLeft: Radius.circular(AppDims.radius),
-                                  topRight: Radius.circular(AppDims.radius),
-                                ),
-                              ),
+                            Padding(
                               padding: const EdgeInsets.symmetric(
-                                vertical: 12,
                                 horizontal: 12,
                               ),
-                              child: _AmountKeypad(
-                                onTapDigit: (d) {
-                                  final curr = _currentAmount();
-                                  final next = (curr * 10 + d);
-                                  if (next <= _maxAmount) _setAmount(next);
-                                },
-                                onTapDoubleZero: () {
-                                  final curr = _currentAmount();
-                                  final next = (curr == 0) ? 0 : (curr * 100);
-                                  if (next <= _maxAmount) _setAmount(next);
-                                },
-                                onBackspace: () {
-                                  final curr = _currentAmount();
-                                  _setAmount(curr ~/ 10);
-                                },
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    tr("validation.value"),
+                                    style: AppTypography.body(),
+                                  ),
+                                  TextButton.icon(
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: AppPalette.black,
+                                      padding: EdgeInsets.zero,
+                                      minimumSize: const Size(0, 0),
+                                      tapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
+                                    ),
+                                    onPressed: () => _setAmount(0),
+                                    icon: const Icon(Icons.clear, size: 20),
+                                    label: Text(
+                                      tr("validation.clear"),
+                                      style: AppTypography.body(),
+                                    ),
+                                  ),
+                                ],
                               ),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppPalette.white,
+                                borderRadius: BorderRadius.circular(18),
+                                border: Border.all(
+                                  color: AppPalette.black,
+                                  width: AppDims.border,
+                                ),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 8,
+                                  horizontal: 12,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Text(
+                                      '¥',
+                                      style: TextStyle(
+                                        fontSize: yenFs,
+                                        fontFamily: 'LINEseed',
+                                        fontWeight: FontWeight.w700,
+                                        color: AppPalette.black,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        _fmt(_currentAmount()),
+                                        textAlign: TextAlign.right,
+                                        style: TextStyle(
+                                          fontFamily: 'LINEseed',
+                                          fontSize: amountFs,
+                                          color: AppPalette.textPrimary,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Wrap(
+                              spacing: 2,
+                              alignment: WrapAlignment.spaceBetween,
+                              children: presets.map((v) {
+                                final active = _currentAmount() == v;
+                                return ChoiceChip(
+                                  materialTapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                  label: Text(
+                                    '¥${_fmt(v)}',
+                                    style: AppTypography.small(),
+                                  ),
+                                  selected: active,
+                                  showCheckmark: false,
+                                  side: const BorderSide(
+                                    width: 0,
+                                    color: AppPalette.yellow,
+                                  ),
+                                  backgroundColor: AppPalette.yellow,
+                                  selectedColor: AppPalette.black,
+                                  labelStyle: TextStyle(
+                                    color: active
+                                        ? AppPalette.white
+                                        : AppPalette.black,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                  onSelected: (_) => _setAmount(v),
+                                  visualDensity: const VisualDensity(
+                                    vertical: -2,
+                                  ),
+                                );
+                              }).toList(),
                             ),
                           ],
                         ),
-                        // ===== 開発用：決済完了画面へ遷移 =====
+                      ),
+
+                      const SizedBox(height: 8),
+
+                      SizedBox(
+                        height: sendBtnH,
+                        child: FilledButton.icon(
+                          onPressed: _loading ? null : _sendTip,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppPalette.white,
+                            foregroundColor: AppPalette.black,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(18),
+                              side: const BorderSide(
+                                color: AppPalette.black,
+                                width: AppDims.border,
+                              ),
+                            ),
+                          ),
+                          label: _loading
+                              ? Text(tr('status.processing'))
+                              : Text(
+                                  tr("button.send_tip"),
+                                  style: AppTypography.label(),
+                                ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 10),
+
+                // ===== 下段（テンキー＋開発ボタン）: 余り全てを占有 =====
+                Expanded(
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      color: AppPalette.white,
+                      borderRadius: BorderRadius.only(
+                        topLeft: Radius.circular(AppDims.radius),
+                        topRight: Radius.circular(AppDims.radius),
+                      ),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 8,
+                      horizontal: 12,
+                    ),
+                    child: Column(
+                      children: [
+                        // テンキーは残り高さにフィット
+                        Expanded(
+                          child: _AmountKeypad(
+                            onTapDigit: (d) {
+                              final curr = _currentAmount();
+                              final next = (curr * 10 + d);
+                              if (next <= _maxAmount) _setAmount(next);
+                            },
+                            onTapDoubleZero: () {
+                              final curr = _currentAmount();
+                              final next = (curr == 0) ? 0 : (curr * 100);
+                              if (next <= _maxAmount) _setAmount(next);
+                            },
+                            onBackspace: () {
+                              final curr = _currentAmount();
+                              _setAmount(curr ~/ 10);
+                            },
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        // 開発用ボタン（下段内に収める）
                         SizedBox(
                           width: double.infinity,
                           child: FilledButton.icon(
@@ -563,7 +557,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                                   width: AppDims.border,
                                 ),
                               ),
-                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
                             ),
                             icon: const Icon(Icons.volunteer_activism),
                             label: const Text('決済完了画面へ遷移'),
@@ -571,9 +565,9 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                         ),
                       ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
+              ],
             );
           },
         ),
@@ -583,6 +577,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
 }
 
 /// 画面内テンキー（1–9 / 00 / 0 / ⌫）
+/// 利用可能な高さから childAspectRatio を自動計算して 3×4 を必ず収める
 class _AmountKeypad extends StatelessWidget {
   final void Function(int digit) onTapDigit;
   final VoidCallback onTapDoubleZero;
@@ -596,7 +591,11 @@ class _AmountKeypad extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // グリッドレイアウト 3 x 4
+    const cols = 3;
+    const rows = 4;
+    const mainSpacing = 8.0; // 縦方向間隔
+    const crossSpacing = 8.0; // 横方向間隔
+
     final buttons = <Widget>[
       for (var i = 1; i <= 9; i++) _numBtn('$i', () => onTapDigit(i)),
       _numBtn('00', onTapDoubleZero),
@@ -604,45 +603,49 @@ class _AmountKeypad extends StatelessWidget {
       _iconBtn(Icons.backspace_outlined, onBackspace),
     ];
 
-    return GridView.count(
-      crossAxisCount: 3,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 8,
-      crossAxisSpacing: 8,
-      childAspectRatio: 1.6, // 横長めで押しやすく
-      children: buttons,
+    return LayoutBuilder(
+      builder: (context, c) {
+        final itemW = (c.maxWidth - (cols - 1) * crossSpacing) / cols;
+        final itemH = (c.maxHeight - (rows - 1) * mainSpacing) / rows;
+        final ratio = itemW / itemH; // ← これで4行がちょうど入る
+
+        return GridView.count(
+          crossAxisCount: cols,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          mainAxisSpacing: mainSpacing,
+          crossAxisSpacing: crossSpacing,
+          childAspectRatio: ratio,
+          children: buttons,
+        );
+      },
     );
   }
 
-  Widget _numBtn(String label, VoidCallback onPressed) {
-    return ElevatedButton(
-      onPressed: onPressed,
-      style: ElevatedButton.styleFrom(
-        elevation: 0,
-        backgroundColor: AppPalette.yellow,
-        foregroundColor: AppPalette.black,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        side: const BorderSide(color: AppPalette.black, width: AppDims.border),
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        textStyle: AppTypography.label(),
-      ),
-      child: Text(label),
-    );
-  }
+  Widget _numBtn(String label, VoidCallback onPressed) => ElevatedButton(
+    onPressed: onPressed,
+    style: ElevatedButton.styleFrom(
+      elevation: 0,
+      backgroundColor: AppPalette.yellow,
+      foregroundColor: AppPalette.black,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      side: const BorderSide(color: AppPalette.black, width: AppDims.border),
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      textStyle: AppTypography.label(),
+    ),
+    child: Text(label),
+  );
 
-  Widget _iconBtn(IconData icon, VoidCallback onPressed) {
-    return ElevatedButton(
-      onPressed: onPressed,
-      style: ElevatedButton.styleFrom(
-        elevation: 0,
-        backgroundColor: AppPalette.yellow,
-        foregroundColor: AppPalette.black,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        side: const BorderSide(color: AppPalette.black, width: AppDims.border),
-        padding: const EdgeInsets.symmetric(vertical: 14),
-      ),
-      child: Icon(icon, size: 22),
-    );
-  }
+  Widget _iconBtn(IconData icon, VoidCallback onPressed) => ElevatedButton(
+    onPressed: onPressed,
+    style: ElevatedButton.styleFrom(
+      elevation: 0,
+      backgroundColor: AppPalette.yellow,
+      foregroundColor: AppPalette.black,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      side: const BorderSide(color: AppPalette.black, width: AppDims.border),
+      padding: const EdgeInsets.symmetric(vertical: 14),
+    ),
+    child: Icon(icon, size: 22),
+  );
 }

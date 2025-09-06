@@ -12,31 +12,29 @@ import 'package:yourpay/tenant/newTenant/tenant_switch_bar.dart';
 
 class StoreDetailScreen extends StatefulWidget {
   const StoreDetailScreen({super.key});
-
   @override
   State<StoreDetailScreen> createState() => _StoreDetailSScreenState();
 }
 
 class _StoreDetailSScreenState extends State<StoreDetailScreen> {
+  // ---- state ----
   final amountCtrl = TextEditingController(text: '1000');
   final _functions = FirebaseFunctions.instanceFor(region: 'us-central1');
-  String? checkoutUrl;
-  String? sessionId;
-  String? publicStoreUrl;
+
   bool loading = false;
   int _currentIndex = 0;
-  final uid = FirebaseAuth.instance.currentUser?.uid;
 
   String? tenantId;
   String? tenantName;
-  final _scaffoldKey = GlobalKey<ScaffoldState>();
 
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
   final _empNameCtrl = TextEditingController();
   final _empEmailCtrl = TextEditingController();
 
-  bool _argsApplied = false;
+  bool _argsApplied = false; // ルート引数適用済みフラグ
+  bool _tenantInitialized = false; // 初回テナント確定済み
 
-  // ---- utils ----------------------------------------------------
+  // ---- theme (白黒) ----
   ThemeData _bwTheme(BuildContext context) {
     final base = Theme.of(context);
     OutlineInputBorder border(Color c) => OutlineInputBorder(
@@ -73,11 +71,9 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
     );
   }
 
-  // ---- あなたの createTenantDialog をそのまま流用（必要最小限だけ補完） ----
+  // ---- 店舗作成ダイアログ ----
   Future<void> createTenantDialog() async {
     final nameCtrl = TextEditingController();
-    final _uid = FirebaseAuth.instance.currentUser!.uid;
-
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => Theme(
@@ -116,25 +112,32 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
       final name = nameCtrl.text.trim();
       if (name.isEmpty) return;
 
+      final u = FirebaseAuth.instance.currentUser;
+      if (u == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('ログインが必要です')));
+        return;
+      }
+
       try {
-        final ref = FirebaseFirestore.instance.collection(uid!).doc();
+        final ref = FirebaseFirestore.instance.collection(u.uid).doc();
         await ref.set({
           'name': name,
-          'members': [_uid], // 旧互換
-          'memberUids': [_uid], // これが Drawer のクエリで使われる
+          'members': [u.uid],
+          'memberUids': [u.uid],
           'status': 'active',
           'createdAt': FieldValue.serverTimestamp(),
-          'createdBy': {
-            'uid': _uid,
-            'email': FirebaseAuth.instance.currentUser?.email,
-          },
+          'createdBy': {'uid': u.uid, 'email': u.email},
           'subscription': {'status': 'inactive', 'plan': 'A'},
         });
-        if (!mounted) return;
 
+        if (!mounted) return;
         setState(() {
           tenantId = ref.id;
           tenantName = name;
+          _tenantInitialized = true;
         });
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -147,7 +150,6 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
           ),
         );
 
-        // オンボーディングを使うならここで呼ぶ（任意）
         await startOnboarding(ref.id, name);
       } catch (e) {
         if (!mounted) return;
@@ -167,7 +169,7 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
     }
   }
 
-  // ---------- オンボーディング（モーダル/ステッパー） ----------
+  // ---- オンボーディング ----
   Future<void> startOnboarding(String tenantId, String tenantName) async {
     await showModalBottomSheet(
       context: context,
@@ -177,7 +179,6 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (sheetCtx) {
-        // ★ 紫対策：ボトムシート全体を白黒テーマで包む
         return Theme(
           data: _bwTheme(context),
           child: OnboardingSheet(
@@ -190,14 +191,10 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
     );
   }
 
-  // ---- 初期 tenant の適用 ------------------------------------------------
+  // ---- ルート引数適用（auth 確定前でも null 安全に）----
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _applyRouteArgsIfAny();
-  }
-
-  Future<void> _applyRouteArgsIfAny() async {
     if (_argsApplied) return;
     _argsApplied = true;
 
@@ -210,53 +207,85 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
           tenantId = id;
           tenantName = nameArg;
         });
-        if (nameArg == null) {
-          final doc = await FirebaseFirestore.instance
-              .collection(uid!)
-              .doc(id)
-              .get();
-          if (doc.exists) {
-            setState(
-              () => tenantName = (doc.data()!['name'] as String?) ?? tenantName,
-            );
-          }
-        }
       }
     }
+  }
 
-    if (tenantId == null) {
-      final user = FirebaseAuth.instance.currentUser!;
+  // ---- 初回テナント推定（ルート→claims→Firestore）----
+  Future<Map<String, String?>?> _resolveInitialTenant(User user) async {
+    // 1) ルートで既に決まっていればそれを使う
+    if (tenantId != null) {
+      return {'id': tenantId, 'name': tenantName};
+    }
+
+    // 2) claims に tenantId があれば優先
+    try {
       final token = await user.getIdTokenResult(true);
       final idFromClaims = token.claims?['tenantId'] as String?;
       if (idFromClaims != null) {
-        setState(() => tenantId = idFromClaims);
-        final doc = await FirebaseFirestore.instance
-            .collection(uid!)
-            .doc(idFromClaims)
-            .get();
-        if (doc.exists) {
-          setState(() => tenantName = doc.data()!['name'] as String?);
-        }
+        String? name;
+        try {
+          final doc = await FirebaseFirestore.instance
+              .collection(user.uid)
+              .doc(idFromClaims)
+              .get();
+          if (doc.exists) {
+            name = (doc.data()?['name'] as String?);
+          }
+        } catch (_) {}
+        return {'id': idFromClaims, 'name': name};
       }
+    } catch (_) {}
+
+    // 3) 所属 or 作成済みの最初の店舗を拾う（なければ null）
+    try {
+      final col = FirebaseFirestore.instance.collection(user.uid);
+      final qs1 = await col
+          .where('memberUids', arrayContains: user.uid)
+          .limit(1)
+          .get();
+      if (qs1.docs.isNotEmpty) {
+        final d = qs1.docs.first;
+        return {'id': d.id, 'name': (d.data()['name'] as String?)};
+      }
+      final qs2 = await col
+          .where('createdBy.uid', isEqualTo: user.uid)
+          .limit(1)
+          .get();
+      if (qs2.docs.isNotEmpty) {
+        final d = qs2.docs.first;
+        return {'id': d.id, 'name': (d.data()['name'] as String?)};
+      }
+    } catch (_) {}
+
+    // 見つからない場合
+    return null;
+  }
+
+  // ---- テナント切替 ----
+  Future<void> _handleChangeTenant(String userUid, String id) async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection(userUid)
+          .doc(id)
+          .get();
+      final name = (doc.data()?['name'] as String?) ?? '店舗';
+      if (!mounted) return;
+      setState(() {
+        tenantId = id;
+        tenantName = name;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('切替に失敗: $e')));
     }
   }
 
-  // ---- 店舗切替（Drawerから呼ばれる） -----------------------------------
-  Future<void> _handleChangeTenant(String id) async {
-    final doc = await FirebaseFirestore.instance.collection(uid!).doc(id).get();
-    final name = (doc.data()?['name'] as String?) ?? '店舗';
-    if (!mounted) return;
-    setState(() {
-      tenantId = id;
-      tenantName = name;
-    });
-  }
-
-  // ---- Drawer: ストリームが空の時のフォールバック -------------------------
-  Future<List<TenantOption>> _loadTenantOptionsFallback() async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return [];
-    final col = FirebaseFirestore.instance.collection(uid);
+  // ---- Drawer フォールバック ----
+  Future<List<TenantOption>> _loadTenantOptionsFallback(String userUid) async {
+    final col = FirebaseFirestore.instance.collection(userUid);
     final seen = <String>{};
     final out = <TenantOption>[];
 
@@ -276,43 +305,14 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
       }
     }
 
-    await addFrom(col.where('members', arrayContains: uid));
-    await addFrom(col.where('createdBy.uid', isEqualTo: uid));
+    await addFrom(col.where('memberUids', arrayContains: userUid));
+    await addFrom(col.where('createdBy.uid', isEqualTo: userUid));
 
-    // ここで「現在選択されている店舗」を union して必ず選択肢に含める
     if (tenantId != null && !out.any((e) => e.id == tenantId)) {
       out.add(TenantOption(id: tenantId!, name: (tenantName ?? '店舗')));
     }
-
     out.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return out;
-  }
-
-  // ---- 決済（既存） ------------------------------------------------------
-  Future<void> createSession() async {
-    setState(() => loading = true);
-    try {
-      final callable = FirebaseFunctions.instance.httpsCallable(
-        'createCheckoutSession',
-      );
-      final result = await callable.call({
-        'amount': int.parse(amountCtrl.text),
-        'memo': 'Walk-in',
-      });
-      setState(() {
-        checkoutUrl = result.data['checkoutUrl'];
-        sessionId = result.data['sessionId'];
-      });
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('エラー: $e', style: TextStyle(fontFamily: 'LINEseed')),
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => loading = false);
-    }
   }
 
   @override
@@ -321,7 +321,6 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
     _empNameCtrl.dispose();
     _empEmailCtrl.dispose();
     super.dispose();
-    // ignore: unused_field
   }
 
   @override
@@ -329,166 +328,242 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
     final size = MediaQuery.of(context).size;
     final isNarrow = size.width < 480;
     final maxSwitcherW = (size.width * 0.7).clamp(280.0, 560.0);
-    return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
-      key: _scaffoldKey,
-      appBar: AppBar(
-        backgroundColor: const Color(0xFFF7F7F7),
-        foregroundColor: Colors.black87,
-        automaticallyImplyLeading: false,
-        elevation: 0,
-        toolbarHeight: 60,
-        titleSpacing: 16,
-        title: Text(
-          "Tipri",
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontWeight: FontWeight.w600,
-            fontSize: 17,
-            fontFamily: 'LINEseed',
-          ),
-        ),
-        leading: isNarrow
-            ? IconButton(
-                icon: const Icon(Icons.menu, color: Colors.black87),
-                onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-              )
-            : null,
-        actions: [
-          if (!isNarrow)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: maxSwitcherW.toDouble()),
-                child: TenantSwitcherBar(
-                  currentTenantId: tenantId,
-                  currentTenantName: tenantName,
-                  onChanged: (id, name) {
-                    setState(() {
-                      tenantId = id;
-                      tenantName = name;
-                    });
-                  },
-                ),
-              ),
-            ),
-          IconButton(
-            onPressed: () {},
-            icon: const Icon(Icons.notifications_outlined),
-          ),
-        ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(
-            height: 1,
-            color: Colors.black12, // 好みの色
-          ),
-        ),
-      ),
 
-      // Drawer：memberUids ストリーム → 空ならフォールバック、さらに現在選択を union
-      drawer: isNarrow
-          ? StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: FirebaseFirestore.instance
-                  .collection(uid!)
-                  .where(
-                    'memberUids',
-                    arrayContains: FirebaseAuth.instance.currentUser?.uid,
-                  )
-                  .snapshots(),
-              builder: (context, snap) {
-                List<TenantOption> options = [];
-                if (snap.hasData) {
-                  options = snap.data!.docs.map((d) {
-                    final data = d.data();
-                    final name = (data['name'] as String?)?.trim();
-                    return TenantOption(
-                      id: d.id,
-                      name: (name?.isNotEmpty ?? false) ? name! : '店舗',
-                    );
-                  }).toList();
-                }
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, authSnap) {
+        // 認証未確定（初期化中）
+        if (authSnap.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
 
-                // ストリーム結果に現在選択が無ければ union
-                if (tenantId != null && !options.any((e) => e.id == tenantId)) {
-                  options = [
-                    ...options,
-                    TenantOption(id: tenantId!, name: tenantName ?? '店舗'),
-                  ];
-                }
+        final user = authSnap.data;
+        final signedIn = user != null;
 
-                // ストリームが空っぽならフォールバック Future へ
-                if (options.isEmpty) {
-                  return FutureBuilder<List<TenantOption>>(
-                    future: _loadTenantOptionsFallback(),
-                    builder: (context, fb) {
-                      final opts = fb.data ?? const <TenantOption>[];
-                      return AppDrawer(
-                        tenantName: tenantName,
-                        currentTenantId: tenantId,
-                        currentIndex: _currentIndex,
-                        onTapIndex: (i) => setState(() => _currentIndex = i),
-                        tenantOptions: opts,
-                        onChangeTenant: (id) async => _handleChangeTenant(id),
-                        onCreateTenant: () async => createTenantDialog(),
-                      );
-                    },
-                  );
-                }
+        // 未ログイン
+        if (!signedIn) {
+          return const Scaffold(body: Center(child: Text('ログインが必要です')));
+        }
 
-                return AppDrawer(
-                  tenantName: tenantName,
-                  currentTenantId: tenantId,
-                  currentIndex: _currentIndex,
-                  onTapIndex: (i) => setState(() => _currentIndex = i),
-                  tenantOptions: options,
-                  onChangeTenant: (id) async => _handleChangeTenant(id),
-                  onCreateTenant: () async => createTenantDialog(),
-                );
-              },
-            )
-          : null,
+        // 初回テナント確定
+        return FutureBuilder<Map<String, String?>?>(
+          future: _tenantInitialized
+              ? Future.value({'id': tenantId, 'name': tenantName})
+              : _resolveInitialTenant(user),
+          builder: (context, tSnap) {
+            if (tSnap.connectionState == ConnectionState.waiting) {
+              return const Scaffold(
+                body: Center(child: CircularProgressIndicator()),
+              );
+            }
 
-      body: tenantId == null
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                Expanded(
-                  child: IndexedStack(
-                    index: _currentIndex,
-                    children: [
-                      StoreHomeTab(tenantId: tenantId!, tenantName: tenantName),
-                      StoreQrTab(tenantId: tenantId!, tenantName: tenantName),
-                      StoreStaffTab(tenantId: tenantId!),
-                      StoreSettingsTab(tenantId: tenantId!),
-                    ],
+            // 初回のみ state に反映
+            if (!_tenantInitialized) {
+              final resolved = tSnap.data;
+              _tenantInitialized = true;
+              if (resolved != null) {
+                tenantId = resolved['id'];
+                tenantName = resolved['name'];
+              }
+            }
+
+            final hasTenant = tenantId != null;
+
+            return Scaffold(
+              backgroundColor: const Color(0xFFF7F7F7),
+              key: _scaffoldKey,
+              appBar: AppBar(
+                backgroundColor: const Color(0xFFF7F7F7),
+                foregroundColor: Colors.black87,
+                automaticallyImplyLeading: false,
+                elevation: 0,
+                toolbarHeight: 60,
+                titleSpacing: 16,
+                title: const Text(
+                  "Tipri",
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                    fontFamily: "LINESeed",
                   ),
                 ),
-              ],
-            ),
+                // ← ここはそのまま
+                // ★差し替え：BuilderやGlobalKey不要。公式の DrawerButton がベスト
+                leading: isNarrow ? const DrawerButton() : null,
 
-      bottomNavigationBar: isNarrow
-          ? null
-          : BottomNavigationBar(
-              type: BottomNavigationBarType.fixed,
-              backgroundColor: Colors.white,
-              selectedItemColor: Colors.black,
-              unselectedItemColor: Colors.black54,
-              currentIndex: _currentIndex,
-              onTap: (i) => setState(() => _currentIndex = i),
-              items: const [
-                BottomNavigationBarItem(icon: Icon(Icons.home), label: 'ホーム'),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.qr_code_2),
-                  label: '印刷',
+                // actions... などはそのまま
+                actions: [
+                  if (!isNarrow)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: maxSwitcherW.toDouble(),
+                        ),
+                        child: TenantSwitcherBar(
+                          currentTenantId: tenantId,
+                          currentTenantName: tenantName,
+                          onChanged: (id, name) {
+                            setState(() {
+                              tenantId = id;
+                              tenantName = name;
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                  IconButton(
+                    onPressed: () {},
+                    icon: const Icon(Icons.notifications_outlined),
+                  ),
+                ],
+                bottom: const PreferredSize(
+                  preferredSize: Size.fromHeight(1),
+                  child: SizedBox(
+                    height: 1,
+                    child: ColoredBox(color: Colors.black12),
+                  ),
                 ),
-                BottomNavigationBarItem(icon: Icon(Icons.group), label: 'スタッフ'),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.settings),
-                  label: '設定',
-                ),
-              ],
-            ),
+              ),
+
+              // Drawer
+              drawer: isNarrow
+                  ? Drawer(
+                      // ★追加：必ず Drawer でラップ
+                      child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                        stream: FirebaseFirestore.instance
+                            .collection(user.uid)
+                            .where('memberUids', arrayContains: user.uid)
+                            .snapshots(),
+                        builder: (context, snap) {
+                          List<TenantOption> options = [];
+                          if (snap.hasData) {
+                            options = snap.data!.docs.map((d) {
+                              final data = d.data();
+                              final name = (data['name'] as String?)?.trim();
+                              return TenantOption(
+                                id: d.id,
+                                name: (name?.isNotEmpty ?? false)
+                                    ? name!
+                                    : '店舗',
+                              );
+                            }).toList();
+                          }
+                          if (tenantId != null &&
+                              !options.any((e) => e.id == tenantId)) {
+                            options = [
+                              ...options,
+                              TenantOption(
+                                id: tenantId!,
+                                name: tenantName ?? '店舗',
+                              ),
+                            ];
+                          }
+
+                          if (options.isEmpty) {
+                            return FutureBuilder<List<TenantOption>>(
+                              future: _loadTenantOptionsFallback(user.uid),
+                              builder: (context, fb) {
+                                final opts = fb.data ?? const <TenantOption>[];
+                                return AppDrawer(
+                                  tenantName: tenantName,
+                                  currentTenantId: tenantId,
+                                  currentIndex: _currentIndex,
+                                  onTapIndex: (i) =>
+                                      setState(() => _currentIndex = i),
+                                  tenantOptions: opts,
+                                  onChangeTenant: (id) async =>
+                                      _handleChangeTenant(user.uid, id),
+                                  onCreateTenant: () async =>
+                                      createTenantDialog(),
+                                );
+                              },
+                            );
+                          }
+
+                          return AppDrawer(
+                            tenantName: tenantName,
+                            currentTenantId: tenantId,
+                            currentIndex: _currentIndex,
+                            onTapIndex: (i) =>
+                                setState(() => _currentIndex = i),
+                            tenantOptions: options,
+                            onChangeTenant: (id) async =>
+                                _handleChangeTenant(user.uid, id),
+                            onCreateTenant: () async => createTenantDialog(),
+                          );
+                        },
+                      ),
+                    )
+                  : null,
+
+              body: hasTenant
+                  ? Column(
+                      children: [
+                        Expanded(
+                          child: IndexedStack(
+                            index: _currentIndex,
+                            children: [
+                              // ここは hasTenant=true の分岐内なので `!` は安全
+                              StoreHomeTab(
+                                tenantId: tenantId!,
+                                tenantName: tenantName,
+                              ),
+                              StoreQrTab(
+                                tenantId: tenantId!,
+                                tenantName: tenantName,
+                              ),
+                              StoreStaffTab(tenantId: tenantId!),
+                              StoreSettingsTab(tenantId: tenantId!),
+                            ],
+                          ),
+                        ),
+                      ],
+                    )
+                  : Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text('店舗が見つかりませんでした'),
+                          const SizedBox(height: 12),
+                          FilledButton(
+                            onPressed: createTenantDialog,
+                            child: const Text('店舗を作成する'),
+                          ),
+                        ],
+                      ),
+                    ),
+
+              bottomNavigationBar: BottomNavigationBar(
+                type: BottomNavigationBarType.fixed,
+                backgroundColor: Colors.white,
+                selectedItemColor: Colors.black,
+                unselectedItemColor: Colors.black54,
+                currentIndex: _currentIndex,
+                onTap: (i) => setState(() => _currentIndex = i),
+                items: const [
+                  BottomNavigationBarItem(icon: Icon(Icons.home), label: 'ホーム'),
+                  BottomNavigationBarItem(
+                    icon: Icon(Icons.qr_code_2),
+                    label: '印刷',
+                  ),
+                  BottomNavigationBarItem(
+                    icon: Icon(Icons.group),
+                    label: 'スタッフ',
+                  ),
+                  BottomNavigationBarItem(
+                    icon: Icon(Icons.settings),
+                    label: '設定',
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }
