@@ -36,7 +36,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createInitialFeeCheckout = exports.upsertConnectedAccount = exports.listInvoices = exports.changeSubscriptionPlan = exports.createSubscriptionCheckout = exports.revokeInvite = exports.acceptTenantAdmin = exports.inviteTenantAdmin = exports.createAccountOnboardingLink = exports.createConnectAccountForTenant = exports.stripeWebhook = exports.onTipSucceededSendMailV2 = exports.createStoreTipSessionPublic = exports.createTipSessionPublic = exports.RESEND_API_KEY = void 0;
+exports.createInitialFeeCheckout = exports.upsertConnectedAccount = exports.listInvoices = exports.changeSubscriptionPlan = exports.createSubscriptionCheckout = exports.cancelTenantAdminInvite = exports.acceptTenantAdminInvite = exports.inviteTenantAdmin = exports.stripeWebhook = exports.onTipSucceededSendMailV2 = exports.createStoreTipSessionPublic = exports.createTipSessionPublic = exports.RESEND_API_KEY = void 0;
+exports.assertTenantAdmin = assertTenantAdmin;
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const functions = __importStar(require("firebase-functions"));
 const https_1 = require("firebase-functions/v2/https");
@@ -116,19 +117,38 @@ async function upsertTenantIndex(uid, tenantId, stripeAccountId) {
 }
 /* ===================== Firestore ルール系 ===================== */
 async function assertTenantAdmin(tenantId, uid) {
-    const mem = await db.doc(`tenants/${tenantId}/members/${uid}`).get();
-    if (mem.exists && mem.data()?.role === "admin")
-        return;
-    const t = await db.doc(`tenants/${tenantId}`).get();
-    const arr = (t.data()?.memberUids || []);
-    if (arr.includes(uid))
-        return;
+    // ルート: {collection: <uid>, doc: <tenantId>}
+    const tRef = db.collection(uid).doc(tenantId);
+    const tSnap = await tRef.get();
+    if (!tSnap.exists) {
+        throw new functions.https.HttpsError("not-found", "Tenant not found");
+    }
+    const data = tSnap.data() || {};
+    // 1) members フィールド（配列）
+    const members = (data.members ?? []);
+    if (Array.isArray(members) && members.length) {
+        const inMembers = members.some((m) => {
+            if (typeof m === "string") {
+                // ["uid1","uid2",...] 形式
+                return m === uid;
+            }
+            if (m && typeof m === "object") {
+                // [{uid:"...", role:"admin"}, ...] 形式も許容
+                const mid = m.uid ?? m.id ?? m.userId;
+                const role = String(m.role ?? "admin").toLowerCase();
+                // 役割を使うならここで admin/owner 判定
+                return mid === uid && (role === "admin" || role === "owner");
+            }
+            return false;
+        });
+        if (inMembers)
+            return;
+    }
     throw new functions.https.HttpsError("permission-denied", "Not tenant admin");
 }
-async function pickEffectiveRule(tenantId, at) {
-    // NOTE: こちらは旧 tenants/{tenantId} 階層の履歴。UID 名空間へ移行しない（履歴の置き場所が異なるなら調整）
+async function pickEffectiveRule(tenantId, at, uid) {
     const histSnap = await db
-        .collection("tenants")
+        .collection(uid)
         .doc(tenantId)
         .collection("storeDeductionHistory")
         .where("effectiveFrom", "<=", admin.firestore.Timestamp.fromDate(at))
@@ -143,7 +163,7 @@ async function pickEffectiveRule(tenantId, at) {
             effectiveFrom: d.effectiveFrom ?? null,
         };
     }
-    const cur = await db.collection("tenants").doc(tenantId).get();
+    const cur = await db.collection(uid).doc(tenantId).get();
     const sd = cur.data()?.storeDeduction ?? {};
     return {
         percent: Number(sd.percent ?? 0),
@@ -495,7 +515,7 @@ exports.stripeWebhook = functions
         "STRIPE_WEBHOOK_SECRET",
         "STRIPE_CONNECT_WEBHOOK_SECRET",
         "FRONTEND_BASE_URL",
-        "STRIPE_PAYMENT_WEBHOOK_SECRET"
+        "STRIPE_PAYMENT_WEBHOOK_SECRET",
     ],
     memory: "256MB",
 })
@@ -510,6 +530,23 @@ exports.stripeWebhook = functions
         process.env.STRIPE_WEBHOOK_SECRET,
         process.env.STRIPE_CONNECT_WEBHOOK_SECRET,
     ].filter(Boolean);
+    // ===== 安全変換ヘルパ =====
+    const toMillis = (sec) => {
+        if (typeof sec === "number" && Number.isFinite(sec))
+            return Math.trunc(sec * 1000);
+        if (typeof sec === "string" && sec !== "") {
+            const n = Number(sec);
+            if (Number.isFinite(n))
+                return Math.trunc(n * 1000);
+        }
+        return null;
+    };
+    const tsFromSec = (sec) => {
+        const ms = toMillis(sec);
+        return ms !== null ? admin.firestore.Timestamp.fromMillis(ms) : null;
+    };
+    const nowTs = () => admin.firestore.Timestamp.now();
+    const putIf = (v, obj) => v !== null && v !== undefined ? obj : {};
     let event = null;
     for (const secret of secrets) {
         try {
@@ -550,7 +587,6 @@ exports.stripeWebhook = functions
                     const sub = await stripe.subscriptions.retrieve(subscriptionId);
                     let feePercent;
                     if (plan) {
-                        // ここを修正：billingPlans/{planId} から取得
                         const planSnap = await db.collection("billingPlans").doc(String(plan)).get();
                         feePercent = planSnap.exists
                             ? planSnap.data()?.feePercent
@@ -563,13 +599,14 @@ exports.stripeWebhook = functions
                         uid = tRefIdx.parent.id;
                     }
                     const tRef = tenantRefByUid(uid, tenantId);
+                    const periodEndTs = tsFromSec(sub.current_period_end);
                     await tRef.set({
                         subscription: {
                             plan,
                             status: sub.status,
                             stripeCustomerId: customerId,
                             stripeSubscriptionId: sub.id,
-                            currentPeriodEnd: admin.firestore.Timestamp.fromMillis(sub.current_period_end * 1000),
+                            ...putIf(periodEndTs, { currentPeriodEnd: periodEndTs }),
                             ...(typeof feePercent === "number" ? { feePercent } : {}),
                         },
                     }, { merge: true });
@@ -626,7 +663,7 @@ exports.stripeWebhook = functions
             const payIntentId = session.payment_intent;
             let uid = session.metadata?.uid;
             const stripeCreatedSec = session.created ?? event.created;
-            const createdAtTs = admin.firestore.Timestamp.fromMillis((stripeCreatedSec ?? Math.floor(Date.now() / 1000)) * 1000);
+            const createdAtTs = tsFromSec(stripeCreatedSec) ?? nowTs();
             if (!tenantIdMeta) {
                 console.error("checkout.session.completed: missing tenantId in metadata");
             }
@@ -666,7 +703,7 @@ exports.stripeWebhook = functions
                 const tipAfter = await tipRef.get();
                 const alreadySplit = !!tipAfter.data()?.split?.storeAmount;
                 if (!alreadySplit) {
-                    const eff = await pickEffectiveRule(tenantIdMeta, createdAtTs.toDate());
+                    const eff = await pickEffectiveRule(tenantIdMeta, createdAtTs.toDate(), uid);
                     const totalMinor = (session.amount_total ?? 0);
                     const { storeAmount, staffAmount } = splitMinor(totalMinor, eff.percent, eff.fixed);
                     await tipRef.set({
@@ -724,7 +761,8 @@ exports.stripeWebhook = functions
             }
         }
         /* ========== 2) Checkout その他 ========== */
-        if (type === "checkout.session.expired" || type === "checkout.session.async_payment_failed") {
+        if (type === "checkout.session.expired" ||
+            type === "checkout.session.async_payment_failed") {
             const session = event.data.object;
             const tenantId = session.metadata?.tenantId;
             if (tenantId) {
@@ -743,59 +781,53 @@ exports.stripeWebhook = functions
             }
         }
         /* ========== 3) 購読の作成/更新 ========== */
-        if (type === "customer.subscription.created" || type === "customer.subscription.updated") {
+        if (type === "customer.subscription.created" ||
+            type === "customer.subscription.updated") {
             const sub = event.data.object;
-            // Subscription の metadata から取得（← session は使えない）
             let tenantId = sub.metadata?.tenantId;
             let uid = sub.metadata?.uid;
             const plan = sub.metadata?.plan;
             if (!tenantId) {
-                console.error("[sub.created/updated] missing tenantId in subscription.metadata", { subId: sub.id });
+                console.error("[sub.created/updated] missing tenantId in subscription.metadata", {
+                    subId: sub.id,
+                });
                 await docRef.set({ handled: true }, { merge: true });
                 res.sendStatus(200);
                 return;
             }
-            // uid が無ければ tenantIndex から逆引き
             if (!uid) {
                 const tRefIdx = await tenantRefByIndex(tenantId);
-                uid = tRefIdx.parent.id; // 親コレクション名 = uid
+                uid = tRefIdx.parent.id;
             }
-            // トライアル情報
             const isTrialing = sub.status === "trialing";
-            const trialStart = sub.trial_start
-                ? admin.firestore.Timestamp.fromMillis(sub.trial_start * 1000)
-                : null;
-            const trialEnd = sub.trial_end
-                ? admin.firestore.Timestamp.fromMillis(sub.trial_end * 1000)
-                : null;
-            // プランごとの手数料（必要なら）
+            const trialStartTs = tsFromSec(sub.trial_start);
+            const trialEndTs = tsFromSec(sub.trial_end);
+            const periodEndTs = tsFromSec(sub.current_period_end);
             let feePercent;
             if (plan) {
-                // ここを修正：billingPlans/{planId} から取得
                 const planSnap = await db.collection("billingPlans").doc(String(plan)).get();
                 feePercent = planSnap.exists
                     ? planSnap.data()?.feePercent
                     : undefined;
             }
-            // uid/{tenantId} に保存（あなたの読み先と統一）
             await tenantRefByUid(uid, tenantId).set({
                 subscription: {
                     plan,
                     status: sub.status,
                     stripeCustomerId: sub.customer ?? undefined,
                     stripeSubscriptionId: sub.id,
-                    currentPeriodEnd: admin.firestore.Timestamp.fromMillis(sub.current_period_end * 1000),
+                    ...putIf(periodEndTs, { currentPeriodEnd: periodEndTs }),
                     trial: {
                         status: isTrialing ? "trialing" : "none",
-                        trialStart,
-                        trialEnd,
+                        ...putIf(trialStartTs, { trialStart: trialStartTs }),
+                        ...putIf(trialEndTs, { trialEnd: trialEndTs }),
                     },
                     ...(typeof feePercent === "number" ? { feePercent } : {}),
                 },
             }, { merge: true });
             // トライアル終了直後に再トライアル防止フラグを付与
             try {
-                if (sub.status === "active" && sub.trial_end && sub.trial_end * 1000 <= Date.now()) {
+                if (sub.status === "active" && typeof sub.trial_end === "number" && sub.trial_end * 1000 <= Date.now()) {
                     await stripe.customers.update(sub.customer, {
                         metadata: { zotman_trial_used: "true" },
                     });
@@ -817,47 +849,28 @@ exports.stripeWebhook = functions
                     const tRefIdx = await tenantRefByIndex(tenantId);
                     uid = tRefIdx.parent.id;
                 }
+                const periodEndTs = tsFromSec(sub.current_period_end);
                 await tenantRefByUid(uid, tenantId).set({
                     subscription: {
                         status: "canceled",
                         stripeSubscriptionId: sub.id,
-                        currentPeriodEnd: admin.firestore.Timestamp.fromMillis(sub.current_period_end * 1000),
+                        ...putIf(periodEndTs, { currentPeriodEnd: periodEndTs }),
                     },
                 }, { merge: true });
             }
         }
-        if (type === "customer.subscription.deleted") {
-            const sub = event.data.object;
-            const tenantId = sub.metadata?.tenantId;
-            let uid = sub.metadata?.uid;
-            if (tenantId) {
-                if (!uid) {
-                    const tRefIdx = await tenantRefByIndex(tenantId);
-                    uid = tRefIdx.parent.id;
-                }
-                await tenantRefByUid(uid, tenantId).set({
-                    subscription: {
-                        status: "canceled",
-                        stripeSubscriptionId: sub.id,
-                        currentPeriodEnd: admin.firestore.Timestamp.fromMillis(sub.current_period_end * 1000),
-                    },
-                }, { merge: true });
-            }
-        }
-        /* ========== 4) 請求書 ========== */
         /* ========== 4) 請求書 ========== */
         if (type === "invoice.payment_succeeded" || type === "invoice.payment_failed") {
             const inv = event.data.object;
             const customerId = inv.customer;
-            // 追加: トライアル明け最初の課金を検出 → Customerにフラグ
+            // トライアル明け最初の課金を検出 → Customerにフラグ
             try {
                 if (type === "invoice.payment_succeeded" &&
                     inv.paid &&
-                    inv.billing_reason === "subscription_cycle" && // トライアル明け最初の定期請求など
+                    inv.billing_reason === "subscription_cycle" &&
                     inv.subscription) {
                     const sub = await stripe.subscriptions.retrieve(inv.subscription);
-                    // trial_end が支払時刻以前 = もうトライアルではない
-                    if (sub.trial_end && sub.trial_end * 1000 <= Date.now()) {
+                    if (typeof sub.trial_end === "number" && sub.trial_end * 1000 <= Date.now()) {
                         await stripe.customers.update(customerId, {
                             metadata: { zotman_trial_used: "true" },
                         });
@@ -867,12 +880,16 @@ exports.stripeWebhook = functions
             catch (e) {
                 console.warn("Failed to mark zotman_trial_used on invoice.payment_succeeded:", e);
             }
-            // === 既存のテナント検索・invoices 保存ロジック（そのまま） ===
+            // 既存のテナント検索・invoices 保存
             const idxSnap = await db.collection("tenantIndex").get();
             for (const d of idxSnap.docs) {
                 const { uid, tenantId } = d.data();
                 const t = await db.collection(uid).doc(tenantId).get();
                 if (t.exists && t.get("subscription.stripeCustomerId") === customerId) {
+                    const createdTs = tsFromSec(inv.created) ?? nowTs();
+                    const line0 = inv.lines?.data?.[0]?.period;
+                    const psTs = tsFromSec(line0?.start ?? inv.created) ?? createdTs;
+                    const peTs = tsFromSec(line0?.end ?? inv.created) ?? createdTs;
                     await db
                         .collection(uid)
                         .doc(tenantId)
@@ -885,9 +902,9 @@ exports.stripeWebhook = functions
                         status: inv.status,
                         hosted_invoice_url: inv.hosted_invoice_url,
                         invoice_pdf: inv.invoice_pdf,
-                        created: admin.firestore.Timestamp.fromMillis(inv.created * 1000),
-                        period_start: admin.firestore.Timestamp.fromMillis((inv.lines?.data?.[0]?.period?.start ?? inv.created) * 1000),
-                        period_end: admin.firestore.Timestamp.fromMillis((inv.lines?.data?.[0]?.period?.end ?? inv.created) * 1000),
+                        created: createdTs,
+                        period_start: psTs,
+                        period_end: peTs,
                         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                     }, { merge: true });
                     break;
@@ -948,10 +965,7 @@ exports.stripeWebhook = functions
                     const tRefIdx = await tenantRefByIndex(tenantId);
                     uid = tRefIdx.parent.id;
                 }
-                const trialEnd = sub.trial_end
-                    ? admin.firestore.Timestamp.fromMillis(sub.trial_end * 1000)
-                    : null;
-                // 例: テナント直下に通知ドキュメントを積む（UIで表示/メール送信のトリガに）
+                const trialEndTs = tsFromSec(sub.trial_end);
                 await db
                     .collection(uid)
                     .doc(tenantId)
@@ -959,7 +973,7 @@ exports.stripeWebhook = functions
                     .add({
                     type: "trial_will_end",
                     stripeSubscriptionId: sub.id,
-                    trialEnd,
+                    ...(trialEndTs ? { trialEnd: trialEndTs } : {}),
                     createdAt: admin.firestore.FieldValue.serverTimestamp(),
                     read: false,
                 });
@@ -975,172 +989,145 @@ exports.stripeWebhook = functions
         return;
     }
 });
-/* ===================== Connect: Express（テナント直・参考） ===================== */
-exports.createConnectAccountForTenant = (0, https_1.onCall)({
-    region: "us-central1",
-    memory: "256MiB",
-    cors: [APP_ORIGIN, "http://localhost:65463"],
-    secrets: ["STRIPE_SECRET_KEY"],
-}, async (req) => {
-    if (!req.auth)
-        throw new https_1.HttpsError("unauthenticated", "auth required");
-    const tenantId = req.data?.tenantId;
-    if (!tenantId)
-        throw new https_1.HttpsError("invalid-argument", "tenantId required");
-    const stripe = stripeClient();
-    // 旧: tenants/{tenantId}
-    // Express 用は“グローバル”で持っている前提だったのでここは保持（必要なら uid 名空間化）
-    const tRef = db.collection("tenants").doc(tenantId);
-    const tSnap = await tRef.get();
-    if (!tSnap.exists)
-        throw new https_1.HttpsError("not-found", "tenant not found");
-    const existing = tSnap.data()?.stripeAccountId;
-    if (existing)
-        return { stripeAccountId: existing, already: true };
-    const acct = await stripe.accounts.create({
-        type: "express",
-        capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
-    });
-    await tRef.set({
-        stripeAccountId: acct.id,
-        connect: {
-            charges_enabled: !!acct.charges_enabled,
-            payouts_enabled: !!acct.payouts_enabled,
-            details_submitted: !!acct.details_submitted,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-    }, { merge: true });
-    return { stripeAccountId: acct.id };
-});
-exports.createAccountOnboardingLink = (0, https_1.onCall)({
-    region: "us-central1",
-    memory: "256MiB",
-    cors: [APP_ORIGIN, "http://localhost:65463"],
-    secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL"],
-}, async (req) => {
-    if (!req.auth)
-        throw new https_1.HttpsError("unauthenticated", "auth required");
-    const tenantId = req.data?.tenantId;
-    if (!tenantId)
-        throw new https_1.HttpsError("invalid-argument", "tenantId required");
-    const t = await db.collection("tenants").doc(tenantId).get();
-    const acctId = t.data()?.stripeAccountId;
-    if (!acctId)
-        throw new https_1.HttpsError("failed-precondition", "no stripeAccountId");
-    const stripe = stripeClient();
-    const BASE = process.env.FRONTEND_BASE_URL;
-    const link = await stripe.accountLinks.create({
-        account: acctId,
-        type: "account_onboarding",
-        refresh_url: `${BASE}/#/connect-refresh?t=${tenantId}`,
-        return_url: `${BASE}/#/connect-return?t=${tenantId}`,
-    });
-    return { url: link.url };
-});
-/* ===================== 招待（そのまま） ===================== */
+/* ===================== 招待 ===================== */
 exports.inviteTenantAdmin = functions.https.onCall(async (data, context) => {
     const uid = context.auth?.uid;
     if (!uid)
         throw new functions.https.HttpsError("unauthenticated", "Sign in");
-    const tenantId = data?.tenantId;
+    const tenantId = (data?.tenantId || "").toString();
     const emailRaw = (data?.email || "").toString();
     const emailLower = emailRaw.trim().toLowerCase();
     if (!tenantId || !emailLower.includes("@")) {
         throw new functions.https.HttpsError("invalid-argument", "bad tenantId/email");
     }
     await assertTenantAdmin(tenantId, uid);
+    // すでにメンバーならメール送らず終了
+    const userByEmail = await admin.auth().getUserByEmail(emailLower).catch(() => null);
+    if (userByEmail) {
+        const memberRef = db.doc(`${uid}/${tenantId}/members/${userByEmail.uid}`);
+        const mem = await memberRef.get();
+        if (mem.exists)
+            return { ok: true, alreadyMember: true };
+    }
     const token = crypto.randomBytes(32).toString("hex");
     const tokenHash = sha256(token);
-    const expiresAt = admin.firestore.Timestamp.fromDate(new Date(Date.now() + 1000 * 60 * 60 * 24 * 7));
-    const inviteRef = db.collection(`tenants/${tenantId}/invites`).doc();
-    await inviteRef.set({
-        emailLower,
-        tokenHash,
-        status: "pending",
-        invitedBy: {
-            uid,
-            email: context.auth?.token?.email || null,
-        },
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        expiresAt,
-    });
+    const expiresAt = admin.firestore.Timestamp.fromDate(new Date(Date.now() + 1000 * 60 * 60 * 24 * 7) // 7日
+    );
+    // 既存の pending 招待があれば上書き（＝再送）
+    const existing = await db
+        .collection(`${uid}/${tenantId}/invites`)
+        .where("emailLower", "==", emailLower)
+        .where("status", "==", "pending")
+        .limit(1)
+        .get();
+    let inviteRef;
+    if (existing.empty) {
+        inviteRef = db.collection(`${uid}/${tenantId}/invites`).doc();
+        await inviteRef.set({
+            emailLower,
+            tokenHash,
+            status: "pending",
+            invitedBy: {
+                uid,
+                email: context.auth?.token?.email || null,
+            },
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            expiresAt,
+        });
+    }
+    else {
+        inviteRef = existing.docs[0].ref;
+        await inviteRef.update({
+            tokenHash,
+            expiresAt,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+    }
     const acceptUrl = `${APP_ORIGIN}/#/admin-invite?tenantId=${tenantId}&token=${token}`;
+    // ---- Trigger Email from Firestore による送信 ----
+    // NOTE: `to` は配列で指定。拡張の Default FROM を設定済みなら from は省略可。
     await db.collection("mail").add({
-        to: emailLower,
+        to: [emailLower],
         message: {
             subject: "管理者招待のお知らせ",
+            text: `管理者として招待されました。\n以下のURLから承認してください（7日以内）：\n${acceptUrl}`,
             html: `
         <p>管理者として招待されました。</p>
         <p><a href="${acceptUrl}">こちらのリンク</a>を開いて承認してください（7日以内）。</p>
         <p>リンク: ${acceptUrl}</p>
       `,
         },
+        // 必要なら個別に上書き可能：
+        // from: "YourPay <noreply@your-domain>",
+        // replyTo: "support@your-domain",
     });
     return { ok: true };
 });
-exports.acceptTenantAdmin = functions.https.onCall(async (data, context) => {
+exports.acceptTenantAdminInvite = functions.https.onCall(async (data, context) => {
     const uid = context.auth?.uid;
-    const userEmail = (context.auth?.token?.email || "").toLowerCase();
-    if (!uid || !userEmail) {
-        throw new functions.https.HttpsError("unauthenticated", "Sign-in with email");
-    }
-    const tenantId = data?.tenantId;
-    const token = data?.token;
+    const email = (context.auth?.token?.email || "").toLowerCase();
+    if (!uid || !email)
+        throw new functions.https.HttpsError("unauthenticated", "Sign in");
+    const tenantId = (data?.tenantId || "").toString();
+    const token = (data?.token || "").toString();
     if (!tenantId || !token) {
         throw new functions.https.HttpsError("invalid-argument", "tenantId/token required");
     }
     const tokenHash = sha256(token);
-    const invitesSnap = await db
-        .collection(`tenants/${tenantId}/invites`)
+    const q = await db
+        .collection(`${uid}/${tenantId}/invites`)
         .where("tokenHash", "==", tokenHash)
         .limit(1)
         .get();
-    if (invitesSnap.empty) {
+    if (q.empty)
         throw new functions.https.HttpsError("not-found", "Invite not found");
-    }
-    const inviteRef = invitesSnap.docs[0].ref;
-    const inv = invitesSnap.docs[0].data();
+    const inviteDoc = q.docs[0];
+    const inv = inviteDoc.data();
     if (inv.status !== "pending") {
-        throw new functions.https.HttpsError("failed-precondition", "Invite already used/revoked");
+        throw new functions.https.HttpsError("failed-precondition", "Invite already processed");
     }
-    const now = admin.firestore.Timestamp.now();
-    if (inv.expiresAt && now.toMillis() > inv.expiresAt.toMillis()) {
+    if (inv.expiresAt?.toMillis?.() < Date.now()) {
         throw new functions.https.HttpsError("deadline-exceeded", "Invite expired");
     }
-    if (inv.emailLower !== userEmail) {
-        throw new functions.https.HttpsError("permission-denied", "Email does not match invite");
+    if (inv.emailLower !== email) {
+        throw new functions.https.HttpsError("permission-denied", "Invite email mismatch");
     }
-    const memRef = db.doc(`tenants/${tenantId}/members/${uid}`);
-    const mem = await memRef.get();
-    if (!mem.exists) {
-        await memRef.set({
+    await db.runTransaction(async (tx) => {
+        const memRef = db.doc(`${uid}/${tenantId}/members/${uid}`);
+        const tRef = db.doc(`${uid}/${tenantId}`);
+        // members に追加
+        tx.set(memRef, {
             role: "admin",
-            email: userEmail,
+            email,
             displayName: context.auth?.token?.name || null,
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            addedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        // tenant ドキュメントにもUIDを積む（使っているなら）
+        tx.set(tRef, { memberUids: admin.firestore.FieldValue.arrayUnion(uid) }, { merge: true });
+        // 招待を accepted に
+        tx.update(inviteDoc.ref, {
+            status: "accepted",
+            acceptedAt: admin.firestore.FieldValue.serverTimestamp(),
+            acceptedBy: { uid, email },
         });
-        await db.doc(`tenants/${tenantId}`).update({
-            memberUids: admin.firestore.FieldValue.arrayUnion(uid),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-    }
-    await inviteRef.update({
-        status: "accepted",
-        acceptedBy: uid,
-        acceptedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
     return { ok: true };
 });
-exports.revokeInvite = functions.https.onCall(async (data, context) => {
+exports.cancelTenantAdminInvite = functions.https.onCall(async (data, context) => {
     const uid = context.auth?.uid;
     if (!uid)
         throw new functions.https.HttpsError("unauthenticated", "Sign in");
-    const tenantId = data?.tenantId;
-    const inviteId = data?.inviteId;
-    if (!tenantId || !inviteId)
-        throw new functions.https.HttpsError("invalid-argument", "bad args");
+    const tenantId = (data?.tenantId || "").toString();
+    const inviteId = (data?.inviteId || "").toString();
+    if (!tenantId || !inviteId) {
+        throw new functions.https.HttpsError("invalid-argument", "tenantId/inviteId required");
+    }
     await assertTenantAdmin(tenantId, uid);
-    await db.doc(`tenants/${tenantId}/invites/${inviteId}`).update({ status: "revoked" });
+    await db.doc(`${uid}/${tenantId}/invites/${inviteId}`).update({
+        status: "canceled",
+        canceledAt: admin.firestore.FieldValue.serverTimestamp(),
+        canceledBy: uid,
+    });
     return { ok: true };
 });
 /* ===================== サブスク Checkout ===================== */
@@ -1211,22 +1198,19 @@ exports.changeSubscriptionPlan = functions
     // 現在の購読取得
     const sub = (await stripe.subscriptions.retrieve(subscriptionId));
     const item = sub.items.data[0];
-    const trialEnd = sub.trial_end ?? undefined; // 既に trialing なら epoch 秒
-    // トライアル中でも trial_end を維持し、差額課金を発生させない
+    // trial_end は number のときだけ渡す（undefined なら Stripe が自動維持）
+    const trialEndParam = typeof sub.trial_end === "number" ? sub.trial_end : undefined;
     const updated = await stripe.subscriptions.update(subscriptionId, {
         items: [
             {
                 id: item.id,
                 price: newPlanDoc.stripePriceId,
-                // 数量があるなら quantity もコピー
                 quantity: item.quantity ?? 1,
             },
         ],
         proration_behavior: "none",
-        trial_end: trialEnd, // そのままの終了時刻を維持
-        trial_from_plan: false, // Price 側のトライアルを再適用しない
-        // 請求方法は自動課金のまま（デフォルト）
-        // collection_method: "charge_automatically",
+        trial_end: trialEndParam, // ← 安全に
+        trial_from_plan: false,
         metadata: { ...sub.metadata, plan: newPlan },
     });
     return { ok: true, subscription: updated.id };
