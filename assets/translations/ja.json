@@ -49,6 +49,7 @@
         "amount": "金額: {Amount}",
         "initiate2": "ご協力のお願い",
         "initiate21": "Googleレビューを書く",
-        "initiate22": "LINE公式を友だち追加"
+        "initiate22": "LINE公式を友だち追加",
+        "thanks_from_store": "お店からのメッセージ"
     }
 }

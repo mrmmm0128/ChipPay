@@ -36,7 +36,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
   }
 
   Future<_LinksGateResult> _loadLinksGate() async {
-    // Firestoreからテナント情報取得 → サブスクCタイプ判定
+    // Firestore: tenants/{tenantId}
     final doc = await FirebaseFirestore.instance
         .collection('tenants')
         .doc(widget.tenantId)
@@ -45,10 +45,30 @@ class _TipCompletePageState extends State<TipCompletePage> {
     final data = (doc.data() ?? <String, dynamic>{});
     final isSubC = _isSubscriptionC(data);
 
+    // 特典リンクは subscription.extras または直下にある可能性に両対応
+    final extras =
+        (data['subscription']?['extras'] as Map?)?.cast<String, dynamic>() ??
+        {};
+    final googleReviewUrl =
+        (extras['googleReviewUrl'] as String?) ??
+        (data['googleReviewUrl'] as String?) ??
+        '';
+    final lineOfficialUrl =
+        (extras['lineOfficialUrl'] as String?) ??
+        (data['lineOfficialUrl'] as String?) ??
+        '';
+
+    // 感謝の写真/動画は c_perks.* に格納
+    final perks = (data['c_perks'] as Map?)?.cast<String, dynamic>() ?? {};
+    final thanksPhotoUrl = (perks['thanksPhotoUrl'] as String?) ?? '';
+    final thanksVideoUrl = (perks['thanksVideoUrl'] as String?) ?? '';
+
     return _LinksGateResult(
       isSubC: isSubC,
-      googleReviewUrl: (data['googleReviewUrl'] as String?) ?? '',
-      lineOfficialUrl: (data['lineOfficialUrl'] as String?) ?? '',
+      googleReviewUrl: googleReviewUrl,
+      lineOfficialUrl: lineOfficialUrl,
+      thanksPhotoUrl: thanksPhotoUrl,
+      thanksVideoUrl: thanksVideoUrl,
     );
   }
 
@@ -101,6 +121,11 @@ class _TipCompletePageState extends State<TipCompletePage> {
     await launchUrlString(url, mode: LaunchMode.externalApplication);
   }
 
+  Future<void> _openThanksVideo(String url) async {
+    if (url.isEmpty) return;
+    // 既存の動画プレビュー（モーダル）を利用
+  }
+
   @override
   Widget build(BuildContext context) {
     final storeLabel = widget.tenantName ?? tr('success_page.store');
@@ -125,7 +150,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
                       if (widget.employeeName != null)
                         tr(
                           'success_page.for',
-                          namedArgs: {"Name": ?widget.employeeName},
+                          namedArgs: {"Name": widget.employeeName ?? ''},
                         ),
                       if (widget.amount != null)
                         tr(
@@ -138,7 +163,88 @@ class _TipCompletePageState extends State<TipCompletePage> {
                     style: AppTypography.body(),
                   ),
                 ],
-                const SizedBox(height: 24),
+
+                const SizedBox(height: 20),
+
+                // ▼ 感謝の写真/動画（Cプラン & URLがある時だけ表示）
+                FutureBuilder<_LinksGateResult>(
+                  future: _linksGateFuture,
+                  builder: (context, snap) {
+                    if (snap.connectionState == ConnectionState.waiting) {
+                      return const SizedBox(
+                        height: 24,
+                        width: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      );
+                    }
+                    if (!snap.hasData) return const SizedBox.shrink();
+                    final r = snap.data!;
+                    final hasPhoto = (r.thanksPhotoUrl?.isNotEmpty ?? false);
+                    final hasVideo = (r.thanksVideoUrl?.isNotEmpty ?? false);
+                    if (!r.isSubC || (!hasPhoto && !hasVideo)) {
+                      return const SizedBox.shrink();
+                    }
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          tr(
+                            'success_page.thanks_from_store',
+                          ), // 例: "お店からのメッセージ"
+                          style: AppTypography.body(),
+                          textAlign: TextAlign.left,
+                        ),
+                        const SizedBox(height: 8),
+
+                        if (hasPhoto) ...[
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: AspectRatio(
+                              aspectRatio: 16 / 9,
+                              child: Image.network(
+                                r.thanksPhotoUrl!,
+                                fit: BoxFit.cover,
+                                loadingBuilder: (c, child, progress) {
+                                  if (progress == null) return child;
+                                  return const Center(
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  );
+                                },
+                                errorBuilder: (_, __, ___) => Container(
+                                  color: const Color(0x11000000),
+                                  child: const Center(
+                                    child: Icon(Icons.broken_image),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+
+                        if (hasVideo)
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              icon: const Icon(Icons.play_circle_outline),
+                              label: Text(
+                                tr('success_page.watch_thanks_video'),
+                              ), // 例: "感謝の動画を見る"
+                              onPressed: () =>
+                                  _openThanksVideo(r.thanksVideoUrl!),
+                            ),
+                          ),
+                        const SizedBox(height: 12),
+                        const Divider(),
+                      ],
+                    );
+                  },
+                ),
+
+                const SizedBox(height: 12),
 
                 // ① お店にチップを送る（ボトムシート）
                 _YellowActionButton(
@@ -150,7 +256,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
                 ),
                 const SizedBox(height: 8),
 
-                // ② 他のスタッフにチップを送る
+                // ② 他のスタッフにチップを送る（店舗ページへ）
                 _YellowActionButton(
                   label: tr('success_page.initiate1'),
                   onPressed: _navigatePublicStorePage,
@@ -159,7 +265,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
                 const SizedBox(height: 24),
                 const Divider(),
 
-                // ▼ サブスクC限定の導線（Googleレビュー / LINE公式）
+                // ▼ サブスクC限定（Googleレビュー / LINE公式）
                 FutureBuilder<_LinksGateResult>(
                   future: _linksGateFuture,
                   builder: (context, snap) {
@@ -179,12 +285,8 @@ class _TipCompletePageState extends State<TipCompletePage> {
                     final r = snap.data!;
                     if (!r.isSubC) return const SizedBox.shrink();
 
-                    final hasReview =
-                        (r.googleReviewUrl != null &&
-                        r.googleReviewUrl!.isNotEmpty);
-                    final hasLine =
-                        (r.lineOfficialUrl != null &&
-                        r.lineOfficialUrl!.isNotEmpty);
+                    final hasReview = (r.googleReviewUrl?.isNotEmpty ?? false);
+                    final hasLine = (r.lineOfficialUrl?.isNotEmpty ?? false);
                     if (!hasReview && !hasLine) return const SizedBox.shrink();
 
                     return Column(
@@ -229,15 +331,20 @@ class _TipCompletePageState extends State<TipCompletePage> {
   }
 }
 
-/// リンク表示用の判定結果
+/// ここで “Cプラン判定 + 特典リンク + 感謝の写真/動画” をまとめて返す
 class _LinksGateResult {
   final bool isSubC;
   final String? googleReviewUrl;
   final String? lineOfficialUrl;
-  const _LinksGateResult({
+  final String? thanksPhotoUrl;
+  final String? thanksVideoUrl;
+
+  _LinksGateResult({
     required this.isSubC,
     this.googleReviewUrl,
     this.lineOfficialUrl,
+    this.thanksPhotoUrl,
+    this.thanksVideoUrl,
   });
 }
 
