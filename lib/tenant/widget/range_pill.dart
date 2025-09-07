@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:yourpay/tenant/store_detail/card_shell.dart';
+import 'package:yourpay/tenant/widget/card_shell.dart';
 
 /// 期間ピル（黒=選択中）
 class RangePill extends StatelessWidget {
@@ -19,20 +19,31 @@ class RangePill extends StatelessWidget {
     final fg = active ? Colors.white : Colors.black87;
     final border = active ? Colors.black : Colors.black26;
 
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(999),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: border),
-          // ← 影なし（BoxShadow未指定）
-        ),
-        child: Text(
-          label,
-          style: TextStyle(color: fg, fontWeight: FontWeight.w700),
+    return Material(
+      color: Colors.transparent, // InkWellのリップル用
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          // ← 常に縦横センターに見えるよう最小サイズを確保
+          constraints: const BoxConstraints(minHeight: 32, minWidth: 48),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          alignment: Alignment.center, // ← 縦横センター
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: border),
+          ),
+          child: Text(
+            label,
+            textAlign: TextAlign.center, // ← 念のため横もセンター
+            style: TextStyle(
+              color: fg,
+              fontWeight: FontWeight.w700,
+              // 必要ならフォント指定:
+              // fontFamily: 'LINEseed',
+            ),
+          ),
         ),
       ),
     );

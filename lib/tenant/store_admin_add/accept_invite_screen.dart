@@ -92,17 +92,25 @@ class _AcceptInviteScreenState extends State<AcceptInviteScreen> {
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
     return Scaffold(
-      appBar: AppBar(title: const Text('管理者招待を承認')),
+      appBar: AppBar(
+        title: const Text('管理者招待を承認', style: TextStyle(fontFamily: 'LINEseed')),
+      ),
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('テナント: ${tenantId ?? "(不明)"}'),
+              Text(
+                'テナント: ${tenantId ?? "(不明)"}',
+                style: TextStyle(fontFamily: 'LINEseed'),
+              ),
               const SizedBox(height: 8),
               if (!(_hasParams)) ...[
-                const Text('リンクの形式が正しくない可能性があります。'),
+                const Text(
+                  'リンクの形式が正しくない可能性があります。',
+                  style: TextStyle(fontFamily: 'LINEseed'),
+                ),
                 const SizedBox(height: 8),
               ],
               ElevatedButton(
@@ -113,11 +121,18 @@ class _AcceptInviteScreenState extends State<AcceptInviteScreen> {
                         height: 20,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : Text(user == null ? 'ログインして承認' : '承認する'),
+                    : Text(
+                        user == null ? 'ログインして承認' : '承認する',
+                        style: TextStyle(fontFamily: 'LINEseed'),
+                      ),
               ),
               if (result != null) ...[
                 const SizedBox(height: 12),
-                Text(result!, textAlign: TextAlign.center),
+                Text(
+                  result!,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontFamily: 'LINEseed'),
+                ),
               ],
             ],
           ),

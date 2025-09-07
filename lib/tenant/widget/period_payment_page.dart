@@ -2,7 +2,10 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:yourpay/tenant/store_detail/card_shell.dart';
+import 'package:yourpay/tenant/widget/card_shell.dart';
+
+// ★ 追加
+enum RecipientFilter { all, storeOnly, staffOnly }
 
 class PeriodPaymentsPage extends StatefulWidget {
   final String tenantId;
@@ -10,12 +13,16 @@ class PeriodPaymentsPage extends StatefulWidget {
   final DateTime? start;
   final DateTime? endExclusive;
 
+  // ★ 追加（既定: すべて）
+  final RecipientFilter recipientFilter;
+
   const PeriodPaymentsPage({
     super.key,
     required this.tenantId,
     this.tenantName,
     this.start,
     this.endExclusive,
+    this.recipientFilter = RecipientFilter.all, // ★ 追加
   });
 
   @override
@@ -32,7 +39,6 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
   void initState() {
     super.initState();
     _searchCtrl.addListener(() {
-      // 入力のデバウンス（タイプ中の過剰rebuild防止）
       _debounce?.cancel();
       _debounce = Timer(const Duration(milliseconds: 180), () {
         setState(() => _search = _searchCtrl.text.trim().toLowerCase());
@@ -71,6 +77,18 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
     return '$s 〜 $e';
   }
 
+  // ★ 追加：フィルタの表示テキスト
+  String _filterLabel() {
+    switch (widget.recipientFilter) {
+      case RecipientFilter.storeOnly:
+        return '（店舗のみ）';
+      case RecipientFilter.staffOnly:
+        return '（スタッフのみ）';
+      case RecipientFilter.all:
+        return '（すべて）';
+    }
+  }
+
   Query _buildQuery() {
     Query q = FirebaseFirestore.instance
         .collection(uid!)
@@ -91,7 +109,6 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
       );
     }
 
-    // createdAt 降順・最大500件
     return q.orderBy('createdAt', descending: true).limit(500);
   }
 
@@ -112,12 +129,12 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
     return Scaffold(
       backgroundColor: const Color(0xFFF7F7F7),
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: const Color(0xFFF7F7F7),
         foregroundColor: Colors.black,
         elevation: 0,
         title: Text(
           widget.tenantName == null ? '決済履歴' : '${widget.tenantName!} の決済履歴',
-          style: const TextStyle(fontWeight: FontWeight.w600),
+          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
         ),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(84),
@@ -126,8 +143,9 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // 範囲 + フィルタ表示
                 Text(
-                  _rangeLabel(),
+                  '${_rangeLabel()} ${_filterLabel()}',
                   style: const TextStyle(color: Colors.black54),
                 ),
                 const SizedBox(height: 8),
@@ -167,14 +185,37 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
           }
           final docs = snap.data!.docs;
 
-          // ★ クライアント側フィルタ（部分一致・大文字小文字無視）
+          // ★ 受取先フィルタ + 検索をクライアント側で適用
           final filtered = (() {
-            if (_search.isEmpty) return docs;
-            return docs.where((doc) {
+            Iterable<QueryDocumentSnapshot> it = docs;
+
+            // 受取先フィルタ
+            it = it.where((doc) {
               final d = doc.data() as Map<String, dynamic>;
-              final name = _nameFrom(d).toLowerCase();
-              return name.contains(_search);
-            }).toList();
+              final rec = (d['recipient'] as Map?)?.cast<String, dynamic>();
+              final isStaff =
+                  (rec?['type'] == 'employee') || (d['employeeId'] != null);
+
+              switch (widget.recipientFilter) {
+                case RecipientFilter.storeOnly:
+                  return !isStaff; // 店舗のみ
+                case RecipientFilter.staffOnly:
+                  return isStaff; // スタッフのみ
+                case RecipientFilter.all:
+                  return true;
+              }
+            });
+
+            // 検索（名前部分一致）
+            if (_search.isNotEmpty) {
+              it = it.where((doc) {
+                final d = doc.data() as Map<String, dynamic>;
+                final name = _nameFrom(d).toLowerCase();
+                return name.contains(_search);
+              });
+            }
+
+            return it.toList();
           })();
 
           if (filtered.isEmpty) {
@@ -195,6 +236,7 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
                   ? 'スタッフ: ${rec?['employeeName'] ?? d['employeeName'] ?? 'スタッフ'}'
                   : '店舗: ${rec?['storeName'] ?? d['storeName'] ?? '店舗'}';
 
+              // ★ 元金（チップの支払金額）のみ
               final amountNum = (d['amount'] as num?) ?? 0;
               final currency =
                   (d['currency'] as String?)?.toUpperCase() ?? 'JPY';
@@ -203,6 +245,7 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
                   ? '$sym${amountNum.toInt()}'
                   : '${amountNum.toInt()} $currency';
 
+              // 日時（表示は継続）
               String when = '';
               final ts = d['createdAt'];
               if (ts is Timestamp) {
@@ -228,10 +271,12 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
                       color: Colors.black87,
                     ),
                   ),
+                  // ★ サブタイトルは日時のみ（控除適用などは非表示）
                   subtitle: Text(
                     when,
                     style: const TextStyle(color: Colors.black87),
                   ),
+                  // ★ 右側も元金のみを表示（店/スタッフ分配は非表示）
                   trailing: Text(
                     amountText,
                     style: const TextStyle(

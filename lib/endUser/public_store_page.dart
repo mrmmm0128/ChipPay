@@ -125,6 +125,7 @@ class PublicStorePageState extends State<PublicStorePage> {
   String? email;
   String? photoUrl;
   String? uid;
+  String? tenantPlan;
 
   final _searchCtrl = TextEditingController();
   String _query = '';
@@ -210,6 +211,8 @@ class PublicStorePageState extends State<PublicStorePage> {
           .get();
       if (doc.exists) {
         tenantName = (doc.data()?['name'] as String?) ?? '店舗';
+        final sub = doc.data()?['subscription'] as Map<String, dynamic>?;
+        tenantPlan = sub?['plan'] as String?;
       }
     }
 
@@ -519,7 +522,7 @@ class PublicStorePageState extends State<PublicStorePage> {
                 const SizedBox(height: 10),
 
                 // ── ご協力お願いします（Cタイプのみ表示） ───────────
-                if (!isTypeC) ...[
+                if (tenantPlan! == "C") ...[
                   _Sectionbar(title: tr('section.initiate1')),
                   Padding(
                     padding: const EdgeInsets.symmetric(

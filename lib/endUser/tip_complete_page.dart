@@ -74,6 +74,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
           arguments: {
             'tenantId': widget.tenantId,
             'tenantName': widget.tenantName,
+            "uid": widget.uid,
           },
         ),
       ),

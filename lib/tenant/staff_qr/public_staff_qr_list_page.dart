@@ -47,7 +47,14 @@ class _PublicStaffQrListPageState extends State<PublicStaffQrListPage> {
   @override
   Widget build(BuildContext context) {
     if (tenantId == null || tenantId!.isEmpty) {
-      return const Scaffold(body: Center(child: Text('tenantId が見つかりません')));
+      return const Scaffold(
+        body: Center(
+          child: Text(
+            'tenantId が見つかりません',
+            style: TextStyle(fontFamily: 'LINEseed'),
+          ),
+        ),
+      );
     }
 
     final q = FirebaseFirestore.instance
@@ -61,10 +68,11 @@ class _PublicStaffQrListPageState extends State<PublicStaffQrListPage> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
+        automaticallyImplyLeading: false,
         elevation: 0,
         title: const Text(
           'スタッフQR一覧',
-          style: TextStyle(fontWeight: FontWeight.w600),
+          style: TextStyle(fontWeight: FontWeight.w600, fontFamily: 'LINEseed'),
         ),
       ),
       body: Column(
@@ -99,6 +107,7 @@ class _PublicStaffQrListPageState extends State<PublicStaffQrListPage> {
                       style: const TextStyle(
                         color: Colors.black87,
                         height: 1.35,
+                        fontFamily: 'LINEseed',
                       ),
                     ),
                   ),
@@ -150,7 +159,12 @@ class _PublicStaffQrListPageState extends State<PublicStaffQrListPage> {
               stream: q.snapshots(),
               builder: (context, snap) {
                 if (snap.hasError) {
-                  return Center(child: Text('読み込みエラー: ${snap.error}'));
+                  return Center(
+                    child: Text(
+                      '読み込みエラー: ${snap.error}',
+                      style: TextStyle(fontFamily: 'LINEseed'),
+                    ),
+                  );
                 }
                 if (!snap.hasData) {
                   return const Center(child: CircularProgressIndicator());
@@ -164,7 +178,12 @@ class _PublicStaffQrListPageState extends State<PublicStaffQrListPage> {
                 }).toList();
 
                 if (filtered.isEmpty) {
-                  return const Center(child: Text('該当するスタッフがいません'));
+                  return const Center(
+                    child: Text(
+                      '該当するスタッフがいません',
+                      style: TextStyle(fontFamily: 'LINEseed'),
+                    ),
+                  );
                 }
 
                 return LayoutBuilder(
@@ -191,13 +210,15 @@ class _PublicStaffQrListPageState extends State<PublicStaffQrListPage> {
                         return _StaffCard(
                           name: name,
                           photoUrl: photoUrl,
-                          onMakeQr: () async {
-                            final base = Uri.base;
-                            final origin =
-                                '${base.scheme}://${base.host}${base.hasPort ? ':${base.port}' : ''}';
-                            final url =
-                                '$origin/#/qr-all/qr-builder?t=$tenantId&e=$empId';
-                            await launchUrlString(url);
+                          onMakeQr: () {
+                            Navigator.of(context).pushNamed(
+                              'qr-all/qr-builder', // ← ルート名はこの後 MaterialApp に登録します
+                              arguments: {
+                                'tenantId':
+                                    tenantId, // ← 外側 State の tenantId を渡す
+                                'employeeId': empId, // ← ドキュメントID
+                              },
+                            );
                           },
                         );
                       },
@@ -252,7 +273,10 @@ class _StaffCard extends StatelessWidget {
                 name.isNotEmpty ? name : 'スタッフ',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontFamily: 'LINEseed',
+                ),
                 textAlign: TextAlign.center,
               ),
               const Spacer(),
@@ -271,7 +295,10 @@ class _StaffCard extends StatelessWidget {
                     ),
                   ),
                   onPressed: onMakeQr,
-                  child: const Text('QRポスターを作る'),
+                  child: const Text(
+                    'QRポスターを作る',
+                    style: TextStyle(fontFamily: 'LINEseed'),
+                  ),
                 ),
               ),
             ],

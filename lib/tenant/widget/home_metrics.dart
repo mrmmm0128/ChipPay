@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:yourpay/tenant/store_detail/card_shell.dart';
+import 'package:yourpay/tenant/widget/card_shell.dart';
 
 /// 合計金額・件数の2枚組メトリクス
 class HomeMetrics extends StatelessWidget {

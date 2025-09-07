@@ -135,14 +135,14 @@ class MyApp extends StatelessWidget {
       '/login': (_) => const LoginScreen(),
       '/stores': (_) => const StoreListScreen(),
       '/store': (_) => const StoreDetailScreen(),
-      '/store/staff': (_) => const StaffDetailPage(),
+      '/staff': (_) => const StaffDetailPage(),
       '/account': (_) => const AccountDetailScreen(),
       '/admin-login': (_) => const AdminLoginScreen(),
       '/admin': (_) => const AdminDashboardScreen(),
       '/admin/tenant': (_) => const AdminTenantDetailScreen(),
       '/admin-invite': (_) => const AcceptInviteScreen(),
       '/qr-all': (_) => const PublicStaffQrListPage(),
-      'qr-all/qr-builder': (_) => const QrPosterBuilderPage(),
+      '/qr-all/qr-builder': (_) => const QrPosterBuilderPage(),
       '/chechout-end': (_) => const LoginScreen(),
     };
 
@@ -158,25 +158,21 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
 
-      // easy_localization
       localizationsDelegates: context.localizationDelegates,
       supportedLocales: context.supportedLocales,
       locale: context.locale,
 
-      // テーマ（ライト基調：白背景で“真っ白=クラッシュ”と区別しやすい）
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(
           seedColor: Colors.black,
           brightness: Brightness.light,
         ),
-        fontFamily: 'LINESeed',
+        fontFamily: 'LINEseed',
       ),
 
-      // 初期画面は Root（ここで公開/非公開を振り分け）
       home: const Root(),
 
-      // 以降の named push はここで解決
       onGenerateRoute: _onGenerateRoute,
     );
   }
@@ -196,13 +192,12 @@ class Root extends StatelessWidget {
           );
         }
 
-        // ハッシュURL対応（/#/qr-all?… → /qr-all）
         String currentPath() {
           final uri = Uri.base;
           if (uri.fragment.isNotEmpty) {
-            final frag = uri.fragment; // "/qr-all?t=xxx"
+            final frag = uri.fragment;
             final q = frag.indexOf('?');
-            return q >= 0 ? frag.substring(0, q) : frag; // "/qr-all"
+            return q >= 0 ? frag.substring(0, q) : frag;
           }
           return uri.path;
         }

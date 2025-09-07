@@ -1,23 +1,25 @@
 {
-  "functions": { "source": "functions" },
+  "functions": {
+    "source": "functions"
+  },
   "hosting": {
-
-    "site": "muscleshare-b34dd",
     "public": "build/web",
-    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-    "rewrites": [
-      { "source": "**", "destination": "/index.html" }
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
     ],
-    "headers": [
-      {
-        "source": "/assets/**",
-        "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
-      },
+    "rewrites": [
       {
         "source": "**",
-        "headers": [{ "key": "Cache-Control", "value": "public, max-age=3600" }]
+        "destination": "/index.html"
       }
     ]
   },
-  "emulators": { "hosting": { "host": "0.0.0.0", "port": 5000 } }
+  "emulators": {
+    "hosting": {
+      "host": "0.0.0.0",
+      "port": 5000
+    }
+  }
 }

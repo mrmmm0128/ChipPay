@@ -3,11 +3,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'package:yourpay/fonts/jp_font.dart';
-import 'package:yourpay/tenant/store_detail/card_shell.dart';
-import 'package:yourpay/tenant/store_detail/home_metrics.dart';
-import 'package:yourpay/tenant/store_detail/range_pill.dart';
-import 'package:yourpay/tenant/store_detail/rank_entry.dart';
-import 'package:yourpay/tenant/store_detail/period_payment_page.dart';
+import 'package:yourpay/tenant/widget/card_shell.dart';
+import 'package:yourpay/tenant/widget/home_metrics.dart';
+import 'package:yourpay/tenant/widget/range_pill.dart';
+import 'package:yourpay/tenant/widget/rank_entry.dart';
+import 'package:yourpay/tenant/widget/period_payment_page.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
@@ -698,9 +698,10 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
               'チップ売り上げ',
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontSize: 18,
+                fontSize: 20,
                 fontWeight: FontWeight.w800,
                 color: Colors.black87,
+                fontFamily: "LINEseed",
               ),
             ),
           ),
@@ -793,6 +794,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                           style: TextStyle(
                             color: Colors.black87,
                             fontWeight: FontWeight.w700,
+                            fontFamily: "LINEseed",
                           ),
                         ),
                       )
@@ -803,7 +805,10 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                           value: m,
                           child: Text(
                             '${m.year}/${m.month.toString().padLeft(2, '0')}',
-                            style: const TextStyle(color: Colors.black87),
+                            style: const TextStyle(
+                              color: Colors.black87,
+                              fontFamily: "LINEseed",
+                            ),
                           ),
                         ),
                       )
@@ -861,6 +866,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
             style: TextStyle(
               fontWeight: FontWeight.w700,
               color: Colors.black87,
+              fontFamily: "LINEseed",
             ),
           ),
           const SizedBox(height: 7),
@@ -930,6 +936,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                             style: TextStyle(
                               fontWeight: FontWeight.w700,
                               color: Colors.black87,
+                              fontFamily: "LINEseed",
                             ),
                           ),
                           selected: _excludedStaff.contains(
@@ -1022,7 +1029,10 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                     SizedBox(height: 8),
                     Text(
                       'この期間のデータがありません',
-                      style: TextStyle(color: Colors.black87),
+                      style: TextStyle(
+                        color: Colors.black87,
+                        fontFamily: "LINEseed",
+                      ),
                     ),
                   ],
                 );
@@ -1045,7 +1055,13 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text("スタッフ", style: TextStyle(color: Colors.black87)),
+                  const Text(
+                    "スタッフ",
+                    style: TextStyle(
+                      color: Colors.black87,
+                      fontFamily: "LINEseed",
+                    ),
+                  ),
                   const SizedBox(height: 10),
                   staffChips(),
                   TotalsCard(
@@ -1076,6 +1092,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                       fontSize: 18,
                       fontWeight: FontWeight.w800,
                       color: Colors.black87,
+                      fontFamily: "LINEseed",
                     ),
                   ),
                   const SizedBox(height: 8),

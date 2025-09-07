@@ -234,27 +234,39 @@ class OnboardingSheetState extends State<OnboardingSheet> {
         await launchUrlString(
           url,
           mode: LaunchMode.platformDefault,
-          webOnlyWindowName: '_blank',
+          webOnlyWindowName: '_self',
         );
       } else if (data['alreadyPaid'] == true) {
         setState(() => _initialFeePaidLocal = true);
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('初期費用はすでにお支払い済みです')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                '初期費用はすでにお支払い済みです',
+                style: TextStyle(fontFamily: 'LINEseed'),
+              ),
+            ),
+          );
         }
       } else {
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('初期費用リンクを取得できませんでした')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('初期費用リンクを取得できませんでした', style: TextStyle()),
+            ),
+          );
         }
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('初期費用の決済開始に失敗: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '初期費用の決済開始に失敗: $e',
+            style: TextStyle(fontFamily: 'LINEseed'),
+          ),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _creatingInitial = false);
     }
@@ -334,9 +346,14 @@ class OnboardingSheetState extends State<OnboardingSheet> {
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Stripe接続の開始に失敗: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Stripe接続の開始に失敗: $e',
+            style: TextStyle(fontFamily: 'LINEseed'),
+          ),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _creatingConnect = false);
     }
@@ -354,14 +371,24 @@ class OnboardingSheetState extends State<OnboardingSheet> {
       final ok =
           (c['charges_enabled'] == true) && (c['payouts_enabled'] == true);
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(ok ? '接続は有効です' : 'まだ提出が必要です')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            ok ? '接続は有効です' : 'まだ提出が必要です',
+            style: TextStyle(fontFamily: 'LINEseed'),
+          ),
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('状態の取得に失敗: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '状態の取得に失敗: $e',
+            style: TextStyle(fontFamily: 'LINEseed'),
+          ),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _checkingConnect = false);
     }
@@ -390,14 +417,21 @@ class OnboardingSheetState extends State<OnboardingSheet> {
       setState(() => _hasDraft = true);
 
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('下書きを保存しました')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('下書きを保存しました', style: TextStyle(fontFamily: 'LINEseed')),
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('下書き保存に失敗: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '下書き保存に失敗: $e',
+            style: TextStyle(fontFamily: 'LINEseed'),
+          ),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _savingDraft = false);
     }
@@ -432,14 +466,19 @@ class OnboardingSheetState extends State<OnboardingSheet> {
       });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('アカウント登録ありがとうございます！コネクトアカウントとメンバー追加を進めましょう。'),
+          content: Text(
+            'アカウント登録ありがとうございます！コネクトアカウントとメンバー追加を進めましょう。',
+            style: TextStyle(fontFamily: 'LINEseed'),
+          ),
         ),
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('本登録に失敗: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('本登録に失敗: $e', style: TextStyle(fontFamily: 'LINEseed')),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _savingFinal = false);
     }
@@ -460,14 +499,21 @@ class OnboardingSheetState extends State<OnboardingSheet> {
         _subscribedLocal = false;
         selectedPlan = "A";
       });
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('下書きを破棄しました')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('下書きを破棄しました', style: TextStyle(fontFamily: 'LINEseed')),
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('下書きの破棄に失敗: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '下書きの破棄に失敗: $e',
+            style: TextStyle(fontFamily: 'LINEseed'),
+          ),
+        ),
+      );
     }
   }
 
@@ -537,12 +583,17 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
                     color: Colors.black87,
+                    fontFamily: 'LINEseed',
                   ),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   widget.tenantName,
-                  style: const TextStyle(fontSize: 13, color: Colors.black54),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: Colors.black54,
+                    fontFamily: 'LINEseed',
+                  ),
                 ),
                 const SizedBox(height: 12),
 
@@ -565,18 +616,27 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                           child: Text(
                             '下書きが見つかりました。前回の続きから再開できます'
                             '${_draftUpdatedAt != null ? '（最終更新: ${_draftUpdatedAt!}）' : ''}。',
-                            style: const TextStyle(fontSize: 13),
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontFamily: 'LINEseed',
+                            ),
                           ),
                         ),
                         const SizedBox(width: 8),
                         OutlinedButton(
                           onPressed: _loadDraft, // 念のため最新を再読込
-                          child: const Text('再開'),
+                          child: const Text(
+                            '再開',
+                            style: TextStyle(fontFamily: 'LINEseed'),
+                          ),
                         ),
                         const SizedBox(width: 6),
                         TextButton(
                           onPressed: _discardDraft,
-                          child: const Text('下書きを破棄'),
+                          child: const Text(
+                            '下書きを破棄',
+                            style: TextStyle(fontFamily: 'LINEseed'),
+                          ),
                         ),
                       ],
                     ),
@@ -598,7 +658,10 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.open_in_new),
-                    label: Text(initialFeePaid ? '支払い済み' : '初期費用を支払う'),
+                    label: Text(
+                      initialFeePaid ? '支払い済み' : '初期費用を支払う',
+                      style: TextStyle(fontFamily: 'LINEseed'),
+                    ),
                   ),
                 ),
 
@@ -625,7 +688,10 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                                 ),
                               )
                             : const Icon(Icons.open_in_new),
-                        label: Text(subscribed ? '登録済み' : 'サブスク登録へ進む'),
+                        label: Text(
+                          subscribed ? '登録済み' : 'サブスク登録へ進む',
+                          style: TextStyle(fontFamily: 'LINEseed'),
+                        ),
                       ),
                     ],
                   ),
@@ -665,6 +731,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                               (chargesEnabled && payoutsEnabled)
                                   ? '接続済み'
                                   : 'Stripe接続に進む',
+                              style: TextStyle(fontFamily: 'LINEseed'),
                             ),
                           ),
                         ),
@@ -683,7 +750,10 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                                 ),
                               )
                             : const Icon(Icons.sync),
-                        label: const Text('接続状態を確認'),
+                        label: const Text(
+                          '接続状態を確認',
+                          style: TextStyle(fontFamily: 'LINEseed'),
+                        ),
                       ),
                     ],
                   ),
@@ -700,7 +770,10 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                           Navigator.of(context).pop(); // ② モーダルを閉じる
                         },
 
-                        label: const Text('戻る'),
+                        label: const Text(
+                          '戻る',
+                          style: TextStyle(fontFamily: 'LINEseed'),
+                        ),
                       ),
                     if (!_registered)
                       OutlinedButton.icon(
@@ -723,7 +796,10 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                                 ),
                               )
                             : const Icon(Icons.save_outlined),
-                        label: const Text('下書き保存'),
+                        label: const Text(
+                          '下書き保存',
+                          style: TextStyle(fontFamily: 'LINEseed'),
+                        ),
                       ),
 
                     const Spacer(),
@@ -739,7 +815,10 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : const Icon(Icons.check_circle),
-                      label: Text(_registered ? '登録済み' : '本登録を保存'),
+                      label: Text(
+                        _registered ? '登録済み' : '本登録を保存',
+                        style: TextStyle(fontFamily: 'LINEseed'),
+                      ),
                     ),
                   ],
                 ),
@@ -748,7 +827,11 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                 if (!_subscribedLocal)
                   const Text(
                     '※「本登録を保存」はサブスク登録が完了すると有効になります。',
-                    style: TextStyle(fontSize: 12, color: Colors.black54),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.black54,
+                      fontFamily: 'LINEseed',
+                    ),
                   ),
               ],
             ),
@@ -782,6 +865,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                 style: const TextStyle(
                   fontWeight: FontWeight.w700,
                   color: Colors.black87,
+                  fontFamily: 'LINEseed',
                 ),
               ),
               const Spacer(),
@@ -789,7 +873,13 @@ class OnboardingSheetState extends State<OnboardingSheet> {
             ],
           ),
           const SizedBox(height: 6),
-          Text(description, style: const TextStyle(color: Colors.black87)),
+          Text(
+            description,
+            style: const TextStyle(
+              color: Colors.black87,
+              fontFamily: 'LINEseed',
+            ),
+          ),
           const SizedBox(height: 10),
           child,
         ],
@@ -815,7 +905,11 @@ class OnboardingSheetState extends State<OnboardingSheet> {
           const SizedBox(width: 6),
           Text(
             label,
-            style: TextStyle(color: c, fontWeight: FontWeight.w700),
+            style: TextStyle(
+              color: c,
+              fontWeight: FontWeight.w700,
+              fontFamily: 'LINEseed',
+            ),
           ),
         ],
       ),
@@ -884,6 +978,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                           style: TextStyle(
                             color: sel ? Colors.black : Colors.white,
                             fontWeight: FontWeight.w800,
+                            fontFamily: 'LINEseed',
                           ),
                         ),
                       ),
@@ -897,6 +992,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                             color: fg,
                             fontWeight: FontWeight.w700,
                             fontSize: 15,
+                            fontFamily: 'LINEseed',
                           ),
                         ),
                       ),
@@ -906,6 +1002,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                         style: TextStyle(
                           color: fg,
                           fontWeight: FontWeight.w700,
+                          fontFamily: 'LINEseed',
                         ),
                       ),
                     ],
@@ -913,7 +1010,10 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                   const SizedBox(height: 6),
                   Text(
                     '手数料 ${p.feePct}%',
-                    style: TextStyle(color: fg.withOpacity(.8)),
+                    style: TextStyle(
+                      color: fg.withOpacity(.8),
+                      fontFamily: 'LINEseed',
+                    ),
                   ),
                   const SizedBox(height: 6),
                   ...p.features.map(
@@ -927,7 +1027,11 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                           Expanded(
                             child: Text(
                               f,
-                              style: TextStyle(color: fg, height: 1.2),
+                              style: TextStyle(
+                                color: fg,
+                                height: 1.2,
+                                fontFamily: 'LINEseed',
+                              ),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),

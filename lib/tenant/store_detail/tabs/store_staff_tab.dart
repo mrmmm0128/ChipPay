@@ -6,8 +6,8 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // クリップボード
-import 'package:yourpay/tenant/store_detail/staff_detail.dart';
-import 'package:yourpay/tenant/store_detail/staff_entry.dart';
+import 'package:yourpay/tenant/widget/staff_detail.dart';
+import 'package:yourpay/tenant/widget/staff_entry.dart';
 
 class StoreStaffTab extends StatefulWidget {
   final String tenantId;
@@ -18,10 +18,6 @@ class StoreStaffTab extends StatefulWidget {
 }
 
 class _StoreStaffTabState extends State<StoreStaffTab> {
-  final _empNameCtrl = TextEditingController();
-  final _empEmailCtrl = TextEditingController();
-  final _empCommentCtrl = TextEditingController();
-
   // 取り込み用（グローバル/他店舗）
   String? _prefilledPhotoUrlFromGlobal;
   Uint8List? _empPhotoBytes;
@@ -45,14 +41,6 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
   }
 
   String _allStaffUrl() => '$_publicBase/#/qr-all?t=${widget.tenantId}';
-
-  @override
-  void dispose() {
-    _empNameCtrl.dispose();
-    _empEmailCtrl.dispose();
-    _empCommentCtrl.dispose();
-    super.dispose();
-  }
 
   // ---------- 便利関数 ----------
   String _normalizeEmail(String v) => v.trim().toLowerCase();
@@ -109,7 +97,7 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
     return showDialog<bool>(
       context: context,
       builder: (_) => Theme(
-        data: Theme.of(context).copyWith(
+        data: _withLineSeed(Theme.of(context)).copyWith(
           colorScheme: Theme.of(context).colorScheme.copyWith(
             primary: Colors.black87,
             onPrimary: Colors.white,
@@ -174,13 +162,10 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
 
   // ---------- ダイアログ：スタッフ追加（タブ付き） ----------
   Future<void> _openAddEmployeeDialog() async {
-    // 事前リセット
+    // 事前リセット（写真まわりのみ）
     _empPhotoBytes = null;
     _empPhotoName = null;
     _prefilledPhotoUrlFromGlobal = null;
-    _empNameCtrl.clear();
-    _empEmailCtrl.clear();
-    _empCommentCtrl.clear();
     _addingEmp = false;
 
     await showDialog(
@@ -188,14 +173,16 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
       barrierDismissible: false,
       builder: (_) => _AddStaffDialog(
         currentTenantId: widget.tenantId,
-        nameCtrl: _empNameCtrl,
-        emailCtrl: _empEmailCtrl,
-        commentCtrl: _empCommentCtrl,
+        // 親は初期値だけ渡す（コントローラはダイアログが所有）
+        initialName: '',
+        initialEmail: '',
+        initialComment: '',
         addingEmp: _addingEmp,
         prefilledPhotoUrlFromGlobal: _prefilledPhotoUrlFromGlobal,
         empPhotoBytes: _empPhotoBytes,
         empPhotoName: _empPhotoName,
         onLocalStateChanged: (adding, bytes, name, prefilledUrl) {
+          if (!mounted) return;
           setState(() {
             _addingEmp = adding;
             _empPhotoBytes = bytes;
@@ -239,12 +226,13 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Center(
-              child: const Text(
+            const Center(
+              child: Text(
                 'スタッフのQRコードの一覧をURLから閲覧、ダウンロードできます',
                 style: TextStyle(
                   fontWeight: FontWeight.w600,
                   color: Colors.black87,
+                  fontFamily: "LINEseed",
                 ),
               ),
             ),
@@ -275,6 +263,9 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
     );
   }
 
+  ThemeData _withLineSeed(ThemeData base) =>
+      base.copyWith(textTheme: base.textTheme.apply(fontFamily: 'LINEseed'));
+
   @override
   Widget build(BuildContext context) {
     // FABに合わせた動的余白
@@ -292,110 +283,113 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
       padding: const EdgeInsets.symmetric(horizontal: 16),
     );
 
-    return Stack(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            children: [
-              _qrAllLinkCard(_allStaffUrl()),
-              const SizedBox(height: 12),
-              Expanded(
-                child: StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection(uid!)
-                      .doc(widget.tenantId)
-                      .collection('employees')
-                      .orderBy('createdAt', descending: true)
-                      .snapshots(),
-                  builder: (context, snap) {
-                    if (snap.hasError) {
-                      return Center(child: Text('読み込みエラー: ${snap.error}'));
-                    }
-                    if (!snap.hasData) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                    final docs = snap.data!.docs;
-                    if (docs.isEmpty) {
+    return Theme(
+      data: _withLineSeed(Theme.of(context)),
+      child: Stack(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                _qrAllLinkCard(_allStaffUrl()),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance
+                        .collection(uid!)
+                        .doc(widget.tenantId)
+                        .collection('employees')
+                        .orderBy('createdAt', descending: true)
+                        .snapshots(),
+                    builder: (context, snap) {
+                      if (snap.hasError) {
+                        return Center(child: Text('読み込みエラー: ${snap.error}'));
+                      }
+                      if (!snap.hasData) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      final docs = snap.data!.docs;
+                      if (docs.isEmpty) {
+                        return Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text(
+                                'まだ社員がいません',
+                                style: TextStyle(color: Colors.black87),
+                              ),
+                              const SizedBox(height: 12),
+                              OutlinedButton.icon(
+                                onPressed: _openAddEmployeeDialog,
+                                icon: const Icon(Icons.person_add),
+                                label: const Text('最初の社員を追加'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.black87,
+                                  side: const BorderSide(color: Colors.black87),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 12,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }
+
+                      final entries = List.generate(docs.length, (i) {
+                        final doc = docs[i];
+                        final d = docs[i].data() as Map<String, dynamic>;
+                        final empId = doc.id;
+                        return StaffEntry(
+                          index: i + 1,
+                          name: (d['name'] ?? '') as String,
+                          email: (d['email'] ?? '') as String,
+                          photoUrl: (d['photoUrl'] ?? '') as String,
+                          comment: (d['comment'] ?? '') as String,
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => StaffDetailScreen(
+                                  tenantId: widget.tenantId,
+                                  employeeId: empId,
+                                ),
+                              ),
+                            );
+                          },
+                        );
+                      });
+
                       return Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Text(
-                              'まだ社員がいません',
-                              style: TextStyle(color: Colors.black87),
-                            ),
-                            const SizedBox(height: 12),
-                            OutlinedButton.icon(
-                              onPressed: _openAddEmployeeDialog,
-                              icon: const Icon(Icons.person_add),
-                              label: const Text('最初の社員を追加'),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: Colors.black87,
-                                side: const BorderSide(color: Colors.black87),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 12,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
+                        padding: EdgeInsets.only(bottom: gridBottomPadding),
+                        child: StaffGalleryGrid(entries: entries),
                       );
-                    }
-
-                    final entries = List.generate(docs.length, (i) {
-                      final doc = docs[i];
-                      final d = docs[i].data() as Map<String, dynamic>;
-                      final empId = doc.id;
-                      return StaffEntry(
-                        index: i + 1,
-                        name: (d['name'] ?? '') as String,
-                        email: (d['email'] ?? '') as String,
-                        photoUrl: (d['photoUrl'] ?? '') as String,
-                        comment: (d['comment'] ?? '') as String,
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => StaffDetailScreen(
-                                tenantId: widget.tenantId,
-                                employeeId: empId,
-                              ),
-                            ),
-                          );
-                        },
-                      );
-                    });
-
-                    return Padding(
-                      padding: EdgeInsets.only(bottom: gridBottomPadding),
-                      child: StaffGalleryGrid(entries: entries),
-                    );
-                  },
+                    },
+                  ),
                 ),
-              ),
-            ],
-          ),
-        ),
-        Positioned(
-          right: 16,
-          bottom: fabBottomMargin + safeBottom,
-          child: SizedBox(
-            height: fabHeight,
-            child: FilledButton.icon(
-              style: primaryBtnStyle,
-              onPressed: _openAddEmployeeDialog,
-              icon: const Icon(Icons.person_add_alt_1),
-              label: const Text('社員を追加'),
+              ],
             ),
           ),
-        ),
-      ],
+          Positioned(
+            right: 16,
+            bottom: fabBottomMargin + safeBottom,
+            child: SizedBox(
+              height: fabHeight,
+              child: FilledButton.icon(
+                style: primaryBtnStyle,
+                onPressed: _openAddEmployeeDialog,
+                icon: const Icon(Icons.person_add_alt_1),
+                label: const Text('社員を追加'),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -403,9 +397,10 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
 class _AddStaffDialog extends StatefulWidget {
   final String currentTenantId;
 
-  final TextEditingController nameCtrl;
-  final TextEditingController emailCtrl;
-  final TextEditingController commentCtrl;
+  // 親からは初期値のみ受け取る
+  final String initialName;
+  final String initialEmail;
+  final String initialComment;
 
   bool addingEmp;
   Uint8List? empPhotoBytes;
@@ -440,9 +435,9 @@ class _AddStaffDialog extends StatefulWidget {
 
   _AddStaffDialog({
     required this.currentTenantId,
-    required this.nameCtrl,
-    required this.emailCtrl,
-    required this.commentCtrl,
+    required this.initialName,
+    required this.initialEmail,
+    required this.initialComment,
     required this.addingEmp,
     required this.empPhotoBytes,
     required this.empPhotoName,
@@ -464,7 +459,12 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
     with SingleTickerProviderStateMixin {
   late TabController _tab;
 
-  // ── ダイアログ内ローカル状態（★ 追加） ─────────────────────
+  // このダイアログ専用の TextEditingController（ここで生成・破棄）
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _emailCtrl;
+  late final TextEditingController _commentCtrl;
+
+  // ── ダイアログ内ローカル状態 ─────────────────────
   Uint8List? _localPhotoBytes;
   String? _localPhotoName;
   String? _localPrefilledPhotoUrl;
@@ -480,7 +480,11 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
     super.initState();
     _tab = TabController(length: 2, vsync: this);
 
-    // 親の初期値をローカルにコピー（★ 重要）
+    _nameCtrl = TextEditingController(text: widget.initialName);
+    _emailCtrl = TextEditingController(text: widget.initialEmail);
+    _commentCtrl = TextEditingController(text: widget.initialComment);
+
+    // 親の初期値をローカルにコピー
     _localPhotoBytes = widget.empPhotoBytes;
     _localPhotoName = widget.empPhotoName;
     _localPrefilledPhotoUrl = widget.prefilledPhotoUrlFromGlobal;
@@ -492,6 +496,9 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
   void dispose() {
     _tab.dispose();
     _tenantSearchCtrl.dispose();
+    _nameCtrl.dispose();
+    _emailCtrl.dispose();
+    _commentCtrl.dispose();
     super.dispose();
   }
 
@@ -550,7 +557,7 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
         return;
       }
 
-      // ローカル状態を更新（★ これで即プレビュー反映）
+      // ローカル状態を更新（即プレビュー反映）
       setState(() {
         _localPhotoBytes = bytes;
         _localPhotoName = f.name;
@@ -570,7 +577,7 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
 
   // ============= タブ1：新規/グローバル取り込み =============
   Future<void> _searchGlobalByEmail() async {
-    final email = widget.normalizeEmail(widget.emailCtrl.text);
+    final email = widget.normalizeEmail(_emailCtrl.text);
     if (email.isEmpty || !widget.validateEmail(email)) {
       ScaffoldMessenger.of(
         context,
@@ -589,7 +596,7 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
     await showDialog<void>(
       context: context,
       builder: (_) => Theme(
-        data: Theme.of(context).copyWith(
+        data: _withLineSeed(Theme.of(context)).copyWith(
           colorScheme: Theme.of(context).colorScheme.copyWith(
             primary: Colors.black87,
             onPrimary: Colors.white,
@@ -653,14 +660,13 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
             FilledButton(
               onPressed: () {
                 // フィールドに反映
-                widget.nameCtrl.text =
-                    (data['name'] as String?) ?? widget.nameCtrl.text;
-                widget.commentCtrl.text =
-                    (data['comment'] as String?) ?? widget.commentCtrl.text;
+                _nameCtrl.text = (data['name'] as String?) ?? _nameCtrl.text;
+                _commentCtrl.text =
+                    (data['comment'] as String?) ?? _commentCtrl.text;
 
                 final url = (data['photoUrl'] as String?) ?? '';
 
-                // ローカル状態を URL 優先に切り替え（★）
+                // ローカル状態を URL 優先に切り替え
                 setState(() {
                   _localPhotoBytes = null;
                   _localPhotoName = null;
@@ -686,9 +692,9 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
 
   Future<void> _submitCreate() async {
     if (widget.addingEmp) return;
-    final name = widget.nameCtrl.text.trim();
-    final email = widget.normalizeEmail(widget.emailCtrl.text);
-    final comment = widget.commentCtrl.text.trim();
+    final name = _nameCtrl.text.trim();
+    final email = widget.normalizeEmail(_emailCtrl.text);
+    final comment = _commentCtrl.text.trim();
 
     if (name.isEmpty) {
       ScaffoldMessenger.of(
@@ -768,7 +774,7 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
           .collection('employees')
           .doc();
 
-      // 写真アップロード（★ ローカル状態を使用）
+      // 写真アップロード（ローカル状態を使用）
       String photoUrl = '';
       if (_localPhotoBytes != null) {
         final contentType = _detectContentType(_localPhotoName);
@@ -854,7 +860,7 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
             }).toList();
 
             return Theme(
-              data: Theme.of(ctx).copyWith(
+              data: _withLineSeed(Theme.of(ctx)).copyWith(
                 colorScheme: Theme.of(ctx).colorScheme.copyWith(
                   primary: Colors.black87,
                   onPrimary: Colors.white,
@@ -1139,11 +1145,11 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
                           FilledButton.tonalIcon(
                             onPressed: () {
                               // 取り込み（タブ1のフォームに反映）
-                              widget.nameCtrl.text = name;
-                              widget.emailCtrl.text = email;
-                              widget.commentCtrl.text = comment;
+                              _nameCtrl.text = name;
+                              _emailCtrl.text = email;
+                              _commentCtrl.text = comment;
 
-                              // ローカル状態を URL で更新（★）
+                              // ローカル状態を URL で更新
                               setState(() {
                                 _localPhotoBytes = null;
                                 _localPhotoName = null;
@@ -1189,9 +1195,12 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
     );
   }
 
+  ThemeData _withLineSeed(ThemeData base) =>
+      base.copyWith(textTheme: base.textTheme.apply(fontFamily: 'LINEseed'));
+
   @override
   Widget build(BuildContext context) {
-    // 表示は常にローカル状態を参照（★ 重要）
+    // 表示は常にローカル状態を参照
     final ImageProvider<Object>? photoProvider = (_localPhotoBytes != null)
         ? MemoryImage(_localPhotoBytes!)
         : ((_localPrefilledPhotoUrl?.isNotEmpty ?? false)
@@ -1199,7 +1208,7 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
               : null);
 
     return Theme(
-      data: Theme.of(context).copyWith(
+      data: _withLineSeed(Theme.of(context)).copyWith(
         colorScheme: Theme.of(context).colorScheme.copyWith(
           primary: Colors.black87,
           onPrimary: Colors.white,
@@ -1280,12 +1289,12 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
                             ),
                             const SizedBox(height: 12),
                             TextField(
-                              controller: widget.nameCtrl,
+                              controller: _nameCtrl,
                               decoration: _inputDeco('名前（必須）'),
                             ),
                             const SizedBox(height: 8),
                             TextField(
-                              controller: widget.emailCtrl,
+                              controller: _emailCtrl,
                               keyboardType: TextInputType.emailAddress,
                               decoration: _inputDeco(
                                 'メールアドレス（任意・検索可）',
@@ -1300,7 +1309,7 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
                             ),
                             const SizedBox(height: 8),
                             TextField(
-                              controller: widget.commentCtrl,
+                              controller: _commentCtrl,
                               maxLines: 2,
                               decoration: _inputDeco(
                                 'コメント（任意）',

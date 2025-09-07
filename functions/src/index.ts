@@ -178,6 +178,8 @@ async function pickEffectiveRule(tenantId: string, at: Date, uid: string): Promi
   };
 }
 
+
+
 function splitMinor(amountMinor: number, percent: number, fixedMinor: number) {
   const percentPart = Math.floor(amountMinor * (Math.max(0, percent) / 100));
   const store = Math.min(
@@ -262,11 +264,12 @@ export const createTipSessionPublic = functions
     memory: "256MB",
   })
   .https.onCall(async (data) => {
-    const { tenantId, employeeId, amount, memo = "Tip" } = data as {
+    const { tenantId, employeeId, amount, memo = "Tip", uid } = data as {
       tenantId?: string;
       employeeId?: string;
       amount?: number;
       memo?: string;
+      uid?: string;
     };
 
     if (!tenantId || !employeeId) {
@@ -296,12 +299,12 @@ export const createTipSessionPublic = functions
       throw new functions.https.HttpsError("not-found", "Employee not found");
     }
     const employeeName = (eDoc.data()?.name as string) ?? "Staff";
+    const tenantName = (tDoc.data()?.name as string | undefined) ?? "";
 
     const sub = (tDoc.data()?.subscription ?? {}) as { plan?: string; feePercent?: number };
     const plan = (sub.plan ?? "A").toUpperCase();
-    const percent = typeof sub.feePercent === "number"
-      ? sub.feePercent
-      : plan === "B" ? 15 : plan === "C" ? 10 : 20;
+    const percent =
+      typeof sub.feePercent === "number" ? sub.feePercent : plan === "B" ? 15 : plan === "C" ? 10 : 20;
 
     const appFee = calcApplicationFee(amount!, { percent, fixed: 0 });
 
@@ -320,6 +323,20 @@ export const createTipSessionPublic = functions
     const stripe = stripeClient();
     const FRONTEND_BASE_URL = requireEnv("FRONTEND_BASE_URL");
 
+    // ▼ ここがポイント：完了ページ(TipCompletePage)にそのまま着地
+    const successUrl =
+      `${FRONTEND_BASE_URL}#/p` +
+      `?t=${encodeURIComponent(tenantId)}` +
+      `&thanks=true` +
+      `&amount=${encodeURIComponent(String(amount!))}` +
+      `&employeeName=${encodeURIComponent(employeeName)}` +
+      `&tenantName=${encodeURIComponent(tenantName)}&u=${uid}`;
+
+    const cancelUrl =
+      `${FRONTEND_BASE_URL}#/p` +
+      `?t=${encodeURIComponent(tenantId)}` +
+      `&canceled=true`;
+
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       payment_method_types: ["card", "link"],
@@ -333,8 +350,8 @@ export const createTipSessionPublic = functions
           quantity: 1,
         },
       ],
-      success_url: `${FRONTEND_BASE_URL}/#/p?t=${tenantId}&thanks=true`,
-      cancel_url: `${FRONTEND_BASE_URL}/#/p?t=${tenantId}&canceled=true`,
+      success_url: successUrl,
+      cancel_url: cancelUrl,
       metadata: {
         tenantId,
         employeeId,
@@ -381,9 +398,7 @@ export const createStoreTipSessionPublic = functions
       memo?: string;
     };
 
-    if (!tenantId) {
-      throw new functions.https.HttpsError("invalid-argument", "tenantId required");
-    }
+    if (!tenantId) throw new functions.https.HttpsError("invalid-argument", "tenantId required");
     if (!Number.isInteger(amount) || (amount ?? 0) <= 0 || (amount as number) > 1_000_000) {
       throw new functions.https.HttpsError("invalid-argument", "invalid amount");
     }
@@ -395,9 +410,7 @@ export const createStoreTipSessionPublic = functions
     }
 
     const acctId = tDoc.data()?.stripeAccountId as string | undefined;
-    if (!acctId) {
-      throw new functions.https.HttpsError("failed-precondition", "Store not connected to Stripe");
-    }
+    if (!acctId) throw new functions.https.HttpsError("failed-precondition", "Store not connected to Stripe");
     const chargesEnabled = !!tDoc.data()?.connect?.charges_enabled;
     if (!chargesEnabled) {
       throw new functions.https.HttpsError("failed-precondition", "Store Stripe account is not ready (charges_disabled)");
@@ -405,14 +418,10 @@ export const createStoreTipSessionPublic = functions
 
     const sub = (tDoc.data()?.subscription ?? {}) as { plan?: string; feePercent?: number };
     const plan = (sub.plan ?? "A").toUpperCase();
-    const percent = typeof sub.feePercent === "number"
-      ? sub.feePercent
-      : plan === "B" ? 15 : plan === "C" ? 10 : 20;
-
+    const percent = typeof sub.feePercent === "number" ? sub.feePercent : (plan === "B" ? 15 : plan === "C" ? 10 : 20);
     const appFee = calcApplicationFee(amount!, { percent, fixed: 0 });
-    const storeName = (tDoc.data()?.name as string | undefined) ?? tenantId;
 
-    // uid を取得（親コレクション名 = uid）
+    const storeName = (tDoc.data()?.name as string | undefined) ?? tenantId;
     const uid = tRef.parent!.id;
 
     const tipRef = tRef.collection("tips").doc();
@@ -427,11 +436,22 @@ export const createStoreTipSessionPublic = functions
     });
 
     const stripe = stripeClient();
-    const FRONTEND_BASE_URL = requireEnv("FRONTEND_BASE_URL");
 
-    const currency = "jpy";
-    const unitAmount = amount as number;
-    const title = memo || `Tip to store ${storeName}`;
+    // === ここで URL を関数内で完成させる ===
+    const BASE = requireEnv("FRONTEND_BASE_URL").replace(/\/+$/, "");
+    const successParams = new URLSearchParams({
+      t: tenantId,
+      thanks: "true",
+      tenantName: storeName,      // 表示用（任意）
+      amount: String(amount!),    // 表示用（任意）
+    }).toString();
+    const cancelParams = new URLSearchParams({
+      t: tenantId,
+      canceled: "true",
+      tenantName: storeName,      // 表示用（任意）
+    }).toString();
+    const successUrl = `${BASE}#/p?${successParams}`;
+    const cancelUrl  = `${BASE}#/p?${cancelParams}`;
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
@@ -439,15 +459,15 @@ export const createStoreTipSessionPublic = functions
       line_items: [
         {
           price_data: {
-            currency,
-            product_data: { name: title },
-            unit_amount: unitAmount,
+            currency: "jpy",
+            product_data: { name: memo || `Tip to store ${storeName}` },
+            unit_amount: amount!,
           },
           quantity: 1,
         },
       ],
-      success_url: `${FRONTEND_BASE_URL}/#/p?t=${tenantId}&thanks=true`,
-      cancel_url: `${FRONTEND_BASE_URL}/#/p?t=${tenantId}&canceled=true`,
+      success_url: successUrl,
+      cancel_url: cancelUrl,
       metadata: {
         tenantId,
         tipDocId: tipRef.id,
@@ -462,7 +482,8 @@ export const createStoreTipSessionPublic = functions
       },
     });
 
-    await db
+    await admin
+      .firestore()
       .collection(uid)
       .doc(tenantId)
       .collection("tipSessions")
@@ -470,8 +491,8 @@ export const createStoreTipSessionPublic = functions
       .set(
         {
           tenantId,
-          amount: unitAmount,
-          currency: currency.toUpperCase(),
+          amount,
+          currency: "JPY",
           status: "created",
           kind: "store_tip",
           tipDocId: tipRef.id,
@@ -485,6 +506,7 @@ export const createStoreTipSessionPublic = functions
 
     return { checkoutUrl: session.url, sessionId: session.id, tipDocId: tipRef.id };
   });
+
 
 /* ===================== チップ成功メール（既存: uid/{tenantId}/tips） ===================== */
 export const onTipSucceededSendMailV2 = onDocumentWritten(
@@ -1400,17 +1422,13 @@ export const createSubscriptionCheckout = functions
     if (hasOngoing) {
       const portal = await stripe.billingPortal.sessions.create({
         customer: customerId,
-        return_url: `${APP_BASE}/#/settings?tenant=${encodeURIComponent(tenantId)}`,
+        return_url: `${APP_BASE}#/settings?tenant=${encodeURIComponent(tenantId)}`,
       });
       return { alreadySubscribed: true, portalUrl: portal.url };
     }
 
-    const successUrl = `${APP_BASE}/stripe-bridge.html#event=subscribed&tenant=${encodeURIComponent(
-      tenantId
-    )}&plan=${encodeURIComponent(plan)}`;
-    const cancelUrl = `${APP_BASE}/stripe-bridge.html#event=subscription_canceled&tenant=${encodeURIComponent(
-      tenantId
-    )}`;
+    const successUrl = `${APP_BASE}#/store?tenantId=${tenantId}&event=initial_fee_paid`
+    const cancelUrl = `${APP_BASE}#/store?tenantId=${tenantId}&event=initial_fee_canceled`
 
     const session = await stripe.checkout.sessions.create({
   mode: "subscription",
@@ -1606,8 +1624,8 @@ export const upsertConnectedAccount = onCall(
       const link = await stripe.accountLinks.create({
         account: acctId!,
         type: "account_onboarding",
-        refresh_url: `${BASE}/#/connect-refresh?t=${tenantId}`,
-        return_url: `${BASE}/#/connect-return?t=${tenantId}`,
+        refresh_url: onboardingUrl,
+        return_url: `${BASE}#/store?tenantId=${tenantId}&event=initial_fee_paid`,
       });
       onboardingUrl = link.url;
     }
@@ -1712,12 +1730,8 @@ export const createInitialFeeCheckout = functions
     const customerId = await ensureCustomer(uid, tenantId, purchaserEmail, name);
     const priceId = await getOrCreateInitialFeePrice(stripe);
 
-    const successUrl = `${APP_BASE}/stripe-bridge.html#event=initial_fee_paid&tenant=${encodeURIComponent(
-      tenantId
-    )}`;
-    const cancelUrl = `${APP_BASE}/stripe-bridge.html#event=initial_fee_canceled&tenant=${encodeURIComponent(
-      tenantId
-    )}`;
+    const successUrl = `${APP_BASE}#/store?tenantId=${tenantId}&event=initial_fee_paid`
+    const cancelUrl = `${APP_BASE}#/store?tenantId=${tenantId}&event=initial_fee_canceled`
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",

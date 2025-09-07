@@ -18,7 +18,7 @@ class TenantSwitcherBar extends StatefulWidget {
     required this.onChanged,
     this.currentTenantId,
     this.currentTenantName,
-    this.padding = const EdgeInsets.fromLTRB(16, 8, 16, 6), // ★ smaller
+    this.padding = const EdgeInsets.fromLTRB(16, 8, 16, 6),
   });
 
   @override
@@ -29,22 +29,36 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
   final _functions = FirebaseFunctions.instanceFor(region: 'us-central1');
 
   String? _selectedId;
-  final uid = FirebaseAuth.instance.currentUser?.uid;
+  String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
-  Query<Map<String, dynamic>> _queryForUserTenants() {
-    // TODO: 必要なら membership 条件に変更
-    return FirebaseFirestore.instance.collection(uid!);
-  }
+  // メモ化した参照
+  late final CollectionReference<Map<String, dynamic>> _tenantCol;
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _tenantStream;
 
   @override
   void initState() {
     super.initState();
+
+    // 初期選択は props からのみ同期（親が決める）
     _selectedId = widget.currentTenantId;
+
+    // ユーザーが未ログインなら以降の処理は行わない（nullチェック）
+    final uid = _uid;
+    if (uid != null) {
+      _tenantCol = FirebaseFirestore.instance.collection(uid);
+      // ★ snapshots を1度だけ作成（再購読を防ぐ）
+      _tenantStream = _tenantCol.snapshots();
+    } else {
+      // ダミー（空のstream）…未ログインケース
+      _tenantCol = FirebaseFirestore.instance.collection('_');
+      _tenantStream = const Stream.empty();
+    }
   }
 
   @override
   void didUpdateWidget(covariant TenantSwitcherBar oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // 親が選択IDを更新したら、その値をそのまま反映（build中に通知はしない）
     if (oldWidget.currentTenantId != widget.currentTenantId) {
       _selectedId = widget.currentTenantId;
     }
@@ -157,7 +171,10 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
               color: Colors.black87,
               fontSize: 14,
             ),
-            title: const Text('新しい店舗を作成'),
+            title: const Text(
+              '新しい店舗を作成',
+              style: TextStyle(fontFamily: 'LINEseed'),
+            ),
             content: TextField(
               controller: nameCtrl,
               autofocus: true,
@@ -191,7 +208,10 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
                 style: TextButton.styleFrom(foregroundColor: Colors.black87),
-                child: const Text('キャンセル'),
+                child: const Text(
+                  'キャンセル',
+                  style: TextStyle(fontFamily: 'LINEseed'),
+                ),
               ),
               FilledButton(
                 onPressed: () => Navigator.pop(context, true),
@@ -202,7 +222,10 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                 ),
-                child: const Text('作成'),
+                child: const Text(
+                  '作成',
+                  style: TextStyle(fontFamily: 'LINEseed'),
+                ),
               ),
             ],
           ),
@@ -215,11 +238,14 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
     final name = nameCtrl.text.trim();
     if (name.isEmpty) return;
 
+    final uid = _uid;
+    if (uid == null) return;
+
     // Firestore の doc はまだ作らない。まずは ID を予約
-    final tenants = FirebaseFirestore.instance.collection(uid!);
+    final tenants = FirebaseFirestore.instance.collection(uid);
     final String tempTenantId = tenants.doc().id;
 
-    // 3ボタン版 OnboardingSheet（同一モーダル内で 初期費用/サブスク/Connect を進める & 「保存する」）
+    // 3ボタン版 OnboardingSheet をモーダルで進める
     await startOnboarding(tempTenantId, name);
 
     // シートを閉じた時点で、本登録（= tenants/{id} が作られたか）を確認
@@ -227,13 +253,12 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
     if (!mounted) return;
 
     if (!snap.exists) {
-      // まだ「保存する」を押していない（or サブスク未完了等）
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           backgroundColor: Colors.white,
           content: Text(
             'オンボーディングは完了していません（本登録は未保存）',
-            style: TextStyle(color: Colors.black87),
+            style: TextStyle(color: Colors.black87, fontFamily: 'LINEseed'),
           ),
         ),
       );
@@ -242,6 +267,7 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
 
     // ここに来たら「保存」済み＝本登録作成済み
     setState(() => _selectedId = tempTenantId);
+    // 親へはここで初めて通知（ユーザー操作の完了時）
     widget.onChanged(tempTenantId, name);
   }
 
@@ -249,17 +275,16 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
   Future<void> startOnboarding(String tenantId, String tenantName) async {
     await showModalBottomSheet(
       context: context,
-      isScrollControlled: true, // シートを大きくできる（DraggableScrollableSheetに最適）
-      isDismissible: false, // 外側タップで閉じない
-      enableDrag: false, // 引っ張っても閉じない
-      useRootNavigator: true, // ルートNavigatorで全画面を覆う（ネスト対策）
-      barrierColor: Colors.black38, // 半透明バリア（背面をブロック）
+      isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
+      useRootNavigator: true,
+      barrierColor: Colors.black38,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (sheetCtx) {
-        // ★ 紫対策：ボトムシート全体を白黒テーマで包む
         return Theme(
           data: bwTheme(context),
           child: OnboardingSheet(
@@ -277,13 +302,16 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
     return Padding(
       padding: widget.padding,
       child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: _queryForUserTenants().snapshots(),
+        stream: _tenantStream, // ★ 毎回同じ Stream
         builder: (context, snap) {
           if (snap.hasError) {
             return _wrap(
               child: Text(
                 '読み込みエラー: ${snap.error}',
-                style: const TextStyle(color: Colors.red),
+                style: const TextStyle(
+                  color: Colors.red,
+                  fontFamily: 'LINEseed',
+                ),
               ),
             );
           }
@@ -293,6 +321,7 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
 
           final docs = snap.data!.docs;
 
+          // 店舗ゼロ
           if (docs.isEmpty) {
             return _wrap(
               child: Row(
@@ -303,13 +332,17 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                       style: TextStyle(
                         fontWeight: FontWeight.w600,
                         color: Colors.black87,
+                        fontFamily: 'LINEseed',
                       ),
                     ),
                   ),
                   OutlinedButton.icon(
                     onPressed: createTenantDialog,
                     icon: const Icon(Icons.add, size: 18),
-                    label: const Text('店舗を作成'),
+                    label: const Text(
+                      '店舗を作成',
+                      style: TextStyle(fontFamily: 'LINEseed'),
+                    ),
                     style: _outlineSmall,
                   ),
                 ],
@@ -317,40 +350,30 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
             );
           }
 
-          // ドロップダウン項目（下書きラベル付与）
+          // ドロップダウン項目
           final items = docs.map((d) {
-            final data = d.data();
-            //final isDraft = (data['status'] == 'nonactive');
-            final name = (data['name'] ?? '(no name)').toString();
+            final name = (d.data()['name'] ?? '(no name)').toString();
             return DropdownMenuItem<String>(
               value: d.id,
               child: Text(
                 name,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.black87),
+                style: const TextStyle(
+                  color: Colors.black87,
+                  fontFamily: 'LINEseed',
+                ),
               ),
             );
           }).toList();
 
-          // 選択IDの初期化/補正
-          final ids = docs.map((d) => d.id).toSet();
-          if (_selectedId == null || !ids.contains(_selectedId)) {
-            _selectedId = docs.first.id;
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              final first = docs.first;
-              widget.onChanged(
-                first.id,
-                (first.data()['name'] ?? '') as String?,
-              );
-            });
-          }
-
-          // 現在選択中のドキュメント
+          // 現在選択中のドキュメント（_selectedId が null の可能性も考慮）
           QueryDocumentSnapshot<Map<String, dynamic>>? selectedDoc;
-          try {
-            selectedDoc = docs.firstWhere((d) => d.id == _selectedId);
-          } catch (_) {
-            selectedDoc = null;
+          if (_selectedId != null) {
+            try {
+              selectedDoc = docs.firstWhere((d) => d.id == _selectedId);
+            } catch (_) {
+              selectedDoc = null;
+            }
           }
           final selectedData = selectedDoc?.data();
           final selectedIsDraft = (selectedData?['status'] == 'nonactive');
@@ -363,21 +386,22 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                   child: DropdownButtonFormField<String>(
                     isExpanded: true,
                     isDense: true,
-                    value: _selectedId,
+                    value: _selectedId, // ← null なら未選択表示
                     items: items,
                     iconEnabledColor: Colors.black54,
                     dropdownColor: Colors.white,
                     style: const TextStyle(color: Colors.black87, fontSize: 14),
                     onChanged: (v) async {
-                      if (v == null) return;
+                      if (v == null || v == _selectedId) return;
+
+                      // 先に内部状態を更新（UIを即反映）
                       setState(() => _selectedId = v);
 
                       final doc = docs.firstWhere((e) => e.id == v);
                       final data = doc.data();
                       final name = (data['name'] ?? '') as String?;
-                      widget.onChanged(v, name);
 
-                      // ★ 未完了なら「続きから再開」ダイアログを出す
+                      // 未完了なら「続きから再開」ダイアログ
                       if (data['status'] == 'nonactive') {
                         final initStatus =
                             (data['initialFee'] as Map?)?['status'] ?? 'unpaid';
@@ -390,12 +414,18 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                         final shouldResume = await showDialog<bool>(
                           context: context,
                           builder: (ctx) => AlertDialog(
-                            title: const Text('下書きがあります'),
+                            title: const Text(
+                              '下書きがあります',
+                              style: TextStyle(fontFamily: 'LINEseed'),
+                            ),
                             content: Column(
                               mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text('この店舗のオンボーディングは未完了です。続きから再開しますか？'),
+                                const Text(
+                                  'この店舗のオンボーディングは未完了です。続きから再開しますか？',
+                                  style: TextStyle(fontFamily: 'LINEseed'),
+                                ),
                                 const SizedBox(height: 12),
                                 Wrap(
                                   spacing: 8,
@@ -409,7 +439,6 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                                           ? '（$plan）'
                                           : null,
                                     ),
-                                    // 必要なら Connect などもここに追加
                                   ],
                                 ),
                               ],
@@ -417,11 +446,17 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                             actions: [
                               TextButton(
                                 onPressed: () => Navigator.pop(ctx, false),
-                                child: const Text('あとで'),
+                                child: const Text(
+                                  'あとで',
+                                  style: TextStyle(fontFamily: 'LINEseed'),
+                                ),
                               ),
                               FilledButton(
                                 onPressed: () => Navigator.pop(ctx, true),
-                                child: const Text('再開する'),
+                                child: const Text(
+                                  '再開する',
+                                  style: TextStyle(fontFamily: 'LINEseed'),
+                                ),
                               ),
                             ],
                           ),
@@ -431,6 +466,9 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                           await startOnboarding(v, name ?? '');
                         }
                       }
+
+                      // ★ 親へはここで初めて通知（ユーザー選択の完了時）
+                      widget.onChanged(v, name);
                     },
                     decoration: InputDecoration(
                       labelText: '店舗を選択',
@@ -456,24 +494,29 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                if (selectedIsDraft)
+
+                // 選択中のときだけ補助ボタンを表示
+                if (selectedDoc != null && selectedIsDraft)
                   OutlinedButton.icon(
                     onPressed: () async {
-                      // ダイアログ省略で即再開
                       await startOnboarding(_selectedId!, selectedName ?? '');
                     },
                     icon: const Icon(Icons.play_arrow, size: 18),
-                    label: const Text('続きから'),
+                    label: const Text(
+                      '続きから',
+                      style: TextStyle(fontFamily: 'LINEseed'),
+                    ),
                     style: _outlineSmall,
                   ),
-                if (!selectedIsDraft)
+                if (selectedDoc != null && !selectedIsDraft)
                   OutlinedButton.icon(
                     onPressed: () async {
-                      // ダイアログ省略で即再開
                       await startOnboarding(_selectedId!, selectedName ?? '');
                     },
-
-                    label: const Text('初期登録状況'),
+                    label: const Text(
+                      '登録状況',
+                      style: TextStyle(fontFamily: 'LINEseed'),
+                    ),
                     style: _outlineSmall,
                   ),
                 const SizedBox(width: 8),
@@ -481,7 +524,10 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                 OutlinedButton.icon(
                   onPressed: createTenantDialog,
                   icon: const Icon(Icons.add, size: 18),
-                  label: const Text('新規作成'),
+                  label: const Text(
+                    '新規作成',
+                    style: TextStyle(fontFamily: 'LINEseed'),
+                  ),
                   style: _outlineSmall,
                 ),
               ],
@@ -514,12 +560,13 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
         children: [
           Icon(done ? Icons.check_circle : Icons.pause_circle_filled, size: 16),
           const SizedBox(width: 6),
-          Text('$label${trailing ?? ''}'),
+          Text(
+            '$label${trailing ?? ''}',
+            style: const TextStyle(fontFamily: 'LINEseed'),
+          ),
         ],
       ),
-      backgroundColor: done
-          ? const Color(0x1100AA00) // 薄い緑
-          : const Color(0x11AAAAAA), // 薄いグレー
+      backgroundColor: done ? const Color(0x1100AA00) : const Color(0x11AAAAAA),
     );
   }
 

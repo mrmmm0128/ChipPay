@@ -16,21 +16,84 @@ class QrPosterBuilderPage extends StatefulWidget {
 }
 
 // ===== 用紙定義（縦基準の寸法・フォーマット） =====
-enum _Paper { a4, a3, letter, legal }
+enum _Paper { a0, a1, a2, a3, a4, b0, b1, b2, b3, b4, b5 }
 
 class _PaperDef {
   final String label;
-  final PdfPageFormat format;
-  final double widthMm; // 縦向きの幅mm
-  final double heightMm; // 縦向きの高mm
+  final PdfPageFormat format; // PDF用（縦基準）
+  final double widthMm; // プレビュー用（縦基準）
+  final double heightMm;
   const _PaperDef(this.label, this.format, this.widthMm, this.heightMm);
 }
 
+// ISO 216 mm
 const Map<_Paper, _PaperDef> _paperDefs = {
-  _Paper.a4: _PaperDef('A4', PdfPageFormat.a4, 210, 297),
-  _Paper.a3: _PaperDef('A3', PdfPageFormat.a3, 297, 420),
-  _Paper.letter: _PaperDef('Letter', PdfPageFormat.letter, 216, 279),
-  _Paper.legal: _PaperDef('Legal', PdfPageFormat.legal, 216, 356),
+  _Paper.a0: _PaperDef(
+    'A0',
+    PdfPageFormat(841 * PdfPageFormat.mm, 1189 * PdfPageFormat.mm),
+    841,
+    1189,
+  ),
+  _Paper.a1: _PaperDef(
+    'A1',
+    PdfPageFormat(594 * PdfPageFormat.mm, 841 * PdfPageFormat.mm),
+    594,
+    841,
+  ),
+  _Paper.a2: _PaperDef(
+    'A2',
+    PdfPageFormat(420 * PdfPageFormat.mm, 594 * PdfPageFormat.mm),
+    420,
+    594,
+  ),
+  _Paper.a3: _PaperDef(
+    'A3',
+    PdfPageFormat(297 * PdfPageFormat.mm, 420 * PdfPageFormat.mm),
+    297,
+    420,
+  ),
+  _Paper.a4: _PaperDef(
+    'A4',
+    PdfPageFormat(210 * PdfPageFormat.mm, 297 * PdfPageFormat.mm),
+    210,
+    297,
+  ),
+  _Paper.b0: _PaperDef(
+    'B0',
+    PdfPageFormat(1000 * PdfPageFormat.mm, 1414 * PdfPageFormat.mm),
+    1000,
+    1414,
+  ),
+  _Paper.b1: _PaperDef(
+    'B1',
+    PdfPageFormat(707 * PdfPageFormat.mm, 1000 * PdfPageFormat.mm),
+    707,
+    1000,
+  ),
+  _Paper.b2: _PaperDef(
+    'B2',
+    PdfPageFormat(500 * PdfPageFormat.mm, 707 * PdfPageFormat.mm),
+    500,
+    707,
+  ),
+  _Paper.b3: _PaperDef(
+    'B3',
+    PdfPageFormat(353 * PdfPageFormat.mm, 500 * PdfPageFormat.mm),
+    353,
+    500,
+  ),
+  _Paper.b4: _PaperDef(
+    'B4',
+    PdfPageFormat(250 * PdfPageFormat.mm, 353 * PdfPageFormat.mm),
+    250,
+    353,
+  ),
+  _Paper.b5: _PaperDef(
+    'B5',
+    PdfPageFormat(176 * PdfPageFormat.mm, 250 * PdfPageFormat.mm),
+    176,
+    250,
+  ),
 };
 
 class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
@@ -126,9 +189,11 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
 
   Future<void> _makePdfAndDownload() async {
     if (_qrData.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('URLが不正です')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('URLが不正です', style: TextStyle(fontFamily: 'LINEseed')),
+        ),
+      );
       return;
     }
 
@@ -208,7 +273,11 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
         elevation: 0,
         title: const Text(
           'QRポスター作成',
-          style: TextStyle(fontWeight: FontWeight.w600),
+          style: TextStyle(
+            fontWeight: FontWeight.w600,
+            fontFamily: 'LINEseed',
+            fontSize: 16,
+          ),
         ),
       ),
       body: SafeArea(
@@ -238,7 +307,10 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
                               .map(
                                 (e) => DropdownMenuItem(
                                   value: e.key,
-                                  child: Text(e.value.label),
+                                  child: Text(
+                                    e.value.label,
+                                    style: TextStyle(fontFamily: 'LINEseed'),
+                                  ),
                                 ),
                               )
                               .toList(),
@@ -264,8 +336,20 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
                         child: DropdownButton<bool>(
                           value: _landscape,
                           items: const [
-                            DropdownMenuItem(value: false, child: Text('縦向き')),
-                            DropdownMenuItem(value: true, child: Text('横向き')),
+                            DropdownMenuItem(
+                              value: false,
+                              child: Text(
+                                '縦向き',
+                                style: TextStyle(fontFamily: 'LINEseed'),
+                              ),
+                            ),
+                            DropdownMenuItem(
+                              value: true,
+                              child: Text(
+                                '横向き',
+                                style: TextStyle(fontFamily: 'LINEseed'),
+                              ),
+                            ),
                           ],
                           onChanged: (v) => setState(() => _landscape = v!),
                         ),
@@ -277,7 +361,11 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
 
               const SizedBox(height: 12),
 
-              if (!valid) const Text('URLが不正です（t/e パラメータが必要）'),
+              if (!valid)
+                const Text(
+                  'URLが不正です（t/e パラメータが必要）',
+                  style: TextStyle(fontFamily: 'LINEseed'),
+                ),
 
               if (valid) ...[
                 // プレビュー（用紙・向きに追従）
@@ -312,7 +400,14 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
                               child: _photoBytes == null
                                   ? Container(
                                       color: Colors.black12,
-                                      child: const Center(child: Text('写真なし')),
+                                      child: const Center(
+                                        child: Text(
+                                          '写真なし',
+                                          style: TextStyle(
+                                            fontFamily: 'LINEseed',
+                                          ),
+                                        ),
+                                      ),
                                     )
                                   : Image.memory(
                                       _photoBytes!,
@@ -368,7 +463,10 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
                       child: OutlinedButton.icon(
                         onPressed: _pickPhoto,
                         icon: const Icon(Icons.photo_library),
-                        label: Text(_photoName ?? '写真を選ぶ'),
+                        label: Text(
+                          _photoName ?? '写真を選ぶ',
+                          style: TextStyle(fontFamily: 'LINEseed'),
+                        ),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: Colors.black87,
                           side: const BorderSide(color: Colors.black87),
@@ -381,7 +479,10 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
                     final pdfBtn = FilledButton.icon(
                       onPressed: _makePdfAndDownload,
                       icon: const Icon(Icons.file_download),
-                      label: const Text('PDFをダウンロード'),
+                      label: const Text(
+                        'PDFをダウンロード',
+                        style: TextStyle(fontFamily: 'LINEseed'),
+                      ),
                       style: FilledButton.styleFrom(
                         backgroundColor: Colors.black,
                         foregroundColor: Colors.white,
@@ -424,7 +525,10 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
                 SwitchListTile(
                   title: const Text(
                     'QRの背景を白で敷く',
-                    style: TextStyle(color: Colors.black87),
+                    style: TextStyle(
+                      color: Colors.black87,
+                      fontFamily: 'LINEseed',
+                    ),
                   ),
                   value: _putWhiteBg,
                   onChanged: (v) => setState(() => _putWhiteBg = v),
@@ -459,9 +563,18 @@ class _SliderTile extends StatelessWidget {
     return ListTile(
       contentPadding: EdgeInsets.zero,
       textColor: Colors.black87,
-      title: Text(label, style: TextStyle(color: Colors.black87)),
+      title: Text(
+        label,
+        style: TextStyle(color: Colors.black87, fontFamily: 'LINEseed'),
+      ),
       subtitle: Slider(value: value, min: min, max: max, onChanged: onChanged),
-      trailing: SizedBox(width: 56, child: Text(value.toStringAsFixed(0))),
+      trailing: SizedBox(
+        width: 56,
+        child: Text(
+          value.toStringAsFixed(0),
+          style: TextStyle(fontFamily: 'LINEseed'),
+        ),
+      ),
     );
   }
 }
