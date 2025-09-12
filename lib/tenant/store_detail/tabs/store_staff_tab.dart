@@ -24,6 +24,7 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
   String? _empPhotoName;
   final uid = FirebaseAuth.instance.currentUser?.uid;
   bool _addingEmp = false;
+  bool _connected = false;
 
   // 公開ページのベースURL（末尾スラなし）
   String get _publicBase {
@@ -38,6 +39,24 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
       defaultValue: 'https://venerable-mermaid-fcf8c8.netlify.app',
     );
     return fallback;
+  }
+
+  Future<void> _loadConnectedOnce() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection(uid!)
+          .doc(widget.tenantId)
+          .get();
+
+      final status = doc.data()?['status'] as String?;
+      final isActive = status == 'active';
+
+      if (mounted) {
+        setState(() => _connected = isActive);
+      }
+    } catch (e) {
+      if (mounted) setState(() => _connected = false);
+    }
   }
 
   String _allStaffUrl() => '$_publicBase/#/qr-all?t=${widget.tenantId}';
@@ -80,11 +99,10 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
   Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
   _loadMyTenants() async {
     final uid = FirebaseAuth.instance.currentUser!.uid;
-    final qs = await FirebaseFirestore.instance
-        .collection(uid)
-        .where('members')
-        .get();
+    final qs = await FirebaseFirestore.instance.collection(uid).get();
     return qs.docs;
+
+    // ※ メンバー絞り込みを後で入れるなら、ここで doc.data()['members'] を見てローカルで filter してください。
   }
 
   Future<bool?> _confirmDuplicateDialog({
@@ -252,7 +270,7 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
                       }
                     },
                     icon: const Icon(Icons.copy),
-                    label: const Text('URLをコピー'),
+                    label: const Text('URLを共有しスタッフにQRコードを共有しましょう。'),
                   ),
                 ),
               ],
@@ -274,6 +292,7 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
     const fabBottomMargin = 16.0;
     final safeBottom = mq.padding.bottom;
     final gridBottomPadding = fabHeight + fabBottomMargin + safeBottom + 8.0;
+    _loadConnectedOnce();
 
     final primaryBtnStyle = FilledButton.styleFrom(
       minimumSize: const Size(0, fabHeight),
@@ -283,114 +302,130 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
       padding: const EdgeInsets.symmetric(horizontal: 16),
     );
 
-    return Theme(
-      data: _withLineSeed(Theme.of(context)),
-      child: Stack(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
+    return _connected
+        ? Theme(
+            data: _withLineSeed(Theme.of(context)),
+            child: Stack(
               children: [
-                _qrAllLinkCard(_allStaffUrl()),
-                const SizedBox(height: 12),
-                Expanded(
-                  child: StreamBuilder<QuerySnapshot>(
-                    stream: FirebaseFirestore.instance
-                        .collection(uid!)
-                        .doc(widget.tenantId)
-                        .collection('employees')
-                        .orderBy('createdAt', descending: true)
-                        .snapshots(),
-                    builder: (context, snap) {
-                      if (snap.hasError) {
-                        return Center(child: Text('読み込みエラー: ${snap.error}'));
-                      }
-                      if (!snap.hasData) {
-                        return const Center(child: CircularProgressIndicator());
-                      }
-                      final docs = snap.data!.docs;
-                      if (docs.isEmpty) {
-                        return Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Text(
-                                'まだ社員がいません',
-                                style: TextStyle(color: Colors.black87),
-                              ),
-                              const SizedBox(height: 12),
-                              OutlinedButton.icon(
-                                onPressed: _openAddEmployeeDialog,
-                                icon: const Icon(Icons.person_add),
-                                label: const Text('最初の社員を追加'),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: Colors.black87,
-                                  side: const BorderSide(color: Colors.black87),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                    vertical: 12,
-                                  ),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      _qrAllLinkCard(_allStaffUrl()),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: StreamBuilder<QuerySnapshot>(
+                          stream: FirebaseFirestore.instance
+                              .collection(uid!)
+                              .doc(widget.tenantId)
+                              .collection('employees')
+                              .orderBy('createdAt', descending: true)
+                              .snapshots(),
+                          builder: (context, snap) {
+                            if (snap.hasError) {
+                              return Center(
+                                child: Text('読み込みエラー: ${snap.error}'),
+                              );
+                            }
+                            if (!snap.hasData) {
+                              return const Center(
+                                child: CircularProgressIndicator(),
+                              );
+                            }
+                            final docs = snap.data!.docs;
+                            if (docs.isEmpty) {
+                              return Padding(
+                                padding: const EdgeInsets.all(16),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text(
+                                      'まだ社員がいません',
+                                      style: TextStyle(color: Colors.black87),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    OutlinedButton.icon(
+                                      onPressed: _openAddEmployeeDialog,
+                                      icon: const Icon(Icons.person_add),
+                                      label: const Text('最初の社員を追加'),
+                                      style: OutlinedButton.styleFrom(
+                                        foregroundColor: Colors.black87,
+                                        side: const BorderSide(
+                                          color: Colors.black87,
+                                        ),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 12,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ),
-                            ],
-                          ),
-                        );
-                      }
+                              );
+                            }
 
-                      final entries = List.generate(docs.length, (i) {
-                        final doc = docs[i];
-                        final d = docs[i].data() as Map<String, dynamic>;
-                        final empId = doc.id;
-                        return StaffEntry(
-                          index: i + 1,
-                          name: (d['name'] ?? '') as String,
-                          email: (d['email'] ?? '') as String,
-                          photoUrl: (d['photoUrl'] ?? '') as String,
-                          comment: (d['comment'] ?? '') as String,
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => StaffDetailScreen(
-                                  tenantId: widget.tenantId,
-                                  employeeId: empId,
-                                ),
+                            final entries = List.generate(docs.length, (i) {
+                              final doc = docs[i];
+                              final d = docs[i].data() as Map<String, dynamic>;
+                              final empId = doc.id;
+                              return StaffEntry(
+                                index: i + 1,
+                                name: (d['name'] ?? '') as String,
+                                email: (d['email'] ?? '') as String,
+                                photoUrl: (d['photoUrl'] ?? '') as String,
+                                comment: (d['comment'] ?? '') as String,
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => StaffDetailScreen(
+                                        tenantId: widget.tenantId,
+                                        employeeId: empId,
+                                      ),
+                                    ),
+                                  );
+                                },
+                              );
+                            });
+
+                            return Padding(
+                              padding: EdgeInsets.only(
+                                bottom: gridBottomPadding,
                               ),
+                              child: StaffGalleryGrid(entries: entries),
                             );
                           },
-                        );
-                      });
-
-                      return Padding(
-                        padding: EdgeInsets.only(bottom: gridBottomPadding),
-                        child: StaffGalleryGrid(entries: entries),
-                      );
-                    },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  right: 16,
+                  bottom: fabBottomMargin + safeBottom,
+                  child: SizedBox(
+                    height: fabHeight,
+                    child: FilledButton.icon(
+                      style: primaryBtnStyle,
+                      onPressed: _openAddEmployeeDialog,
+                      icon: const Icon(Icons.person_add_alt_1),
+                      label: const Text('スタッフ追加'),
+                    ),
                   ),
                 ),
               ],
             ),
-          ),
-          Positioned(
-            right: 16,
-            bottom: fabBottomMargin + safeBottom,
-            child: SizedBox(
-              height: fabHeight,
-              child: FilledButton.icon(
-                style: primaryBtnStyle,
-                onPressed: _openAddEmployeeDialog,
-                icon: const Icon(Icons.person_add_alt_1),
-                label: const Text('社員を追加'),
-              ),
+          )
+        : Scaffold(
+            body: Expanded(
+              child: Center(child: Text("新規登録を完了すると、スタッフを追加することができます。")),
             ),
-          ),
-        ],
-      ),
-    );
+          );
   }
 }
 
@@ -475,6 +510,8 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
   String _otherSearch = ''; // 名前/メールの部分一致（ローカルフィルタ）
   final _tenantSearchCtrl = TextEditingController(); // 店舗ピッカー内の検索
 
+  late final ScrollController _otherEmpListCtrl;
+
   @override
   void initState() {
     super.initState();
@@ -484,10 +521,14 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
     _emailCtrl = TextEditingController(text: widget.initialEmail);
     _commentCtrl = TextEditingController(text: widget.initialComment);
 
-    // 親の初期値をローカルにコピー
+    // ローカル初期化
     _localPhotoBytes = widget.empPhotoBytes;
     _localPhotoName = widget.empPhotoName;
     _localPrefilledPhotoUrl = widget.prefilledPhotoUrlFromGlobal;
+
+    // NEW
+
+    _otherEmpListCtrl = ScrollController();
 
     _prepareMyTenants();
   }
@@ -499,6 +540,11 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
     _nameCtrl.dispose();
     _emailCtrl.dispose();
     _commentCtrl.dispose();
+
+    // NEW
+
+    _otherEmpListCtrl.dispose();
+
     super.dispose();
   }
 
@@ -727,15 +773,17 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
         if (same == true) {
           if (!mounted) return;
           Navigator.pop(context); // ダイアログを閉じる
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => StaffDetailScreen(
-                tenantId: widget.currentTenantId,
-                employeeId: dup.id,
-              ),
-            ),
-          );
+
+          // TODO: ここであなたの StaffDetailScreen に遷移してください
+          // Navigator.push(
+          //   context,
+          //   MaterialPageRoute(
+          //     builder: (_) => StaffDetailScreen(
+          //       tenantId: widget.currentTenantId,
+          //       employeeId: dup.id,
+          //     ),
+          //   ),
+          // );
           return;
         }
         // 別人として続行
@@ -847,108 +895,135 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
   Future<void> _openTenantPickerDialog() async {
     _tenantSearchCtrl.text = '';
     if (!mounted) return;
+
+    if (_myTenants.isEmpty) {
+      await showDialog<void>(
+        context: context,
+        useRootNavigator: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('店舗を選択'),
+          content: const Text('あなたがメンバーの他店舗が見つかりませんでした'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx, rootNavigator: false).pop(),
+              child: const Text('閉じる'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     await showDialog<void>(
       context: context,
+      useRootNavigator: false,
       builder: (ctx) {
         String localQuery = '';
+        final listCtrl = ScrollController(); // ← ListView/Scrollbar共用
+
         return StatefulBuilder(
           builder: (ctx, setLocal) {
-            final list = _myTenants.where((d) {
+            final filtered = _myTenants.where((d) {
               if (localQuery.isEmpty) return true;
               final name = (d.data()['name'] ?? '').toString().toLowerCase();
               return name.contains(localQuery);
             }).toList();
 
-            return Theme(
-              data: _withLineSeed(Theme.of(ctx)).copyWith(
-                colorScheme: Theme.of(ctx).colorScheme.copyWith(
-                  primary: Colors.black87,
-                  onPrimary: Colors.white,
-                  surfaceTint: Colors.transparent,
+            return AlertDialog(
+              backgroundColor: const Color(0xFFF5F5F5),
+              surfaceTintColor: Colors.transparent,
+              title: const Text(
+                '店舗を選択',
+                style: TextStyle(
+                  color: Colors.black87,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-              child: AlertDialog(
-                backgroundColor: const Color(0xFFF5F5F5),
-                surfaceTintColor: Colors.transparent,
-                title: const Text(
-                  '店舗を選択',
-                  style: TextStyle(
-                    color: Colors.black87,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                content: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 560),
-                  child: SizedBox(
-                    height: 420,
-                    child: Column(
-                      children: [
-                        TextField(
-                          controller: _tenantSearchCtrl,
-                          decoration: InputDecoration(
-                            hintText: '店舗名で検索',
-                            isDense: true,
-                            filled: true,
-                            fillColor: Colors.white,
-                            prefixIcon: const Icon(Icons.search),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide.none,
-                            ),
-                          ),
-                          onChanged: (v) => setLocal(
-                            () => localQuery = v.trim().toLowerCase(),
+              content: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 560),
+                child: SizedBox(
+                  width: 560,
+                  height: 420, // ★ ダイアログ内の高さを固定
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    // ★ ここに Expanded を置かない
+                    children: [
+                      TextField(
+                        controller: _tenantSearchCtrl,
+                        decoration: InputDecoration(
+                          hintText: '店舗名で検索',
+                          isDense: true,
+                          filled: true,
+                          fillColor: Colors.white,
+                          prefixIcon: const Icon(Icons.search),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
                           ),
                         ),
-                        const SizedBox(height: 8),
-                        Expanded(
-                          child: Scrollbar(
-                            thumbVisibility: true,
-                            child: ListView.separated(
-                              itemCount: list.length,
-                              separatorBuilder: (_, __) =>
-                                  const Divider(height: 1),
-                              itemBuilder: (_, i) {
-                                final t = list[i];
-                                final name = (t.data()['name'] ?? '(no name)')
-                                    .toString();
-                                final selected = t.id == _selectedTenantId;
-                                return ListTile(
-                                  dense: true,
-                                  title: Text(
-                                    name,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  trailing: selected
-                                      ? const Icon(
-                                          Icons.check,
-                                          color: Colors.black87,
-                                        )
-                                      : null,
-                                  onTap: () {
-                                    setState(() => _selectedTenantId = t.id);
-                                    Navigator.pop(ctx);
-                                  },
+                        onChanged: (v) => setLocal(() {
+                          localQuery = v.trim().toLowerCase();
+                        }),
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        // ★ リスト側も固定高さ（例: 320）
+                        height: 320,
+                        child: Scrollbar(
+                          controller: listCtrl,
+                          thumbVisibility: true,
+                          child: ListView.separated(
+                            controller: listCtrl,
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            primary: false,
+                            itemCount: filtered.isEmpty ? 1 : filtered.length,
+                            separatorBuilder: (_, __) =>
+                                const Divider(height: 1),
+                            itemBuilder: (_, i) {
+                              if (filtered.isEmpty) {
+                                return const ListTile(
+                                  title: Text('該当する店舗がありません'),
                                 );
-                              },
-                            ),
+                              }
+                              final t = filtered[i];
+                              final name = (t.data()['name'] ?? '(no name)')
+                                  .toString();
+                              final selected = t.id == _selectedTenantId;
+                              return ListTile(
+                                dense: true,
+                                title: Text(
+                                  name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                trailing: selected
+                                    ? const Icon(
+                                        Icons.check,
+                                        color: Colors.black87,
+                                      )
+                                    : null,
+                                onTap: () {
+                                  if (!mounted) return;
+                                  setState(() => _selectedTenantId = t.id);
+                                  Navigator.of(ctx, rootNavigator: false).pop();
+                                },
+                              );
+                            },
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx),
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.black87,
-                    ),
-                    child: const Text('閉じる'),
-                  ),
-                ],
               ),
+              actions: [
+                TextButton(
+                  onPressed: () =>
+                      Navigator.of(ctx, rootNavigator: false).pop(),
+                  style: TextButton.styleFrom(foregroundColor: Colors.black87),
+                  child: const Text('閉じる'),
+                ),
+              ],
             );
           },
         );
@@ -970,17 +1045,17 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
     // 選択済み店舗のストリーム（未選択時はプレースホルダ表示）
     final uidVar = FirebaseAuth.instance.currentUser?.uid;
     final selectedId = _selectedTenantId;
-    final employeesStream = (selectedId == null)
+    final employeesStream = (selectedId == null || uidVar == null)
         ? null
         : FirebaseFirestore.instance
-              .collection(uidVar!)
+              .collection(uidVar)
               .doc(selectedId)
               .collection('employees')
               .orderBy('createdAt', descending: true)
               .snapshots();
 
     return Column(
-      mainAxisSize: MainAxisSize.min,
+      mainAxisSize: MainAxisSize.max,
       children: [
         // 店舗選択 + 検索
         Row(
@@ -1034,15 +1109,16 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
 
         // リスト（店舗未選択なら案内）
         if (employeesStream == null)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 24),
-            child: Text(
-              'まず「店舗を選択」をタップして候補を選んでください',
-              style: TextStyle(color: Colors.black87),
+          const Expanded(
+            child: Center(
+              child: Text(
+                'まず「店舗を選択」をタップして候補を選んでください',
+                style: TextStyle(color: Colors.black87),
+              ),
             ),
           )
         else
-          Flexible(
+          Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: employeesStream,
               builder: (context, snap) {
@@ -1050,10 +1126,7 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
                   return Center(child: Text('読み込みエラー: ${snap.error}'));
                 }
                 if (!snap.hasData) {
-                  return const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 24),
-                    child: CircularProgressIndicator(),
-                  );
+                  return const Center(child: CircularProgressIndicator());
                 }
                 final docs = snap.data!.docs;
                 var items = docs
@@ -1067,118 +1140,125 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
                         email.contains(_otherSearch);
                   }).toList();
                 }
-                if (items.isEmpty) {
-                  return const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16),
-                    child: Text('該当スタッフがいません'),
-                  );
-                }
 
-                return ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: items.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
-                  itemBuilder: (_, i) {
-                    final m = items[i];
-                    final name = (m['name'] ?? '') as String? ?? 'スタッフ';
-                    final email = (m['email'] ?? '') as String? ?? '';
-                    final photoUrl = (m['photoUrl'] ?? '') as String? ?? '';
-                    final comment = (m['comment'] ?? '') as String? ?? '';
+                // 常に Scrollbar + ListView を返し、空でも ScrollPosition を持たせる
+                final count = (items.isEmpty) ? 1 : items.length;
+                return Scrollbar(
+                  controller: _otherEmpListCtrl,
+                  thumbVisibility: true,
+                  child: ListView.separated(
+                    controller: _otherEmpListCtrl,
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    itemCount: count,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (_, i) {
+                      if (items.isEmpty) {
+                        return const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 24),
+                          child: Center(child: Text('該当スタッフがいません')),
+                        );
+                      }
+                      final m = items[i];
+                      final name = (m['name'] ?? '') as String? ?? 'スタッフ';
+                      final email = (m['email'] ?? '') as String? ?? '';
+                      final photoUrl = (m['photoUrl'] ?? '') as String? ?? '';
+                      final comment = (m['comment'] ?? '') as String? ?? '';
 
-                    return Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: const Color(0x11000000)),
-                      ),
-                      padding: const EdgeInsets.all(10),
-                      child: Row(
-                        children: [
-                          CircleAvatar(
-                            radius: 22,
-                            backgroundImage: photoUrl.isNotEmpty
-                                ? NetworkImage(photoUrl)
-                                : null,
-                            child: photoUrl.isEmpty
-                                ? const Icon(Icons.person)
-                                : null,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  name,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.black87,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                if (email.isNotEmpty)
+                      return Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0x11000000)),
+                        ),
+                        padding: const EdgeInsets.all(10),
+                        child: Row(
+                          children: [
+                            CircleAvatar(
+                              radius: 22,
+                              backgroundImage: photoUrl.isNotEmpty
+                                  ? NetworkImage(photoUrl)
+                                  : null,
+                              child: photoUrl.isEmpty
+                                  ? const Icon(Icons.person)
+                                  : null,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
                                   Text(
-                                    email,
+                                    name,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
-                                      color: Colors.black54,
-                                    ),
-                                  ),
-                                if (comment.isNotEmpty) ...[
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    comment,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
                                       color: Colors.black87,
                                     ),
                                   ),
+                                  const SizedBox(height: 2),
+                                  if (email.isNotEmpty)
+                                    Text(
+                                      email,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Colors.black54,
+                                      ),
+                                    ),
+                                  if (comment.isNotEmpty) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      comment,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+                                  ],
                                 ],
-                              ],
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          FilledButton.tonalIcon(
-                            onPressed: () {
-                              // 取り込み（タブ1のフォームに反映）
-                              _nameCtrl.text = name;
-                              _emailCtrl.text = email;
-                              _commentCtrl.text = comment;
+                            const SizedBox(width: 8),
+                            FilledButton.tonalIcon(
+                              onPressed: () {
+                                // 取り込み（タブ1のフォームに反映）
+                                _nameCtrl.text = name;
+                                _emailCtrl.text = email;
+                                _commentCtrl.text = comment;
 
-                              // ローカル状態を URL で更新
-                              setState(() {
-                                _localPhotoBytes = null;
-                                _localPhotoName = null;
-                                _localPrefilledPhotoUrl = photoUrl;
-                              });
+                                // ローカル状態を URL で更新
+                                setState(() {
+                                  _localPhotoBytes = null;
+                                  _localPhotoName = null;
+                                  _localPrefilledPhotoUrl = photoUrl;
+                                });
 
-                              // 親にも通知（任意）
-                              widget.onLocalStateChanged(
-                                false,
-                                null,
-                                null,
-                                photoUrl,
-                              );
+                                // 親にも通知（任意）
+                                widget.onLocalStateChanged(
+                                  false,
+                                  null,
+                                  null,
+                                  photoUrl,
+                                );
 
-                              // タブ1に切り替え
-                              _tab.animateTo(0);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('フォームに取り込みました（取り込み先は現在の店舗）'),
-                                ),
-                              );
-                            },
-                            icon: const Icon(Icons.download),
-                            label: const Text('取り込む'),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
+                                // タブ1に切り替え
+                                _tab.animateTo(0);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('フォームに取り込みました（取り込み先は現在の店舗）'),
+                                  ),
+                                );
+                              },
+                              icon: const Icon(Icons.download),
+                              label: const Text('取り込む'),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
                 );
               },
             ),

@@ -543,6 +543,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                                           tenantName: tenantName ?? '店舗',
                                           employeeName: name,
                                           amount: amount,
+                                          uid: uid,
                                         ),
                                       ),
                                     );

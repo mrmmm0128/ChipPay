@@ -91,14 +91,6 @@ class TrialProgressBar extends StatelessWidget {
                       ),
                     ),
                   ),
-                  if (onTap != null && !ended)
-                    Text(
-                      '管理',
-                      style: TextStyle(
-                        color: barColor.shade700,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
                 ],
               ),
               const SizedBox(height: 10),

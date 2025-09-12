@@ -36,32 +36,122 @@ class _TipCompletePageState extends State<TipCompletePage> {
   }
 
   Future<_LinksGateResult> _loadLinksGate() async {
-    // Firestore: tenants/{tenantId}
-    final doc = await FirebaseFirestore.instance
-        .collection('tenants')
-        .doc(widget.tenantId)
-        .get();
+    final String tid = widget.tenantId;
+    final String? uid = widget.uid;
 
-    final data = (doc.data() ?? <String, dynamic>{});
-    final isSubC = _isSubscriptionC(data);
+    final fs = FirebaseFirestore.instance;
 
-    // 特典リンクは subscription.extras または直下にある可能性に両対応
-    final extras =
-        (data['subscription']?['extras'] as Map?)?.cast<String, dynamic>() ??
-        {};
-    final googleReviewUrl =
-        (extras['googleReviewUrl'] as String?) ??
-        (data['googleReviewUrl'] as String?) ??
-        '';
-    final lineOfficialUrl =
-        (extras['lineOfficialUrl'] as String?) ??
-        (data['lineOfficialUrl'] as String?) ??
-        '';
+    // 1) 読みやすいヘルパー
+    Future<Map<String, dynamic>?> _read(DocumentReference ref) async {
+      try {
+        final snap = await ref.get();
+        if (!snap.exists) return null;
+        final data = snap.data();
+        return (data is Map<String, dynamic>) ? data : null;
+      } on FirebaseException catch (_) {
+        // 読み取り権限がない/存在しないなどは黙って無視（公開ページ想定）
+        return null;
+      } catch (_) {
+        return null;
+      }
+    }
 
-    // 感謝の写真/動画は c_perks.* に格納
-    final perks = (data['c_perks'] as Map?)?.cast<String, dynamic>() ?? {};
-    final thanksPhotoUrl = (perks['thanksPhotoUrl'] as String?) ?? '';
-    final thanksVideoUrl = (perks['thanksVideoUrl'] as String?) ?? '';
+    String _pickStr(List<dynamic> candidates) {
+      for (final v in candidates) {
+        if (v is String && v.trim().isNotEmpty) return v.trim();
+      }
+      return '';
+    }
+
+    String? _readPlan(Map<String, dynamic> m) {
+      final sub = m['subscription'];
+      if (sub is Map) {
+        final p = sub['plan'];
+        if (p is String && p.trim().isNotEmpty) return p.trim();
+      }
+      for (final k in const ['subscriptionPlan', 'plan', 'subscription_type']) {
+        final v = m[k];
+        if (v is String && v.trim().isNotEmpty) return v.trim();
+      }
+      return null;
+    }
+
+    String? _getThanksPhoto(Map<String, dynamic> m) {
+      // c_perks.thanksPhotoUrl or top-level thanksPhotoUrl
+      final perks = m['c_perks'];
+      final fromPerks = (perks is Map) ? perks['thanksPhotoUrl'] : null;
+      return _pickStr([fromPerks, m['thanksPhotoUrl']]);
+    }
+
+    String? _getThanksVideo(Map<String, dynamic> m) {
+      // c_perks.thanksVideoUrl or top-level thanksVideoUrl
+      final perks = m['c_perks'];
+      final fromPerks = (perks is Map) ? perks['thanksVideoUrl'] : null;
+      return _pickStr([fromPerks, m['thanksVideoUrl']]);
+    }
+
+    String? _getGoogleReview(Map<String, dynamic> m) {
+      // subscription.extras.googleReviewUrl → top-level googleReviewUrl
+      final sub = m['subscription'];
+      final extras = (sub is Map && sub['extras'] is Map)
+          ? (sub['extras'] as Map).cast<String, dynamic>()
+          : const <String, dynamic>{};
+      return _pickStr([extras['googleReviewUrl'], m['googleReviewUrl']]);
+    }
+
+    String? _getLineOfficial(Map<String, dynamic> m) {
+      final sub = m['subscription'];
+      final extras = (sub is Map && sub['extras'] is Map)
+          ? (sub['extras'] as Map).cast<String, dynamic>()
+          : const <String, dynamic>{};
+      return _pickStr([extras['lineOfficialUrl'], m['lineOfficialUrl']]);
+    }
+
+    // 2) 候補ドキュメントを全部読む（取れるものだけ）
+    Map<String, dynamic> userTenant = const {};
+    Map<String, dynamic> publicTenant = const {};
+    Map<String, dynamic> publicThanks = const {};
+
+    if (uid != null && uid.isNotEmpty) {
+      userTenant =
+          await _read(fs.collection(uid).doc(tid)) ?? const <String, dynamic>{};
+    }
+    publicTenant =
+        await _read(fs.collection('tenants').doc(tid)) ??
+        const <String, dynamic>{};
+
+    // アップローダが publicThanks にも保存しているのでここも見る
+    publicThanks =
+        await _read(fs.collection('publicThanks').doc(tid)) ??
+        const <String, dynamic>{};
+
+    // 3) マージ方針
+    // - プランや extras は「userTenant → publicTenant」の優先で採用
+    // - 写真/動画は「userTenant → publicThanks → publicTenant」の優先で採用
+    //   （アップロード実装に合わせて publicThanks を中間に挟む）
+    final planRaw = _readPlan(userTenant) ?? _readPlan(publicTenant) ?? '';
+    final plan = planRaw.toUpperCase().trim();
+    final isSubC = plan == 'C';
+
+    final googleReviewUrl = _pickStr([
+      _getGoogleReview(userTenant),
+      _getGoogleReview(publicTenant),
+    ]);
+    final lineOfficialUrl = _pickStr([
+      _getLineOfficial(userTenant),
+      _getLineOfficial(publicTenant),
+    ]);
+
+    final thanksPhotoUrl = _pickStr([
+      _getThanksPhoto(userTenant),
+      _getThanksPhoto(publicThanks),
+      _getThanksPhoto(publicTenant),
+    ]);
+    final thanksVideoUrl = _pickStr([
+      _getThanksVideo(userTenant),
+      _getThanksVideo(publicThanks),
+      _getThanksVideo(publicTenant),
+    ]);
 
     return _LinksGateResult(
       isSubC: isSubC,
@@ -70,19 +160,6 @@ class _TipCompletePageState extends State<TipCompletePage> {
       thanksPhotoUrl: thanksPhotoUrl,
       thanksVideoUrl: thanksVideoUrl,
     );
-  }
-
-  bool _isSubscriptionC(Map<String, dynamic> data) {
-    final v =
-        (data['subscription']?['plan'] ??
-                data['subscriptionPlan'] ??
-                data['plan'] ??
-                data['subscription_type'] ??
-                '')
-            .toString()
-            .toUpperCase()
-            .trim();
-    return v == 'C';
   }
 
   void _navigatePublicStorePage() {

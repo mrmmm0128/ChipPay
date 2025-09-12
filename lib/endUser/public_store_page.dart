@@ -256,7 +256,8 @@ class PublicStorePageState extends State<PublicStorePage> {
         final tData = tSnap.data?.data();
         final subType = (tData?['subscription']?['plan'] as String?)
             ?.toUpperCase();
-        final isTypeC = subType == 'C';
+        final isTypeC =
+            subType == 'C' || ((tenantPlan ?? '').toUpperCase() == 'C');
 
         final lineUrl =
             (tData?['publicLinks']?['lineOfficialUrl'] as String?) ?? '';
@@ -522,7 +523,7 @@ class PublicStorePageState extends State<PublicStorePage> {
                 const SizedBox(height: 10),
 
                 // ── ご協力お願いします（Cタイプのみ表示） ───────────
-                if (tenantPlan! == "C") ...[
+                if (isTypeC) ...[
                   _Sectionbar(title: tr('section.initiate1')),
                   Padding(
                     padding: const EdgeInsets.symmetric(

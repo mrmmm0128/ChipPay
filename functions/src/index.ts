@@ -150,6 +150,27 @@ type DeductionRule = {
   effectiveFrom?: FirebaseFirestore.Timestamp | null;
 };
 
+const OWNER_EMAILS = new Set(["appfromkomeda@gmail.com"]); // 自分の運営アカウントに置換
+
+export const setAdminByEmail = functions
+  .region("us-central1")
+  .https.onCall(async (data, context) => {
+    const callerEmail = context.auth?.token?.email;
+    if (!callerEmail || !OWNER_EMAILS.has(callerEmail)) {
+      throw new functions.https.HttpsError("permission-denied", "not allowed");
+    }
+    const email = (data.email as string)?.trim();
+    const value = (data.value as boolean) ?? true;
+    if (!email) {
+      throw new functions.https.HttpsError("invalid-argument", "email required");
+    }
+    const user = await admin.auth().getUserByEmail(email);
+    const claims = user.customClaims || {};
+    claims.admin = value;
+    await admin.auth().setCustomUserClaims(user.uid, claims);
+    return { ok: true, uid: user.uid, email, admin: value };
+  });
+
 async function pickEffectiveRule(tenantId: string, at: Date, uid: string): Promise<DeductionRule> {
   const histSnap = await db
     .collection(uid)
@@ -381,10 +402,7 @@ export const createTipSessionPublic = functions
     return { checkoutUrl: session.url, sessionId: session.id, tipDocId: tipRef.id };
   });
 
-/* ============================================================
- *  公開ページ: チップ（店舗宛）
- *  ※ uid 不明 → tenantIndex から逆引き
- * ==========================================================*/
+
 export const createStoreTipSessionPublic = functions
   .region("us-central1")
   .runWith({
@@ -683,6 +701,10 @@ export const stripeWebhook = functions
       return;
     }
 
+    const requestOptions: Stripe.RequestOptions | undefined = event.account
+      ? { stripeAccount: event.account as string }
+      : undefined;
+
     const type = event.type;
     const docRef = db.collection("webhookEvents").doc(event.id);
     await docRef.set({
@@ -690,6 +712,18 @@ export const stripeWebhook = functions
       receivedAt: admin.firestore.FieldValue.serverTimestamp(),
       handled: false,
     });
+
+    // ★ 両方へ保存する小ヘルパ（{uid}/{tenantId} と tenantIndex）
+    async function writeIndexAndOwner(
+      uid: string,
+      tenantId: string,
+      patch: FirebaseFirestore.DocumentData
+    ) {
+      await Promise.all([
+        db.collection(uid).doc(tenantId).set(patch, { merge: true }),
+        db.collection("tenantIndex").doc(tenantId).set({ ...patch, uid, tenantId }, { merge: true }),
+      ]);
+    }
 
     try {
       /* ========== 1) Checkout 完了 ========== */
@@ -719,26 +753,27 @@ export const stripeWebhook = functions
                 : undefined;
             }
 
-            // uid の確定（meta 優先 → index）
+            // uid の確定
             let uid = uidMeta;
             if (!uid) {
               const tRefIdx = await tenantRefByIndex(tenantId);
               uid = tRefIdx.parent!.id;
             }
-            const tRef = tenantRefByUid(uid!, tenantId);
 
             const periodEndTs = tsFromSec(
               (sub as Stripe.Subscription).current_period_end
             );
 
-            await tRef.set(
+            // ★ ここでは owner側のみ（下の subscription.updated でも反映されます）
+            await tenantRefByUid(uid!, tenantId).set(
               {
                 subscription: {
                   plan,
                   status: sub.status,
                   stripeCustomerId: customerId,
                   stripeSubscriptionId: sub.id,
-                  ...putIf(periodEndTs, { currentPeriodEnd: periodEndTs! }),
+                  ...putIf(periodEndTs, { currentPeriodEnd: periodEndTs!, nextPaymentAt: periodEndTs! }),
+                  overdue: sub.status === "past_due" || sub.status === "unpaid", // ★追加
                   ...(typeof feePercent === "number" ? { feePercent } : {}),
                 },
               },
@@ -886,19 +921,30 @@ export const stripeWebhook = functions
 
           try {
             if (payIntentId) {
-              const pi = await stripe.paymentIntents.retrieve(payIntentId, {
-                expand: ["latest_charge.balance_transaction"],
-              });
-              const latestCharge = (pi.latest_charge as Stripe.Charge | null) || null;
+              // 支払い詳細を取る：payment_method と latest_charge を展開
+              const pi = await stripe.paymentIntents.retrieve(
+                payIntentId,
+                {
+                  expand: [
+                    "payment_method",
+                    "latest_charge",
+                    "latest_charge.balance_transaction",
+                  ],
+                },
+                requestOptions // ← Connect対応
+              );
+
+              const latestCharge = (typeof pi.latest_charge === "object"
+                ? (pi.latest_charge as Stripe.Charge)
+                : null) || null;
+
+              // ====== Stripe手数料など（既存ロジック） ======
               const bt =
-                latestCharge?.balance_transaction as
-                  | Stripe.BalanceTransaction
-                  | undefined;
+                latestCharge?.balance_transaction as Stripe.BalanceTransaction | undefined;
 
               const stripeFee = bt?.fee ?? 0;
               const stripeFeeCurrency =
-                bt?.currency?.toUpperCase() ??
-                (session.currency ?? "jpy").toUpperCase();
+                bt?.currency?.toUpperCase() ?? (session.currency ?? "jpy").toUpperCase();
 
               const appFeeAmount = latestCharge?.application_fee_amount ?? 0;
 
@@ -915,6 +961,56 @@ export const stripeWebhook = functions
                 ? Math.max(0, gross - appFeeAmount - stripeFee - storeCut)
                 : 0;
 
+              // ====== 決済手段・カード要約の抽出 ======
+              let pm: Stripe.PaymentMethod | null = null;
+              if (pi.payment_method && typeof pi.payment_method !== "string") {
+                pm = pi.payment_method as Stripe.PaymentMethod;
+              } else if (typeof pi.payment_method === "string") {
+                try {
+                  pm = await stripe.paymentMethods.retrieve(
+                    pi.payment_method as string,
+                    requestOptions
+                  );
+                } catch {
+                  pm = null;
+                }
+              }
+
+              const pmd = latestCharge?.payment_method_details;
+              const cardOnCharge =
+                pmd?.type === "card" ? (pmd.card as any | undefined) : undefined;
+              const cardOnPM = pm?.type === "card" ? pm.card : undefined;
+
+              const paymentSummary: any = {
+                method: pmd?.type || pm?.type || pi.payment_method_types?.[0],
+                paymentIntentId: pi.id,
+                chargeId:
+                  latestCharge?.id ||
+                  (typeof pi.latest_charge === "string" ? (pi.latest_charge as string) : null),
+                paymentMethodId: pm?.id || (typeof pi.payment_method === "string" ? pi.payment_method : null),
+                captureMethod: pi.capture_method,
+                created: tsFromSec(pi.created) ?? nowTs(),
+              };
+
+              if (paymentSummary.method === "card" || cardOnPM || cardOnCharge) {
+                paymentSummary.card = {
+                  brand:
+                    (cardOnCharge?.brand || cardOnPM?.brand || "").toString().toUpperCase() || null,
+                  last4: cardOnCharge?.last4 || cardOnPM?.last4 || null,
+                  expMonth: cardOnPM?.exp_month ?? null,
+                  expYear: cardOnPM?.exp_year ?? null,
+                  funding: cardOnPM?.funding ?? null,
+                  country: cardOnPM?.country ?? null,
+                  network:
+                    cardOnCharge?.network || cardOnPM?.networks?.preferred || null,
+                  wallet: cardOnCharge?.wallet?.type || null,
+                  threeDSecure:
+                    (cardOnCharge?.three_d_secure as any)?.result ??
+                    (pmd as any)?.card?.three_d_secure?.result ??
+                    null,
+                };
+              }
+
               await tipRef.set(
                 {
                   fees: {
@@ -926,16 +1022,17 @@ export const stripeWebhook = functions
                     },
                   },
                   net: {
-                    toStore: toStore,
-                    toStaff: toStaff,
+                    toStore,
+                    toStaff,
                   },
+                  payment: paymentSummary,
                   feesComputedAt: admin.firestore.FieldValue.serverTimestamp(),
                 },
                 { merge: true }
               );
             }
           } catch (err) {
-            console.error("Failed to enrich tip with stripe fee:", err);
+            console.error("Failed to enrich tip with stripe fee/payment details:", err);
           }
         }
       }
@@ -1004,24 +1101,26 @@ export const stripeWebhook = functions
             : undefined;
         }
 
-        await tenantRefByUid(uid!, tenantId).set(
-          {
-            subscription: {
-              plan,
-              status: sub.status,
-              stripeCustomerId: (sub.customer as string) ?? undefined,
-              stripeSubscriptionId: sub.id,
-              ...putIf(periodEndTs, { currentPeriodEnd: periodEndTs! }),
-              trial: {
-                status: isTrialing ? "trialing" : "none",
-                ...putIf(trialStartTs, { trialStart: trialStartTs! }),
-                ...putIf(trialEndTs, { trialEnd: trialEndTs! }),
-              },
-              ...(typeof feePercent === "number" ? { feePercent } : {}),
+        // ★ nextPaymentAt と overdue を追加し、両ドキュメントに反映
+        const subPatch = {
+          subscription: {
+            plan,
+            status: sub.status,
+            stripeCustomerId: (sub.customer as string) ?? undefined,
+            stripeSubscriptionId: sub.id,
+            ...putIf(periodEndTs, { currentPeriodEnd: periodEndTs!, nextPaymentAt: periodEndTs! }),
+            trial: {
+              status: isTrialing ? "trialing" : "none",
+              ...putIf(trialStartTs, { trialStart: trialStartTs! }),
+              ...putIf(trialEndTs, { trialEnd: trialEndTs! }),
             },
+            overdue: sub.status === "past_due" || sub.status === "unpaid", // ★追加
+            ...(typeof feePercent === "number" ? { feePercent } : {}),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           },
-          { merge: true }
-        );
+        };
+
+        await writeIndexAndOwner(uid!, tenantId, subPatch);
 
         // トライアル終了直後に再トライアル防止フラグを付与
         try {
@@ -1050,20 +1149,20 @@ export const stripeWebhook = functions
             uid = tRefIdx.parent!.id;
           }
           const periodEndTs = tsFromSec(sub.current_period_end);
-          await tenantRefByUid(uid!, tenantId).set(
-            {
-              subscription: {
-                status: "canceled",
-                stripeSubscriptionId: sub.id,
-                ...putIf(periodEndTs, { currentPeriodEnd: periodEndTs! }),
-              },
+          const patch = {
+            subscription: {
+              status: "canceled",
+              stripeSubscriptionId: sub.id,
+              ...putIf(periodEndTs, { currentPeriodEnd: periodEndTs!, nextPaymentAt: periodEndTs! }),
+              overdue: false,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             },
-            { merge: true }
-          );
+          };
+          await writeIndexAndOwner(uid!, tenantId, patch);
         }
       }
 
-      /* ========== 4) 請求書 ========== */
+      /* ========== 4) 請求書（支払成功/失敗） ========== */
       if (type === "invoice.payment_succeeded" || type === "invoice.payment_failed") {
         const inv = event.data.object as Stripe.Invoice;
         const customerId = inv.customer as string;
@@ -1090,7 +1189,10 @@ export const stripeWebhook = functions
         // 既存のテナント検索・invoices 保存
         const idxSnap = await db.collection("tenantIndex").get();
         for (const d of idxSnap.docs) {
-          const { uid, tenantId } = d.data() as TenantIndexDoc;
+          const data: any = d.data();
+          const uid = data.uid as string;
+          const tenantId = data.tenantId as string;
+
           const t = await db.collection(uid).doc(tenantId).get();
           if (t.exists && t.get("subscription.stripeCustomerId") === customerId) {
             const createdTs = tsFromSec(inv.created) ?? nowTs();
@@ -1098,6 +1200,7 @@ export const stripeWebhook = functions
             const psTs = tsFromSec((line0?.start as any) ?? inv.created) ?? createdTs;
             const peTs = tsFromSec((line0?.end as any) ?? inv.created) ?? createdTs;
 
+            // invoices コレクションは従来どおり保存
             await db
               .collection(uid)
               .doc(tenantId)
@@ -1118,6 +1221,38 @@ export const stripeWebhook = functions
                 },
                 { merge: true }
               );
+
+            // ★ 未払い/解消 と 次回再試行（失敗時）・直近請求サマリを保存（owner & index）
+            const nextAttemptTs = tsFromSec(inv.next_payment_attempt);
+            const subPatch =
+              type === "invoice.payment_failed"
+                ? {
+                    subscription: {
+                      overdue: true,
+                      latestInvoice: {
+                        id: inv.id,
+                        status: inv.status,
+                        amountDue: inv.amount_due ?? null,
+                        hostedInvoiceUrl: inv.hosted_invoice_url ?? null,
+                      },
+                      ...putIf(nextAttemptTs, { nextPaymentAttemptAt: nextAttemptTs! }),
+                      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                    },
+                  }
+                : {
+                    subscription: {
+                      overdue: false,
+                      latestInvoice: {
+                        id: inv.id,
+                        status: inv.status,
+                        amountPaid: inv.amount_paid ?? null,
+                        hostedInvoiceUrl: inv.hosted_invoice_url ?? null,
+                      },
+                      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                    },
+                  };
+
+            await writeIndexAndOwner(uid, tenantId, subPatch);
             break;
           }
         }
@@ -1129,6 +1264,21 @@ export const stripeWebhook = functions
         try {
           const tRef = await tenantRefByStripeAccount(acct.id);
           await tRef.set(
+            {
+              connect: {
+                charges_enabled: !!acct.charges_enabled,
+                payouts_enabled: !!acct.payouts_enabled,
+                details_submitted: !!acct.details_submitted,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              },
+            },
+            { merge: true }
+          );
+          // インデックスにも反映
+          const tSnap = await tRef.get();
+          const tenantId = tSnap.id;
+          const idx = db.collection("tenantIndex").doc(tenantId);
+          await idx.set(
             {
               connect: {
                 charges_enabled: !!acct.charges_enabled,
@@ -1166,6 +1316,18 @@ export const stripeWebhook = functions
                   currency: (pi.currency ?? "jpy").toUpperCase(),
                   stripePaymentIntentId: pi.id,
                   paidAt: admin.firestore.FieldValue.serverTimestamp(),
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                },
+              },
+            },
+            { merge: true }
+          );
+          // インデックスにも反映
+          await db.collection("tenantIndex").doc(tenantId).set(
+            {
+              billing: {
+                initialFee: {
+                  status: "paid",
                   updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                 },
               },
@@ -1211,6 +1373,7 @@ export const stripeWebhook = functions
       return;
     }
   });
+
 
 
 

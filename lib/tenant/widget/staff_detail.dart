@@ -8,6 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher_string.dart';
+import 'package:yourpay/tenant/method/fetchPlan.dart';
+import 'package:yourpay/tenant/widget/upload_video.dart';
 
 class StaffDetailScreen extends StatefulWidget {
   final String tenantId;
@@ -31,6 +33,16 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
   Uint8List? _newPhotoBytes;
   String? _newPhotoName;
   bool _saving = false;
+  String _plan = 'UNKNOWN';
+
+  @override
+  void initState() {
+    super.initState();
+    fetchPlanStringById(uid!, widget.tenantId).then((p) {
+      if (!mounted) return;
+      setState(() => _plan = p);
+    });
+  }
 
   // 公開ページのベースURL（末尾スラなし）
   static const String _publicBase =
@@ -44,7 +56,7 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
       if (initAmount != null) 'a': '$initAmount',
     };
     final query = Uri(queryParameters: qp).query;
-    return '$_publicBase/#/store/staff?$query';
+    return '$_publicBase/#/staff?$query';
   }
 
   Future<void> _pickNewPhoto() async {
@@ -337,7 +349,9 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
                         const SizedBox(height: 12),
                         TextField(
                           controller: _emailCtrl,
-                          decoration: _inputDeco('メールアドレス（任意）'),
+                          decoration: _inputDeco(
+                            'メールアドレス（任意） *メールアドレスを登録すると、チップ受け取り時にメールが届きます。',
+                          ),
                           style: const TextStyle(color: Colors.black87),
                           keyboardType: TextInputType.emailAddress,
                         ),
@@ -376,6 +390,13 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
                       ],
                     ),
                   ),
+                  const SizedBox(height: 16),
+
+                  if (_plan == "C")
+                    StaffThanksVideoManager(
+                      tenantId: widget.tenantId,
+                      staffId: widget.employeeId,
+                    ),
 
                   const SizedBox(height: 16),
 

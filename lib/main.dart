@@ -5,10 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 import 'package:easy_localization/easy_localization.dart';
-
-import 'package:yourpay/admin/admin_dashboard_screen.dart';
-import 'package:yourpay/admin/admin_login_screen.dart';
-import 'package:yourpay/admin/admin_tenant_detrail_screen.dart';
+import 'package:yourpay/appadmin/admin_dashboard_screen.dart';
+import 'package:yourpay/bootGate.dart';
 import 'package:yourpay/endUser/tip_complete_page.dart';
 import 'package:yourpay/tenant/account_detail_screen.dart';
 import 'package:yourpay/endUser/public_store_page.dart';
@@ -18,7 +16,7 @@ import 'package:yourpay/tenant/staff_qr/qr_poster_build_page.dart';
 import 'package:yourpay/tenant/store_admin_add/accept_invite_screen.dart';
 import 'package:yourpay/tenant/store_list_screen.dart';
 import 'tenant/login_screens.dart';
-import 'tenant/store_detail_screen.dart';
+import 'tenant/store_detail/store_detail_screen.dart';
 import 'endUser/payer_landing_screen.dart';
 
 // ===== Firebase options（そのままでOK） =====
@@ -132,14 +130,12 @@ class MyApp extends StatelessWidget {
     // それ以外の静的ルート
     final staticRoutes = <String, WidgetBuilder>{
       '/': (_) => const Root(),
-      '/login': (_) => const LoginScreen(),
+      '/login': (_) => const BootGate(),
       '/stores': (_) => const StoreListScreen(),
       '/store': (_) => const StoreDetailScreen(),
       '/staff': (_) => const StaffDetailPage(),
       '/account': (_) => const AccountDetailScreen(),
-      '/admin-login': (_) => const AdminLoginScreen(),
-      '/admin': (_) => const AdminDashboardScreen(),
-      '/admin/tenant': (_) => const AdminTenantDetailScreen(),
+      '/admin': (_) => const AdminDashboardHome(),
       '/admin-invite': (_) => const AcceptInviteScreen(),
       '/qr-all': (_) => const PublicStaffQrListPage(),
       '/qr-all/qr-builder': (_) => const QrPosterBuilderPage(),
@@ -219,10 +215,10 @@ class Root extends StatelessWidget {
         }
 
         if (snap.data == null) {
-          return const LoginScreen();
+          return const BootGate();
         }
 
-        return const StoreOrAdminSwitcher();
+        return const BootGate();
       },
     );
   }

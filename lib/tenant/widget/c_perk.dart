@@ -21,8 +21,8 @@ Widget buildCPerksSection({
   required VoidCallback onSaveExtras, // () => _saveExtras(tenantRef)
   required VoidCallback onPickPhoto, // () => _pickAndUploadPhoto(tenantRef)
   required VoidCallback onDeletePhoto, // () => _deleteThanksPhoto(tenantRef)
-  required VoidCallback onPickVideo, // () => _pickAndUploadVideo(tenantRef)
-  required VoidCallback onDeleteVideo, // () => _deleteThanksVideo(tenantRef)
+  required DocumentReference thanksRef,
+
   required void Function(BuildContext, String)
   onPreviewVideo, // showVideoPreview
   required ButtonStyle primaryBtnStyle,
@@ -75,22 +75,118 @@ Widget buildCPerksSection({
           const SizedBox(height: 8),
 
           // 表示用リンク
-          TextField(
-            controller: lineUrlCtrl,
-            decoration: const InputDecoration(
-              labelText: '公式LINEリンク（任意）',
-              hintText: 'https://lin.ee/xxxxx',
-            ),
-            keyboardType: TextInputType.url,
+          // ▼ ここを置き換え：LINE リンク（入力 + 個別保存ボタン）
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: lineUrlCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '公式LINEリンク（任意）',
+                    hintText: 'https://lin.ee/xxxxx',
+                  ),
+                  keyboardType: TextInputType.url,
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                onPressed: () async {
+                  final v = lineUrlCtrl.text.trim();
+                  try {
+                    if (v.isEmpty) {
+                      // 空なら削除（フィールドを消す）
+                      try {
+                        await tenantRef.update({
+                          'c_perks.lineUrl': FieldValue.delete(),
+                        });
+                      } catch (_) {
+                        // doc 未作成などで失敗したら無視（実害なし）
+                      }
+                    } else {
+                      // 値ありならマージ保存
+                      await tenantRef.set({
+                        'c_perks.lineUrl': v,
+                      }, SetOptions(merge: true));
+
+                      await thanksRef.set({
+                        'c_perks.lineUrl': v,
+                      }, SetOptions(merge: true));
+                    }
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('LINEリンクを保存しました')),
+                      );
+                    }
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(SnackBar(content: Text('保存に失敗しました: $e')));
+                    }
+                  }
+                },
+                icon: const Icon(Icons.save),
+                label: const Text('保存'),
+              ),
+            ],
           ),
+
           const SizedBox(height: 8),
-          TextField(
-            controller: reviewUrlCtrl,
-            decoration: const InputDecoration(
-              labelText: 'Googleレビューリンク（任意）',
-              hintText: 'https://g.page/r/xxxxx/review',
-            ),
-            keyboardType: TextInputType.url,
+
+          // ▼ ここを置き換え：Google レビュー（入力 + 個別保存ボタン）
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: reviewUrlCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Googleレビューリンク（任意）',
+                    hintText: 'https://g.page/r/xxxxx/review',
+                  ),
+                  keyboardType: TextInputType.url,
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                onPressed: () async {
+                  final v = reviewUrlCtrl.text.trim();
+                  try {
+                    if (v.isEmpty) {
+                      // 空なら削除
+                      try {
+                        await tenantRef.update({
+                          'c_perks.reviewUrl': FieldValue.delete(),
+                        });
+                      } catch (_) {}
+                    } else {
+                      // 値ありならマージ保存
+                      await tenantRef.set({
+                        'c_perks.reviewUrl': v,
+                      }, SetOptions(merge: true));
+
+                      await thanksRef.set({
+                        'c_perks.reviewUrl': v,
+                      }, SetOptions(merge: true));
+                    }
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Googleレビューリンクを保存しました')),
+                      );
+                    }
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(SnackBar(content: Text('保存に失敗しました: $e')));
+                    }
+                  }
+                },
+                icon: const Icon(Icons.save),
+                label: const Text('保存'),
+              ),
+            ],
           ),
 
           const SizedBox(height: 16),
@@ -252,91 +348,13 @@ Widget buildCPerksSection({
                           : const Icon(Icons.movie, size: 32)),
               ),
               const SizedBox(width: 12),
-
-              // 右：説明＆操作
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('感謝の動画（MP4/MOV/WEBM・50MBまで）'),
-                    const SizedBox(height: 8),
-                    if ((displayVideoUrl ?? '').isNotEmpty)
-                      const Padding(
-                        padding: EdgeInsets.only(bottom: 6),
-                        child: _HintRow('登録済みの動画があります（プレビューで再生できます）'),
-                      ),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        FilledButton.icon(
-                          onPressed: uploadingVideo ? null : onPickVideo,
-                          icon: const Icon(Icons.file_upload),
-                          label: Text(
-                            (displayVideoUrl ?? '').isNotEmpty
-                                ? '動画を差し替え'
-                                : '動画を選ぶ',
-                          ),
-                        ),
-                        if ((displayVideoUrl ?? '').isNotEmpty)
-                          OutlinedButton.icon(
-                            onPressed: uploadingVideo
-                                ? null
-                                : () =>
-                                      onPreviewVideo(context, displayVideoUrl!),
-                            icon: const Icon(Icons.play_circle_outline),
-                            label: const Text('プレビュー'),
-                          ),
-                        if ((displayVideoUrl ?? '').isNotEmpty)
-                          OutlinedButton.icon(
-                            onPressed: uploadingVideo ? null : onDeleteVideo,
-                            icon: const Icon(Icons.delete_outline),
-                            label: const Text('動画を削除'),
-                          ),
-                        if ((displayVideoUrl ?? '').isNotEmpty)
-                          OutlinedButton.icon(
-                            onPressed: () => launchUrlString(
-                              displayVideoUrl!,
-                              mode: LaunchMode.externalApplication,
-                            ),
-                            icon: const Icon(Icons.open_in_new),
-                            label: const Text('動画を開く'),
-                          ),
-                      ],
-                    ),
-                    if ((displayVideoUrl ?? '').isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        '保存URL: $displayVideoUrl',
-                        style: Theme.of(context).textTheme.bodySmall,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ],
-                ),
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text("チップを贈ってくれた方にお礼の動画を提供しましょう。\nスタッフ詳細画面から登録してください。"),
+                ],
               ),
             ],
-          ),
-
-          const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerRight,
-            child: FilledButton.icon(
-              style: primaryBtnStyle,
-              onPressed: savingExtras ? null : onSaveExtras,
-              icon: savingExtras
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.link),
-              label: const Text('特典を保存'),
-            ),
           ),
         ],
       );

@@ -1,11 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-
 import 'package:yourpay/fonts/jp_font.dart';
-import 'package:yourpay/tenant/widget/card_shell.dart';
-import 'package:yourpay/tenant/widget/home_metrics.dart';
-import 'package:yourpay/tenant/widget/range_pill.dart';
+import 'package:yourpay/tenant/widget/subscription_card.dart';
+
+import 'package:yourpay/tenant/widget/chip_card.dart';
 import 'package:yourpay/tenant/widget/rank_entry.dart';
 import 'package:yourpay/tenant/widget/period_payment_page.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -35,6 +34,60 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
   // 除外するスタッフ（チップの集計・ランキング・PDFから外す）
   final Set<String> _excludedStaff = <String>{};
 
+  // ====== State フィールド ======
+  Stream<QuerySnapshot<Map<String, dynamic>>>? _tipsStream;
+  String? _lastTipsKey;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _maybeShowCreatedTenantToast(),
+    );
+    _tipsStream;
+  }
+
+  @override
+  void didUpdateWidget(covariant StoreHomeTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.tenantId != widget.tenantId) {
+      _lastTipsKey = null; // ← 強制的に再作成させる
+      _ensureTipsStream(); // ← 新テナントで作り直し
+    }
+  }
+
+  // 期間から一意キーを作る
+  String _makeRangeKey(DateTime? start, DateTime? endExclusive) =>
+      '${widget.tenantId}:${start?.millisecondsSinceEpoch ?? -1}-${endExclusive?.millisecondsSinceEpoch ?? -1}';
+
+  // bounds が変わった時だけ stream を作り直す
+  void _ensureTipsStream() {
+    final uid = FirebaseAuth.instance.currentUser!.uid; // 取得方法はお好みで
+    final b = _rangeBounds(); // 既存の期間計算
+    final key = _makeRangeKey(b.start, b.endExclusive);
+    if (key == _lastTipsKey && _tipsStream != null) return;
+
+    Query<Map<String, dynamic>> q = FirebaseFirestore.instance
+        .collection(uid)
+        .doc(widget.tenantId)
+        .collection('tips')
+        .where('status', isEqualTo: 'succeeded');
+
+    if (b.start != null) {
+      q = q.where(
+        'createdAt',
+        isGreaterThanOrEqualTo: Timestamp.fromDate(b.start!),
+      );
+    }
+    if (b.endExclusive != null) {
+      q = q.where('createdAt', isLessThan: Timestamp.fromDate(b.endExclusive!));
+    }
+    q = q.orderBy('createdAt', descending: true).limit(1000);
+
+    _tipsStream = q.snapshots();
+    _lastTipsKey = key;
+  }
+
   // ===== ユーティリティ =====
   DateTime _firstDayOfMonth(DateTime d) => DateTime(d.year, d.month, 1);
   DateTime _firstDayOfNextMonth(DateTime d) => (d.month == 12)
@@ -55,14 +108,6 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
   }
 
   final uid = FirebaseAuth.instance.currentUser?.uid;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => _maybeShowCreatedTenantToast(),
-    );
-  }
 
   Future<void> _maybeShowCreatedTenantToast() async {
     final uri = Uri.base;
@@ -195,17 +240,22 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
 
   // 期間に含まれる各「対象月」の翌月25日を列挙
   List<DateTime> _payoutDatesForRange(DateTime start, DateTime endExclusive) {
-    final dates = <DateTime>[];
-    var cur = DateTime(start.year, start.month, 1);
-    final endMonth = DateTime(endExclusive.year, endExclusive.month, 1);
-    while (cur.isBefore(endMonth)) {
-      final isDec = cur.month == 12;
-      final y = isDec ? cur.year + 1 : cur.year;
-      final m = isDec ? 1 : cur.month + 1;
-      dates.add(DateTime(y, m, 25)); // 翌月25日
-      cur = DateTime(cur.year, cur.month + 1, 1);
+    final res = <DateTime>[];
+
+    // 期間の開始月の1日
+    var cursor = DateTime(start.year, start.month, 1);
+    // 期間の終了(含まれない)の前日が所属する月の1日
+    final lastInRange = endExclusive.subtract(const Duration(days: 1));
+    final lastMonthHead = DateTime(lastInRange.year, lastInRange.month, 1);
+
+    while (!cursor.isAfter(lastMonthHead)) {
+      // 翌月1日が支払予定日
+      final nextMonthHead = DateTime(cursor.year, cursor.month + 1, 1);
+      res.add(nextMonthHead);
+      // 次の月へ
+      cursor = DateTime(cursor.year, cursor.month + 1, 1);
     }
-    return dates;
+    return res;
   }
 
   // ===== PDF（現在の期間＆“除外されていない”スタッフのみ反映）=====
@@ -272,10 +322,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
       }
 
       // Stripe手数料の推定（保存が無い古いレコード用）
-      int _estimateStripeFee(int v) {
-        // 2.4%（小数切り捨て）
-        return (v * 24) ~/ 1000;
-      }
+      int _estimateStripeFee(int v) => (v * 34) ~/ 1000;
 
       // 集計
       int totalGross = 0; // 全体の実額合計
@@ -439,14 +486,14 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                 style: const pw.TextStyle(fontSize: 10),
               ),
               pw.Text(
-                '支払予定日: $payoutDatesLabel（毎月25日）',
+                '支払予定日: $payoutDatesLabel（翌月１日）',
                 style: const pw.TextStyle(fontSize: 10),
               ),
               if (anyStripeEstimated)
                 pw.Padding(
                   padding: const pw.EdgeInsets.only(top: 4),
                   child: pw.Text(
-                    '※ 一部のStripe手数料は2.4%で推定しています（保存がない決済）。',
+                    '※ 一部のStripe手数料は3.4%で推定しています（保存がない決済）。',
                     style: const pw.TextStyle(fontSize: 9),
                   ),
                 ),
@@ -684,7 +731,8 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
   @override
   Widget build(BuildContext context) {
     final months = _monthOptions();
-    final monthValue = _selectedMonthStart ?? months.first;
+    var monthValue = _selectedMonthStart ?? months.first;
+    _ensureTipsStream(); // ★ 追加：ここで stream を安定化
 
     // === 置き換え: 以前の topCta 定義をこれに差し替え ===
     final topCta = Padding(
@@ -715,9 +763,9 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                 fit: BoxFit.scaleDown,
                 child: FilledButton.icon(
                   onPressed: _exportMonthlyReportPdf,
-                  icon: const Icon(Icons.receipt_long, size: 18),
+                  icon: const Icon(Icons.receipt_long, size: 25),
                   // ラベルは少しだけ短くして横幅を節約（処理は同じ）
-                  label: const Text('pdf'),
+                  label: const Text('pdfで明細を確認する'),
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
@@ -785,20 +833,13 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                     color: Colors.black87,
                     size: 18,
                   ),
-                  style: const TextStyle(color: Colors.black87),
-                  selectedItemBuilder: (context) => months
-                      .map(
-                        (_) => const Text(
-                          '月選択',
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: Colors.black87,
-                            fontWeight: FontWeight.w700,
-                            fontFamily: "LINEseed",
-                          ),
-                        ),
-                      )
-                      .toList(),
+                  style: const TextStyle(
+                    color: Colors.black87,
+                    fontFamily: "LINEseed",
+                  ),
+
+                  // ✅ ここを削除すれば選んだ値がそのまま表示される
+                  // selectedItemBuilder: (context) => ...
                   items: months
                       .map(
                         (m) => DropdownMenuItem<DateTime>(
@@ -816,6 +857,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                   onChanged: (val) {
                     if (val == null) return;
                     setState(() {
+                      monthValue = val; // ✅ 選択状態を更新
                       _mode = _RangeMode.month;
                       _selectedMonthStart = val;
                     });
@@ -823,6 +865,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                 ),
               ),
             ),
+
             RangePill(
               label: _mode == _RangeMode.custom ? _rangeLabel() : '期間指定',
               active: _mode == _RangeMode.custom,
@@ -833,27 +876,6 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
         ),
       ),
     );
-
-    // 期間境界で tips クエリ（ストリーム）
-    final bounds = _rangeBounds();
-    Query tipsQ = FirebaseFirestore.instance
-        .collection(uid!)
-        .doc(widget.tenantId)
-        .collection('tips')
-        .where('status', isEqualTo: 'succeeded');
-    if (bounds.start != null) {
-      tipsQ = tipsQ.where(
-        'createdAt',
-        isGreaterThanOrEqualTo: Timestamp.fromDate(bounds.start!),
-      );
-    }
-    if (bounds.endExclusive != null) {
-      tipsQ = tipsQ.where(
-        'createdAt',
-        isLessThan: Timestamp.fromDate(bounds.endExclusive!),
-      );
-    }
-    tipsQ = tipsQ.orderBy('createdAt', descending: true).limit(1000);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -874,7 +896,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
 
           // ===== データ＆UI（スタッフチップ/ランキング/統計） =====
           StreamBuilder<QuerySnapshot>(
-            stream: tipsQ.snapshots(),
+            stream: _tipsStream,
             builder: (context, snap) {
               if (snap.hasError) {
                 return Center(

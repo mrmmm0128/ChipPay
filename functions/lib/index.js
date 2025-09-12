@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createInitialFeeCheckout = exports.upsertConnectedAccount = exports.listInvoices = exports.changeSubscriptionPlan = exports.createSubscriptionCheckout = exports.cancelTenantAdminInvite = exports.acceptTenantAdminInvite = exports.inviteTenantAdmin = exports.stripeWebhook = exports.onTipSucceededSendMailV2 = exports.createStoreTipSessionPublic = exports.createTipSessionPublic = exports.RESEND_API_KEY = void 0;
+exports.createInitialFeeCheckout = exports.upsertConnectedAccount = exports.listInvoices = exports.changeSubscriptionPlan = exports.createSubscriptionCheckout = exports.cancelTenantAdminInvite = exports.acceptTenantAdminInvite = exports.inviteTenantAdmin = exports.stripeWebhook = exports.onTipSucceededSendMailV2 = exports.createStoreTipSessionPublic = exports.createTipSessionPublic = exports.setAdminByEmail = exports.RESEND_API_KEY = void 0;
 exports.assertTenantAdmin = assertTenantAdmin;
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const functions = __importStar(require("firebase-functions"));
@@ -146,6 +146,25 @@ async function assertTenantAdmin(tenantId, uid) {
     }
     throw new functions.https.HttpsError("permission-denied", "Not tenant admin");
 }
+const OWNER_EMAILS = new Set(["appfromkomeda@gmail.com"]); // 自分の運営アカウントに置換
+exports.setAdminByEmail = functions
+    .region("us-central1")
+    .https.onCall(async (data, context) => {
+    const callerEmail = context.auth?.token?.email;
+    if (!callerEmail || !OWNER_EMAILS.has(callerEmail)) {
+        throw new functions.https.HttpsError("permission-denied", "not allowed");
+    }
+    const email = data.email?.trim();
+    const value = data.value ?? true;
+    if (!email) {
+        throw new functions.https.HttpsError("invalid-argument", "email required");
+    }
+    const user = await admin.auth().getUserByEmail(email);
+    const claims = user.customClaims || {};
+    claims.admin = value;
+    await admin.auth().setCustomUserClaims(user.uid, claims);
+    return { ok: true, uid: user.uid, email, admin: value };
+});
 async function pickEffectiveRule(tenantId, at, uid) {
     const histSnap = await db
         .collection(uid)
@@ -224,7 +243,7 @@ exports.createTipSessionPublic = functions
     memory: "256MB",
 })
     .https.onCall(async (data) => {
-    const { tenantId, employeeId, amount, memo = "Tip" } = data;
+    const { tenantId, employeeId, amount, memo = "Tip", uid } = data;
     if (!tenantId || !employeeId) {
         throw new functions.https.HttpsError("invalid-argument", "tenantId/employeeId required");
     }
@@ -273,7 +292,7 @@ exports.createTipSessionPublic = functions
         `&thanks=true` +
         `&amount=${encodeURIComponent(String(amount))}` +
         `&employeeName=${encodeURIComponent(employeeName)}` +
-        `&tenantName=${encodeURIComponent(tenantName)}`;
+        `&tenantName=${encodeURIComponent(tenantName)}&u=${uid}`;
     const cancelUrl = `${FRONTEND_BASE_URL}#/p` +
         `?t=${encodeURIComponent(tenantId)}` +
         `&canceled=true`;
@@ -578,6 +597,9 @@ exports.stripeWebhook = functions
         res.status(400).send("Webhook Error: invalid signature");
         return;
     }
+    const requestOptions = event.account
+        ? { stripeAccount: event.account }
+        : undefined;
     const type = event.type;
     const docRef = db.collection("webhookEvents").doc(event.id);
     await docRef.set({
@@ -735,14 +757,22 @@ exports.stripeWebhook = functions
                 }
                 try {
                     if (payIntentId) {
+                        // 支払い詳細を取る：payment_method と latest_charge を展開
                         const pi = await stripe.paymentIntents.retrieve(payIntentId, {
-                            expand: ["latest_charge.balance_transaction"],
-                        });
-                        const latestCharge = pi.latest_charge || null;
+                            expand: [
+                                "payment_method",
+                                "latest_charge",
+                                "latest_charge.balance_transaction",
+                            ],
+                        }, requestOptions // ← Connect対応
+                        );
+                        const latestCharge = (typeof pi.latest_charge === "object"
+                            ? pi.latest_charge
+                            : null) || null;
+                        // ====== Stripe手数料など（既存ロジック） ======
                         const bt = latestCharge?.balance_transaction;
                         const stripeFee = bt?.fee ?? 0;
-                        const stripeFeeCurrency = bt?.currency?.toUpperCase() ??
-                            (session.currency ?? "jpy").toUpperCase();
+                        const stripeFeeCurrency = bt?.currency?.toUpperCase() ?? (session.currency ?? "jpy").toUpperCase();
                         const appFeeAmount = latestCharge?.application_fee_amount ?? 0;
                         const splitNow = (await tipRef.get()).data()?.split ?? {};
                         const storeCut = splitNow.storeAmount ?? 0;
@@ -754,6 +784,52 @@ exports.stripeWebhook = functions
                         const toStaff = isStaff
                             ? Math.max(0, gross - appFeeAmount - stripeFee - storeCut)
                             : 0;
+                        // ====== 決済手段・カード要約の抽出 ======
+                        // PaymentMethod（展開済みを想定）
+                        let pm = null;
+                        if (pi.payment_method && typeof pi.payment_method !== "string") {
+                            pm = pi.payment_method;
+                        }
+                        else if (typeof pi.payment_method === "string") {
+                            try {
+                                pm = await stripe.paymentMethods.retrieve(pi.payment_method, requestOptions);
+                            }
+                            catch (e) {
+                                // 取得に失敗しても致命ではないので握りつぶす
+                                pm = null;
+                            }
+                        }
+                        const pmd = latestCharge?.payment_method_details; // 決済手段の詳細（カード/ApplePay等）
+                        const cardOnCharge = pmd?.type === "card" ? pmd.card : undefined;
+                        // PaymentMethod.card から exp_month/year, funding, country 等が取れる
+                        const cardOnPM = pm?.type === "card" ? pm.card : undefined;
+                        const paymentSummary = {
+                            method: pmd?.type || pm?.type || pi.payment_method_types?.[0], // 例: 'card', 'konbini', 'us_bank_account' 等
+                            paymentIntentId: pi.id,
+                            chargeId: latestCharge?.id ||
+                                (typeof pi.latest_charge === "string" ? pi.latest_charge : null),
+                            paymentMethodId: pm?.id || (typeof pi.payment_method === "string" ? pi.payment_method : null),
+                            captureMethod: pi.capture_method, // 'automatic' など
+                            created: tsFromSec(pi.created) ?? nowTs(),
+                        };
+                        // カードの安全な要約（フルPAN/CVCは保存しない）
+                        if (paymentSummary.method === "card" || cardOnPM || cardOnCharge) {
+                            paymentSummary.card = {
+                                brand: (cardOnCharge?.brand || cardOnPM?.brand || "").toString().toUpperCase() || null, // VISA 等
+                                last4: cardOnCharge?.last4 || cardOnPM?.last4 || null,
+                                expMonth: cardOnPM?.exp_month ?? null,
+                                expYear: cardOnPM?.exp_year ?? null,
+                                funding: cardOnPM?.funding ?? null, // 'debit' | 'credit' | ...
+                                country: cardOnPM?.country ?? null,
+                                network: cardOnCharge?.network || cardOnPM?.networks?.preferred || null, // 'visa' 等
+                                wallet: cardOnCharge?.wallet?.type || null, // 'apple_pay' | 'google_pay' 等
+                                // threeDSecure などの結果が取れればここに（取得できない環境もあるのでOptional）
+                                threeDSecure: cardOnCharge?.three_d_secure?.result ??
+                                    pmd?.card?.three_d_secure?.result ??
+                                    null,
+                            };
+                        }
+                        // ====== Firestore へ反映 ======
                         await tipRef.set({
                             fees: {
                                 platform: appFeeAmount,
@@ -764,15 +840,16 @@ exports.stripeWebhook = functions
                                 },
                             },
                             net: {
-                                toStore: toStore,
-                                toStaff: toStaff,
+                                toStore,
+                                toStaff,
                             },
+                            payment: paymentSummary, // ← 決済手段・カード要約を保存
                             feesComputedAt: admin.firestore.FieldValue.serverTimestamp(),
                         }, { merge: true });
                     }
                 }
                 catch (err) {
-                    console.error("Failed to enrich tip with stripe fee:", err);
+                    console.error("Failed to enrich tip with stripe fee/payment details:", err);
                 }
             }
         }

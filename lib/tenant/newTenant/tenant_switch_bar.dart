@@ -135,9 +135,11 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
     );
   }
 
-  // ---------- テナント作成ダイアログ ----------
+  // ... 省略（このState内のメンバー: _uid, _selectedId, _functions, bwTheme, OnboardingSheet, widget.onChanged などは既存のまま） ...
+
   Future<void> createTenantDialog() async {
     final nameCtrl = TextEditingController();
+    final agentCtrl = TextEditingController(); // 代理店コード
 
     final ok = await showDialog<bool>(
       context: context,
@@ -175,30 +177,61 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
               '新しい店舗を作成',
               style: TextStyle(fontFamily: 'LINEseed'),
             ),
-            content: TextField(
-              controller: nameCtrl,
-              autofocus: true,
-              style: const TextStyle(color: Colors.black87),
-              decoration: const InputDecoration(
-                labelText: '店舗名',
-                hintText: '例）渋谷店',
-                labelStyle: TextStyle(color: Colors.black87),
-                hintStyle: TextStyle(color: Colors.black54),
-                filled: true,
-                fillColor: Colors.white,
-                contentPadding: EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 12,
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  autofocus: true,
+                  style: const TextStyle(color: Colors.black87),
+                  decoration: const InputDecoration(
+                    labelText: '店舗名',
+                    hintText: '例）渋谷店',
+                    labelStyle: TextStyle(color: Colors.black87),
+                    hintStyle: TextStyle(color: Colors.black54),
+                    filled: true,
+                    fillColor: Colors.white,
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 12,
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Colors.black26),
+                      borderRadius: BorderRadius.all(Radius.circular(12)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Colors.black87, width: 1.2),
+                      borderRadius: BorderRadius.all(Radius.circular(12)),
+                    ),
+                  ),
                 ),
-                enabledBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Colors.black26),
-                  borderRadius: BorderRadius.all(Radius.circular(12)),
+                const SizedBox(height: 10),
+                // 代理店コード入力（任意）
+                TextField(
+                  controller: agentCtrl,
+                  style: const TextStyle(color: Colors.black87),
+                  decoration: const InputDecoration(
+                    labelText: '代理店コード（任意）',
+                    hintText: '例）AGT-XXXXX',
+                    labelStyle: TextStyle(color: Colors.black87),
+                    hintStyle: TextStyle(color: Colors.black54),
+                    filled: true,
+                    fillColor: Colors.white,
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 12,
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Colors.black26),
+                      borderRadius: BorderRadius.all(Radius.circular(12)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Colors.black87, width: 1.2),
+                      borderRadius: BorderRadius.all(Radius.circular(12)),
+                    ),
+                  ),
                 ),
-                focusedBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Colors.black87, width: 1.2),
-                  borderRadius: BorderRadius.all(Radius.circular(12)),
-                ),
-              ),
+              ],
             ),
             actionsPadding: const EdgeInsets.symmetric(
               horizontal: 12,
@@ -236,20 +269,48 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
     if (ok != true) return;
 
     final name = nameCtrl.text.trim();
+    final agentCode = agentCtrl.text.trim();
     if (name.isEmpty) return;
 
-    final uid = _uid;
+    final uid = _uid; // 既存のログイン中ユーザーUID
     if (uid == null) return;
 
-    // Firestore の doc はまだ作らない。まずは ID を予約
-    final tenants = FirebaseFirestore.instance.collection(uid);
-    final String tempTenantId = tenants.doc().id;
+    final tenantsCol = FirebaseFirestore.instance.collection(uid);
 
-    // 3ボタン版 OnboardingSheet をモーダルで進める
-    await startOnboarding(tempTenantId, name);
+    // ❶ 最初に「draft」で本体ドキュメントを作成（このIDを最後まで使う）
+    final newRef = tenantsCol.doc(); // 自動ID
+    final tenantId = newRef.id;
 
-    // シートを閉じた時点で、本登録（= tenants/{id} が作られたか）を確認
-    final snap = await tenants.doc(tempTenantId).get();
+    await newRef.set({
+      'name': name,
+      'status': 'draft', // 下書き保存
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      // 代理店情報（コードだけは必ず保持、リンクは後で試行）
+      'agency': {'code': agentCode, 'linked': false},
+    }, SetOptions(merge: true));
+
+    // ❷ 代理店コードが入っていれば、agencies を検索してひも付け & contracts 生成
+    if (agentCode.isNotEmpty) {
+      await _tryLinkAgencyByCode(
+        code: agentCode,
+        ownerUid: uid,
+        tenantRef: newRef,
+        tenantName: name,
+        scaffoldContext: context,
+      );
+    }
+
+    // ❸ UI更新 & 親へ通知
+    if (!mounted) return;
+    setState(() => _selectedId = tenantId);
+    widget.onChanged(tenantId, name);
+
+    // ❹ オンボーディング開始（同じ tenantId を渡す）
+    await startOnboarding(tenantId, name);
+
+    // ❺ オンボーディング後の状態確認（draftのままでも下書きは残る）
+    final snap = await newRef.get();
     if (!mounted) return;
 
     if (!snap.exists) {
@@ -265,13 +326,75 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
       return;
     }
 
-    // ここに来たら「保存」済み＝本登録作成済み
-    setState(() => _selectedId = tempTenantId);
-    // 親へはここで初めて通知（ユーザー操作の完了時）
-    widget.onChanged(tempTenantId, name);
+    // 既に onChanged 済みなので、ここでは何もしない（必要なら status を見て分岐可能）
   }
 
-  // ---------- オンボーディング（モーダル/ステッパー） ----------
+  /// 代理店コードから agencies を逆引きし、見つかれば tenant にリンク & contracts を作成
+  Future<void> _tryLinkAgencyByCode({
+    required String code,
+    required String ownerUid,
+    required DocumentReference<Map<String, dynamic>> tenantRef,
+    required String tenantName,
+    required BuildContext scaffoldContext,
+  }) async {
+    try {
+      final qs = await FirebaseFirestore.instance
+          .collection('agencies')
+          .where('code', isEqualTo: code)
+          .where('status', isEqualTo: 'active')
+          .limit(1)
+          .get();
+
+      if (qs.docs.isEmpty) {
+        // コードは保存済み（'agency.code'）なので、ここでは未リンクのままにする
+        ScaffoldMessenger.of(scaffoldContext).showSnackBar(
+          const SnackBar(content: Text('代理店コードが見つかりませんでした（未リンクのまま保存）')),
+        );
+        return;
+      }
+
+      final agentDoc = qs.docs.first;
+      final agentId = agentDoc.id;
+      final commissionPercent =
+          (agentDoc.data()['commissionPercent'] as num?)?.toInt() ?? 0;
+
+      // tenant の agency 情報を更新（linked=true）
+      await tenantRef.set({
+        'agency': {
+          'code': code,
+          'agentId': agentId,
+          'commissionPercent': commissionPercent,
+          'linked': true,
+          'linkedAt': FieldValue.serverTimestamp(),
+        },
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      // 代理店配下の contracts にも作成（draft 状態）
+      await FirebaseFirestore.instance
+          .collection('agencies')
+          .doc(agentId)
+          .collection('contracts')
+          .doc(tenantRef.id)
+          .set({
+            'tenantId': tenantRef.id,
+            'tenantName': tenantName,
+            'ownerUid': ownerUid,
+            'contractedAt': FieldValue.serverTimestamp(),
+            'status': 'draft',
+          }, SetOptions(merge: true));
+
+      ScaffoldMessenger.of(
+        scaffoldContext,
+      ).showSnackBar(SnackBar(content: Text('代理店「$agentId」とリンクしました')));
+    } catch (e) {
+      ScaffoldMessenger.of(
+        scaffoldContext,
+      ).showSnackBar(SnackBar(content: Text('代理店リンクに失敗しました: $e')));
+    }
+  }
+
+  // 既存：オンボーディング（変更なし）
   Future<void> startOnboarding(String tenantId, String tenantName) async {
     await showModalBottomSheet(
       context: context,

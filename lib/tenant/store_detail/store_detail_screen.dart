@@ -1,3 +1,4 @@
+// lib/tenant/store_detail_screen.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -28,8 +29,14 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
   bool loading = false;
   int _currentIndex = 0;
 
+  // 管理者判定
+  static const Set<String> _kAdminEmails = {'appfromkomeda@gmail.com'};
+  bool _isAdmin = false;
+
   String? tenantId;
   String? tenantName;
+  bool _loggingOut = false;
+  bool _loading = true;
 
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   final _empNameCtrl = TextEditingController();
@@ -40,6 +47,11 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
   bool _argsApplied = false; // ルート引数適用済み
   bool _tenantInitialized = false; // 初回テナント確定済み
   bool _stripeHandled = false; // インスタンス内のStripeイベント処理済み
+
+  // Stripeイベントの保留（初期化完了後に1回だけ処理）
+  String? _pendingStripeEvt;
+  String? _pendingStripeTenant;
+  late User user;
 
   // 初期テナント解決用 Future（※毎buildで新規作成しない）
   Future<Map<String, String?>?>? _initialTenantFuture;
@@ -111,9 +123,56 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
   void initState() {
     super.initState();
     // 初回だけ Future を生成（以降は使い回す）
-    final user = FirebaseAuth.instance.currentUser;
+    user = FirebaseAuth.instance.currentUser!;
     if (user != null && !_tenantInitialized) {
       _initialTenantFuture = _resolveInitialTenant(user);
+    }
+    // 初期化中は setState しない。完了後に必要なら1回だけ反映する。
+    _checkAdmin();
+    _loading = false;
+  }
+
+  // ★ 初期化完了前は setState しないで代入のみ。完了後に変化があれば setState。
+  Future<void> _checkAdmin() async {
+    if (user == null) return;
+
+    final token = await user.getIdTokenResult(); // 強制リフレッシュしない
+    final email = (user.email ?? '').toLowerCase();
+
+    final newIsAdmin =
+        (token.claims?['admin'] == true) || _kAdminEmails.contains(email);
+
+    if (!_tenantInitialized) {
+      _isAdmin = newIsAdmin;
+      return;
+    }
+    if (mounted && _isAdmin != newIsAdmin) {
+      setState(() => _isAdmin = newIsAdmin);
+    }
+  }
+
+  Future<void> logout() async {
+    if (_loggingOut) return;
+    setState(() => _loggingOut = true);
+    try {
+      await FirebaseAuth.instance.signOut();
+
+      if (!mounted) return;
+
+      // Drawerが開いていれば閉じる（任意）
+      if (_scaffoldKey.currentState?.isDrawerOpen ?? false) {
+        _scaffoldKey.currentState!.closeDrawer();
+      }
+
+      // 画面スタックを全消しして /login (BootGate) へ
+      Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('ログアウトに失敗: $e')));
+    } finally {
+      if (mounted) setState(() => _loggingOut = false);
     }
   }
 
@@ -247,58 +306,57 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
     }
   }
 
-  // ---- ルート引数適用 & Stripe戻りURL処理 ----
+  // ---- ルート引数適用 & Stripe戻りURL処理（初期化前は“代入のみ”で setState しない）----
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (!_argsApplied) {
       _argsApplied = true;
-
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Map) {
         final id = args['tenantId'] as String?;
         final nameArg = args['tenantName'] as String?;
-        if (id != null) {
-          setState(() {
-            tenantId = id;
-            tenantName = nameArg;
-          });
+        if (id != null && id.isNotEmpty) {
+          // ★ BootGate から来たテナントをそのまま採用して
+          //   初期テナント解決(FutureBuilder)をスキップする
+          tenantId = id;
+          tenantName = nameArg;
+          _tenantInitialized = true; // ← これがポイント
+
+          // Stripeイベントを保留していた場合は、初期化済みになった今処理する
+          if (_pendingStripeEvt != null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _handleStripeEventNow();
+            });
+          }
         }
       }
     }
 
-    // ▼ 戻りURL(event=...)の処理は「同期的にイベントの有無を見て→グローバルフラグを先に立てる」
+    // Stripe 戻りURLを確認（初期化前は保留、後で1回だけ処理）
     if (!_stripeHandled && !_globalStripeEventHandled) {
       final q = _queryFromHashAndSearch();
       final evt = q['event'];
       final t = q['t'] ?? q['tenantId'];
-
       final hasStripeEvent =
           (evt == 'initial_fee_paid' || evt == 'initial_fee_canceled');
 
       if (hasStripeEvent) {
-        // ここで同期的に両フラグをONにして、複数インスタンスの競合を防止
         _stripeHandled = true;
         _globalStripeEventHandled = true;
+        _pendingStripeEvt = evt;
+        _pendingStripeTenant = t;
 
-        if (t != null && t.isNotEmpty) {
-          setState(() {
-            tenantId = t;
-          });
+        if (_tenantInitialized) {
+          WidgetsBinding.instance.addPostFrameCallback(
+            (_) => _handleStripeEventNow(),
+          );
         }
-
-        WidgetsBinding.instance.addPostFrameCallback((_) async {
-          if (evt == 'initial_fee_paid' && tenantId != null) {
-            await startOnboarding(tenantId!, tenantName ?? '');
-          }
-          // ここでURL掃除をしたい場合は、Web限定で history.replaceState を使う
-          // （dart:htmlの条件付きimportが必要になるため、このサンプルでは割愛）
-        });
       }
     }
   }
 
-  // ---- 初回テナント推定 ----
+  // ---- 初回テナント推定（Future内で完結。setStateはしない）----
   Future<Map<String, String?>?> _resolveInitialTenant(User user) async {
     if (tenantId != null) return {'id': tenantId, 'name': tenantName};
     try {
@@ -336,6 +394,25 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
       }
     } catch (_) {}
     return null;
+  }
+
+  // ---- Stripeイベントを“今”実行（初期化後に1回だけ）----
+  Future<void> _handleStripeEventNow() async {
+    final evt = _pendingStripeEvt;
+    final t = _pendingStripeTenant;
+    _pendingStripeEvt = null;
+    _pendingStripeTenant = null;
+
+    if (t != null && t.isNotEmpty) {
+      if (mounted) {
+        setState(() => tenantId = t);
+      } else {
+        tenantId = t;
+      }
+    }
+    if (evt == 'initial_fee_paid' && tenantId != null && mounted) {
+      await startOnboarding(tenantId!, tenantName ?? '');
+    }
   }
 
   // ---- テナント切替 ----
@@ -430,6 +507,11 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
               tenantName = resolved['name'];
             }
 
+            // 初期化完了後、保留中のStripeイベントを“1回だけ”適用
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => _handleStripeEventNow(),
+            );
+
             return _buildScaffold(context, user);
           },
         ),
@@ -458,15 +540,41 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
         elevation: 0,
         toolbarHeight: 60,
         titleSpacing: 16,
-        title: const Text(
-          "T i p r i",
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontWeight: FontWeight.w600,
-            fontSize: 20,
-            fontFamily: "LINEseed",
-          ),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              "T i p r i",
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 20,
+                fontFamily: "LINEseed",
+              ),
+            ),
+            if (_isAdmin) const SizedBox(width: 8),
+            if (_isAdmin)
+              OutlinedButton.icon(
+                onPressed: () => Navigator.of(context).pushNamed('/admin'),
+                icon: const Icon(Icons.admin_panel_settings, size: 18),
+                label: const Text(
+                  '管理者ページへ',
+                  style: TextStyle(fontFamily: 'LINEseed'),
+                ),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.black,
+                  side: const BorderSide(color: Colors.black26),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  shape: const StadiumBorder(),
+                  textStyle: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+          ],
         ),
+
         leading: isNarrow ? const DrawerButton() : null,
         actions: [
           if (!isNarrow)
@@ -585,6 +693,42 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
                   FilledButton(
                     onPressed: createTenantDialog,
                     child: const Text('店舗を作成する'),
+                  ),
+                  Container(
+                    margin: const EdgeInsets.symmetric(
+                      vertical: 8,
+                      horizontal: 16,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      border: Border.all(color: Colors.black26),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(999),
+                      onTap: logout,
+                      child: const Padding(
+                        padding: EdgeInsets.symmetric(
+                          vertical: 12,
+                          horizontal: 20,
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.logout, color: Colors.black87, size: 18),
+                            SizedBox(width: 8),
+                            Text(
+                              'ログアウト',
+                              style: TextStyle(
+                                color: Colors.black87,
+                                fontWeight: FontWeight.w700,
+                                fontFamily: "LINEseed",
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                 ],
               ),

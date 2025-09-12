@@ -5,6 +5,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher_string.dart';
+import 'package:flutter/services.dart';
 
 class OnboardingSheet extends StatefulWidget {
   final String tenantId; // tempTenantId（createTenantDialogで採番した予約ID）
@@ -28,6 +29,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
   String selectedPlan = "A";
   bool _initialFeePaidLocal = false;
   bool _subscribedLocal = false;
+  TextEditingController tenantNameEdit = TextEditingController();
 
   // UIフラグ
   bool _creatingInitial = false;
@@ -59,6 +61,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
     _loadDraft(); // 既存下書きの反映
     _setupRealtimeBridges(); // ← 追加：決済完了通知＆フォーカス復帰で再取得
     _subscribeDraftChanges(); // ← 追加：ドラフトの変更も画面に反映
+    tenantNameEdit = TextEditingController(text: widget.tenantName);
   }
 
   @override
@@ -89,6 +92,11 @@ class OnboardingSheetState extends State<OnboardingSheet> {
 
       final data = snap.data() ?? {};
       final status = (data['status'] as String?) ?? 'nonactive';
+      if (status == "active") {
+        setState(() {
+          _registered = true;
+        });
+      }
       final sub = (data['subscription'] as Map?) ?? {};
       final plan = (sub['plan'] as String?) ?? selectedPlan;
       final subStatus = (sub['status'] as String?)?.toLowerCase() ?? 'inactive';
@@ -127,8 +135,6 @@ class OnboardingSheetState extends State<OnboardingSheet> {
           final plan = (sub['plan'] as String?) ?? selectedPlan;
 
           setState(() {
-            _hasDraft =
-                ((data['status'] as String?) ?? 'nonactive') == 'nonactive';
             _initialFeePaidLocal = initialPaid;
             _subscribedLocal =
                 (subStatus == 'active' || subStatus == 'trialing');
@@ -187,7 +193,6 @@ class OnboardingSheetState extends State<OnboardingSheet> {
 
   Future<void> _refreshFromServer() async {
     try {
-      // tenants/{id} を直接読み直して、Webhook反映を素早くUIに反映
       final t = await FirebaseFirestore.instance
           .collection(uid)
           .doc(widget.tenantId)
@@ -394,16 +399,97 @@ class OnboardingSheetState extends State<OnboardingSheet> {
     }
   }
 
+  Future<void> _maybeLinkAgencyFromTenantDoc({
+    required String ownerUid,
+    required DocumentReference<Map<String, dynamic>> tenantRef,
+    required String tenantName,
+    required String desiredStatus, // 'draft' | 'active'
+    required BuildContext scaffoldContext,
+  }) async {
+    // 最新を読む
+    final snap = await tenantRef.get();
+    final m = (snap.data() ?? <String, dynamic>{});
+    Map<String, dynamic> agency =
+        (m['agency'] as Map?)?.cast<String, dynamic>() ?? {};
+
+    String? agentId = agency['agentId'] as String?;
+    final code = (agency['code'] ?? '').toString();
+    final linked = agency['linked'] == true;
+
+    // code があるのに未リンクなら、リンクを試みる
+    if (agentId == null && code.isNotEmpty && !linked) {
+      final linkedInfo = await _tryLinkAgencyByCodeInternal(
+        code: code,
+        tenantRef: tenantRef,
+        tenantName: tenantName,
+        ownerUid: ownerUid,
+      );
+      if (linkedInfo != null) {
+        agentId = linkedInfo.agentId;
+        agency = {
+          ...agency,
+          'agentId': linkedInfo.agentId,
+          'commissionPercent': linkedInfo.commissionPercent,
+          'linked': true,
+          'linkedAt': FieldValue.serverTimestamp(),
+        };
+        await tenantRef.set({
+          'agency': agency,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+        // index も鏡写し
+        await FirebaseFirestore.instance
+            .collection('tenantIndex')
+            .doc(tenantRef.id)
+            .set({
+              'agency': agency,
+              'updatedAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true));
+        ScaffoldMessenger.of(
+          scaffoldContext,
+        ).showSnackBar(SnackBar(content: Text('代理店とリンクしました（code: $code）')));
+      }
+    }
+
+    // agentId が確定していれば contracts を desiredStatus でUpsert
+    if (agentId != null && agentId.isNotEmpty) {
+      await FirebaseFirestore.instance
+          .collection('agencies')
+          .doc(agentId)
+          .collection('contracts')
+          .doc(tenantRef.id)
+          .set({
+            'tenantId': tenantRef.id,
+            'tenantName': tenantName,
+            'ownerUid': ownerUid,
+            'contractedAt': FieldValue.serverTimestamp(), // 初回作成で付与
+            'updatedAt': FieldValue.serverTimestamp(),
+            'status': desiredStatus, // 'draft' or 'active'
+            if (desiredStatus == 'active')
+              'activatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+    }
+  }
+
   // ====== 保存：下書き ======
   Future<void> _saveDraft() async {
     if (_savingDraft || uid.isEmpty) return;
     setState(() => _savingDraft = true);
     try {
-      final ref = FirebaseFirestore.instance
+      final userRef = FirebaseFirestore.instance
           .collection(uid)
           .doc(widget.tenantId);
-      await ref.set({
-        'name': widget.tenantName,
+      final indexRef = FirebaseFirestore.instance
+          .collection('tenantIndex')
+          .doc(widget.tenantId);
+
+      // 既存の agency 情報を拾っておく（code/agentId/linked など）
+      final baseSnap = await userRef.get();
+      final base = (baseSnap.data() ?? <String, dynamic>{});
+      final agency = (base['agency'] as Map?)?.cast<String, dynamic>() ?? {};
+
+      final data = {
+        'name': tenantNameEdit.text,
         'members': [uid],
         'status': 'nonactive',
         'createdBy': {
@@ -411,8 +497,27 @@ class OnboardingSheetState extends State<OnboardingSheet> {
           'email': FirebaseAuth.instance.currentUser?.email,
         },
         'updatedAt': FieldValue.serverTimestamp(),
-        'createdAt': FieldValue.serverTimestamp(), // merge時は初回のみ実質更新
-      }, SetOptions(merge: true));
+        'createdAt': FieldValue.serverTimestamp(), // merge時は初回のみ効く
+        if (agency.isNotEmpty) 'agency': agency, // インデックスにも鏡写し
+      };
+
+      // 本体とインデックスを同時に更新
+      await Future.wait([
+        userRef.set(data, SetOptions(merge: true)),
+        indexRef.set({
+          ...data,
+          'uid': uid, // インデックスにはオーナーuidも持たせる
+        }, SetOptions(merge: true)),
+      ]);
+
+      // 代理店コードがあればリンクを試み、contracts を draft で作成/更新
+      await _maybeLinkAgencyFromTenantDoc(
+        ownerUid: uid,
+        tenantRef: userRef,
+        tenantName: tenantNameEdit.text,
+        desiredStatus: 'draft',
+        scaffoldContext: context,
+      );
 
       setState(() => _hasDraft = true);
 
@@ -428,7 +533,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
         SnackBar(
           content: Text(
             '下書き保存に失敗: $e',
-            style: TextStyle(fontFamily: 'LINEseed'),
+            style: const TextStyle(fontFamily: 'LINEseed'),
           ),
         ),
       );
@@ -442,11 +547,20 @@ class OnboardingSheetState extends State<OnboardingSheet> {
     if (_savingFinal || !_subscribedLocal || _registered || uid.isEmpty) return;
     setState(() => _savingFinal = true);
     try {
-      final ref = FirebaseFirestore.instance
+      final userRef = FirebaseFirestore.instance
           .collection(uid)
           .doc(widget.tenantId);
+      final indexRef = FirebaseFirestore.instance
+          .collection('tenantIndex')
+          .doc(widget.tenantId);
+
+      // 既存の agency を拾って index にも反映
+      final baseSnap = await userRef.get();
+      final base = (baseSnap.data() ?? <String, dynamic>{});
+      final agency = (base['agency'] as Map?)?.cast<String, dynamic>() ?? {};
+
       final data = <String, dynamic>{
-        'name': widget.tenantName,
+        'name': tenantNameEdit.text,
         'members': [uid],
         'status': 'active',
         'createdAt': FieldValue.serverTimestamp(),
@@ -454,15 +568,38 @@ class OnboardingSheetState extends State<OnboardingSheet> {
           'uid': uid,
           'email': FirebaseAuth.instance.currentUser?.email,
         },
-
         'updatedAt': FieldValue.serverTimestamp(),
+        if (agency.isNotEmpty) 'agency': agency,
+        'activatedAt': FieldValue.serverTimestamp(),
       };
-      await ref.set(data, SetOptions(merge: true));
+
+      // 1) 本登録を本体 & インデックスに保存
+      await Future.wait([
+        userRef.set(data, SetOptions(merge: true)),
+        indexRef.set({
+          ...data,
+          'uid': uid, // インデックスにもオーナーuid
+        }, SetOptions(merge: true)),
+      ]);
+
+      // 2) 代理店連携（あれば）を active に更新
+      await _maybeLinkAgencyFromTenantDoc(
+        ownerUid: uid,
+        tenantRef: userRef,
+        tenantName: tenantNameEdit.text,
+        desiredStatus: 'active',
+        scaffoldContext: context,
+      );
 
       if (!mounted) return;
+
+      // 3) 初回だけ“今日から”の店舗控除入力→ 両方に保存されるよう関数内で対応（既存）
+      await _promptInitialStoreDeduction(userRef);
+
+      // 4) UI更新
       setState(() {
         _registered = true;
-        _hasDraft = false; // 本登録したので“下書き”状態は解除
+        _hasDraft = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -476,7 +613,10 @@ class OnboardingSheetState extends State<OnboardingSheet> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('本登録に失敗: $e', style: TextStyle(fontFamily: 'LINEseed')),
+          content: Text(
+            '本登録に失敗: $e',
+            style: const TextStyle(fontFamily: 'LINEseed'),
+          ),
         ),
       );
     } finally {
@@ -484,43 +624,148 @@ class OnboardingSheetState extends State<OnboardingSheet> {
     }
   }
 
-  // 下書き破棄（任意）
-  Future<void> _discardDraft() async {
-    if (uid.isEmpty) return;
-    try {
-      await FirebaseFirestore.instance
-          .collection(uid)
-          .doc(widget.tenantId)
-          .delete();
-      if (!mounted) return;
-      setState(() {
-        _hasDraft = false;
-        _initialFeePaidLocal = false;
-        _subscribedLocal = false;
-        selectedPlan = "A";
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('下書きを破棄しました', style: TextStyle(fontFamily: 'LINEseed')),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            '下書きの破棄に失敗: $e',
-            style: TextStyle(fontFamily: 'LINEseed'),
-          ),
-        ),
-      );
+  /// 登録完了時だけ見せる控除入力ダイアログ（％と固定額）
+  /// 保存した場合のみ storeDeductionPending に「今日から」適用で保存します。
+  Future<void> _promptInitialStoreDeduction(
+    DocumentReference<Map<String, dynamic>> tenantRef,
+  ) async {
+    final percentCtrl = TextEditingController(text: '');
+    final fixedCtrl = TextEditingController(text: '');
+    bool saving = false;
+
+    // 入力→正規化
+    double _parsePercent(String s) {
+      final v = double.tryParse(s.replaceAll('％', '').trim()) ?? 0.0;
+      if (v.isNaN) return 0.0;
+      return v.clamp(0.0, 100.0);
     }
+
+    int _parseFixed(String s) {
+      final v = int.tryParse(s.replaceAll(RegExp(r'[^0-9]'), '').trim()) ?? 0;
+      return v < 0 ? 0 : v;
+    }
+
+    await showDialog<bool>(
+      context: context,
+      barrierDismissible: false, // タップで勝手に閉じない
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            final enableSave = !saving; // 初期は保存可（入力は任意）
+
+            return AlertDialog(
+              backgroundColor: Colors.white,
+              surfaceTintColor: Colors.transparent,
+              title: const Text(
+                '店舗が差し引く金額を設定',
+                style: TextStyle(color: Colors.black87, fontFamily: 'LINEseed'),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '※ 登録直後のこのタイミングのみ、本日からの適用で保存できます。\n　（あとで変更する場合は翌月からの適用になります）',
+                      style: TextStyle(
+                        color: Colors.black54,
+                        fontSize: 12,
+                        fontFamily: 'LINEseed',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: percentCtrl,
+                    decoration: const InputDecoration(
+                      labelText: '差し引く割合（％）',
+                      hintText: '例: 10 または 12.5',
+                      suffixText: '%',
+                    ),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      signed: false,
+                      decimal: true,
+                    ),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: saving ? null : () => Navigator.pop(ctx, false),
+                  child: const Text(
+                    'あとで',
+                    style: TextStyle(
+                      color: Colors.black87,
+                      fontFamily: 'LINEseed',
+                    ),
+                  ),
+                ),
+                FilledButton.icon(
+                  onPressed: !enableSave
+                      ? null
+                      : () async {
+                          setLocal(() => saving = true);
+                          try {
+                            final p = _parsePercent(percentCtrl.text);
+                            final f = _parseFixed(fixedCtrl.text);
+
+                            final eff = DateTime.now(); // ← この時だけ “今日から” 適用
+                            await tenantRef.set({
+                              'storeDeduction': {'percent': p, 'fixed': f},
+                            }, SetOptions(merge: true));
+
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    '店舗控除を保存しました（本日 ${eff.hour.toString().padLeft(2, '0')}:${eff.minute.toString().padLeft(2, '0')} から適用）',
+                                    style: const TextStyle(
+                                      fontFamily: 'LINEseed',
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }
+                            if (ctx.mounted) Navigator.pop(ctx, true);
+                          } catch (e) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('保存に失敗: $e')),
+                              );
+                            }
+                            setLocal(() => saving = false);
+                          }
+                        },
+                  icon: saving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.save),
+                  label: const Text('保存'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    percentCtrl.dispose();
+    fixedCtrl.dispose();
   }
 
   // ====== UI ======
   @override
   Widget build(BuildContext context) {
-    // tenants/{id} が存在すれば購読（Webhook反映を自動で拾う）
     final tenantStream = FirebaseFirestore.instance
         .collection(uid)
         .doc(widget.tenantId)
@@ -545,9 +790,6 @@ class OnboardingSheetState extends State<OnboardingSheet> {
         // 表示上の完了判定（Firestore or ローカルイベント or 下書き反映）
         final initialFeePaid = initialFeeFromFs || _initialFeePaidLocal;
         final subscribed = subscribedFromFs || _subscribedLocal;
-
-        // tenants が出来ていれば「登録済み」とみなす
-        _registered = _registered || (snap.data?.exists == true);
 
         // ステップ誘導
         int desiredStep = step;
@@ -587,60 +829,12 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                   ),
                 ),
                 const SizedBox(height: 4),
-                Text(
-                  widget.tenantName,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: Colors.black54,
-                    fontFamily: 'LINEseed',
-                  ),
+                TextField(
+                  controller: tenantNameEdit,
+                  decoration: const InputDecoration(labelText: '店舗名'),
                 ),
-                const SizedBox(height: 12),
 
-                // === 下書きバナー（続きから再開） ===
-                if (_hasDraft && !_registered)
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    margin: const EdgeInsets.only(bottom: 12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF9F9F9),
-                      border: Border.all(color: Colors.black12),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.restart_alt, size: 18),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            '下書きが見つかりました。前回の続きから再開できます'
-                            '${_draftUpdatedAt != null ? '（最終更新: ${_draftUpdatedAt!}）' : ''}。',
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontFamily: 'LINEseed',
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        OutlinedButton(
-                          onPressed: _loadDraft, // 念のため最新を再読込
-                          child: const Text(
-                            '再開',
-                            style: TextStyle(fontFamily: 'LINEseed'),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        TextButton(
-                          onPressed: _discardDraft,
-                          child: const Text(
-                            '下書きを破棄',
-                            style: TextStyle(fontFamily: 'LINEseed'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                const SizedBox(height: 12),
 
                 // ==== 3ボタンを同一モーダルで並べる ====
                 _actionCard(
@@ -1070,4 +1264,29 @@ class _Plan {
     required this.feePct,
     required this.features,
   });
+}
+
+/// agencies を code で逆引きして agentId と commissionPercent を返す
+class _AgentLink {
+  final String agentId;
+  final int commissionPercent;
+  const _AgentLink(this.agentId, this.commissionPercent);
+}
+
+Future<_AgentLink?> _tryLinkAgencyByCodeInternal({
+  required String code,
+  required DocumentReference<Map<String, dynamic>> tenantRef,
+  required String tenantName,
+  required String ownerUid,
+}) async {
+  final qs = await FirebaseFirestore.instance
+      .collection('agencies')
+      .where('code', isEqualTo: code)
+      .where('status', isEqualTo: 'active')
+      .limit(1)
+      .get();
+  if (qs.docs.isEmpty) return null;
+  final agent = qs.docs.first;
+  final pct = (agent.data()['commissionPercent'] as num?)?.toInt() ?? 0;
+  return _AgentLink(agent.id, pct);
 }

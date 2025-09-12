@@ -13,6 +13,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
 import 'package:barcode/barcode.dart';
+import 'package:yourpay/tenant/method/fetchPlan.dart';
 import 'package:yourpay/tenant/newTenant/onboardingSheet.dart';
 
 class StoreQrTab extends StatefulWidget {
@@ -44,7 +45,9 @@ class _PosterOption {
 }
 
 // ▼ 用紙定義（A0〜A4 / B0〜B5）
-enum _Paper { a0, a1, a2, a3, a4, b0, b1, b2, b3, b4, b5 }
+enum _Paper { a0, a1, a2, a3, a4, a6, a7, b0, b1, b2, b3, b4, b5, b6, b7 }
+
+enum _QrDesign { classic, roundEyes, dots }
 
 class _PaperDef {
   final String label;
@@ -86,6 +89,20 @@ const Map<_Paper, _PaperDef> _paperDefs = {
     210,
     297,
   ),
+  // 追加: A6 / A7（A5は不要とのことなので未追加のまま）
+  _Paper.a6: _PaperDef(
+    'A6',
+    PdfPageFormat(105 * PdfPageFormat.mm, 148 * PdfPageFormat.mm),
+    105,
+    148,
+  ),
+  _Paper.a7: _PaperDef(
+    'A7',
+    PdfPageFormat(74 * PdfPageFormat.mm, 105 * PdfPageFormat.mm),
+    74,
+    105,
+  ),
+
   _Paper.b0: _PaperDef(
     'B0',
     PdfPageFormat(1000 * PdfPageFormat.mm, 1414 * PdfPageFormat.mm),
@@ -122,6 +139,19 @@ const Map<_Paper, _PaperDef> _paperDefs = {
     176,
     250,
   ),
+  // 追加: B6 / B7
+  _Paper.b6: _PaperDef(
+    'B6',
+    PdfPageFormat(125 * PdfPageFormat.mm, 176 * PdfPageFormat.mm),
+    125,
+    176,
+  ),
+  _Paper.b7: _PaperDef(
+    'B7',
+    PdfPageFormat(88 * PdfPageFormat.mm, 125 * PdfPageFormat.mm),
+    88,
+    125,
+  ),
 };
 
 class _StoreQrTabState extends State<StoreQrTab> {
@@ -132,45 +162,78 @@ class _StoreQrTabState extends State<StoreQrTab> {
   // ------- 状態 -------
   String? _publicStoreUrl;
   String _selectedPosterId = 'asset';
+  _PosterOption? _optimisticPoster;
 
   // 表示/出力カスタム
   bool _putWhiteBg = true;
   double _qrScale = 0.35; // 20〜60%
   double _qrPaddingMm = 6;
   bool _landscape = false;
+  // 追加: フィールド
+  late CollectionReference<Map<String, dynamic>> _postersRef;
+  Stream<QuerySnapshot<Map<String, dynamic>>>? _postersStream;
+  QuerySnapshot<Map<String, dynamic>>? _initialPosters; // 初期表示用(キャッシュ)
 
   // 用紙：UI表示は setState、プレビューは _paperVN で用紙変更時のみ再描画
   _Paper _paper = _Paper.a4;
   final ValueNotifier<_Paper> _paperVN = ValueNotifier<_Paper>(_Paper.a4);
 
   Offset _qrPos = const Offset(0.5, 0.5);
+  bool isC = false;
+  _QrDesign _qrDesign = _QrDesign.classic;
 
-  // Firestore
-  late final Stream<QuerySnapshot<Map<String, dynamic>>> _postersStream;
   bool? _connected; // ← 一度だけ取得して保持
 
   @override
   void initState() {
     super.initState();
     _publicStoreUrl = _buildStoreUrl();
-    _postersStream = FirebaseFirestore.instance
-        .collection(uid!)
+
+    final u = FirebaseAuth.instance.currentUser?.uid;
+    assert(u != null, 'Not signed in');
+    _postersRef = FirebaseFirestore.instance
+        .collection(u!)
         .doc(widget.tenantId)
-        .collection('posters')
-        .orderBy('createdAt', descending: true)
-        .snapshots();
-    _loadConnectedOnce(); // ← 1回だけ読む
+        .collection('posters');
+
+    _postersStream = _postersRef.snapshots(); // ← 初回から張る
+
+    _primeInitialPosters(); // ← 下の #2 参照
+    _loadConnectedOnce();
+    _initialize();
   }
 
   @override
   void didUpdateWidget(covariant StoreQrTab oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.tenantId != widget.tenantId) {
-      // テナント変更時だけ必要なものを更新
       _publicStoreUrl = _buildStoreUrl();
       _qrPos = const Offset(0.5, 0.5);
+
+      final u = FirebaseAuth.instance.currentUser?.uid;
+      _postersRef = FirebaseFirestore.instance
+          .collection(u!)
+          .doc(widget.tenantId)
+          .collection('posters');
+
+      setState(() {
+        _postersStream = _postersRef.snapshots(); // ★ 張り替え
+        _optimisticPoster = null;
+        _selectedPosterId = 'asset';
+      });
+
+      _primeInitialPosters(); // ★ 新テナントの初期データも取り直す
       _loadConnectedOnce();
+      _initialize();
     }
+  }
+
+  Future<void> _initialize() async {
+    final c = await fetchIsCPlan(
+      FirebaseFirestore.instance.collection(uid!).doc(widget.tenantId),
+    );
+    if (!mounted) return;
+    setState(() => isC = c); // ★ 取得後に描画更新
   }
 
   Future<void> _loadConnectedOnce() async {
@@ -183,6 +246,19 @@ class _StoreQrTabState extends State<StoreQrTab> {
       if (mounted) setState(() => _connected = c);
     } catch (_) {
       if (mounted) setState(() => _connected = false);
+    }
+  }
+
+  Future<void> _primeInitialPosters() async {
+    try {
+      final snap = await _postersRef.get(
+        const GetOptions(source: Source.cache),
+      );
+      if (mounted && (snap.docs.isNotEmpty)) {
+        setState(() => _initialPosters = snap);
+      }
+    } catch (_) {
+      // キャッシュが無い・失敗は無視でOK
     }
   }
 
@@ -257,6 +333,10 @@ class _StoreQrTabState extends State<StoreQrTab> {
       });
 
       if (!mounted) return;
+
+      // ★ ストリーム到着前に一時的に UI に出す
+      _optimisticPoster = _PosterOption.remote(docRef.id, url, label: f.name);
+
       setState(() => _selectedPosterId = docRef.id);
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -284,9 +364,10 @@ class _StoreQrTabState extends State<StoreQrTab> {
   Future<void> _exportPdf(List<_PosterOption> options) async {
     if (_publicStoreUrl == null) return;
 
+    // previewPane() の中（ValueListenableBuilder の builder 内）
     final selected = options.firstWhere(
       (o) => o.id == _selectedPosterId,
-      orElse: () => options.first,
+      orElse: () => options.first, // ★ 追加：見つからなければ先頭（テンプレ）を使う
     );
 
     pw.ImageProvider posterProvider;
@@ -477,26 +558,50 @@ class _StoreQrTabState extends State<StoreQrTab> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
     );
 
-    // connected が未取得の間は軽く待機表示
-    if (_connected == null) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    final waitingConnect = _connected == null;
 
     // ---------------- UI ----------------
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _postersStream, // ← ポスターのみストリーム
+      stream: _postersStream,
+      initialData: _initialPosters,
       builder: (context, postersSnap) {
+        // ★ 読み込みエラーは画面にも出し、SnackBar でも通知
+        if (postersSnap.hasError) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('ポスターの読み込みに失敗しました: ${postersSnap.error}'),
+                ),
+              );
+            }
+          });
+        }
+
+        final remoteDocs = (postersSnap.data?.docs ?? []);
         final options = <_PosterOption>[
           _PosterOption.asset(widget.posterAssetPath, label: 'テンプレ'),
-          ...((postersSnap.data?.docs ?? []).map((d) {
+          ...remoteDocs.map((d) {
             final m = d.data();
             return _PosterOption.remote(
               d.id,
               (m['url'] ?? '') as String,
               label: (m['name'] ?? 'ポスター') as String,
             );
-          })),
+          }),
         ];
+
+        // ★ 楽観挿入の重複防止：同じIDがサーバーから来たら破棄
+        if (_optimisticPoster != null &&
+            options.any((o) => o.id == _optimisticPoster!.id)) {
+          _optimisticPoster = null;
+        }
+
+        // ★ まだ入っていなければ一時的に挿入（アップロード直後にすぐ見える）
+        if (_optimisticPoster != null &&
+            !options.any((o) => o.id == _optimisticPoster!.id)) {
+          options.insert(1, _optimisticPoster!);
+        }
 
         final currentPosterId = options.any((o) => o.id == _selectedPosterId)
             ? _selectedPosterId
@@ -546,7 +651,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
             const SizedBox(height: 8),
             SwitchListTile(
               title: const Text(
-                '横向き（ランドスケープ）',
+                '横向き',
                 style: TextStyle(color: Colors.black87, fontFamily: 'LINEseed'),
               ),
               value: _landscape,
@@ -569,19 +674,45 @@ class _StoreQrTabState extends State<StoreQrTab> {
           ),
         );
 
-        Widget uploadButton() => OutlinedButton.icon(
-          onPressed: _connected! ? _addPosterFromFile : null,
-          icon: const Icon(Icons.add_photo_alternate_outlined),
-          label: const Text('アップロード', style: TextStyle(fontFamily: 'LINEseed')),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: black78,
-            side: const BorderSide(color: Colors.black54),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          ),
-        );
+        Widget uploadButton({required bool isC}) {
+          final canUpload = (_connected ?? false) && isC;
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              OutlinedButton.icon(
+                onPressed: canUpload ? _addPosterFromFile : null,
+                icon: const Icon(Icons.add_photo_alternate_outlined),
+                label: const Text(
+                  'アップロード',
+                  style: TextStyle(fontFamily: 'LINEseed'),
+                ),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: black78,
+                  side: const BorderSide(color: Colors.black54),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
+                ),
+              ),
+              if (!isC)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text(
+                    'ポスターをカスタムしたい場合はサブスクリプションをCプランに変更してください',
+                    style: TextStyle(
+                      color: Colors.black87,
+                      fontFamily: 'LINEseed',
+                    ),
+                  ),
+                ),
+            ],
+          );
+        }
 
         Widget posterPicker() => Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -621,7 +752,21 @@ class _StoreQrTabState extends State<StoreQrTab> {
                           clipBehavior: Clip.antiAlias,
                           child: opt.isAsset
                               ? Image.asset(opt.assetPath!, fit: BoxFit.cover)
-                              : Image.network(opt.url!, fit: BoxFit.cover),
+                              : Image.network(
+                                  opt.url!,
+                                  fit: BoxFit.cover,
+                                  loadingBuilder: (ctx, child, progress) =>
+                                      progress == null
+                                      ? child
+                                      : const Center(
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        ),
+                                  errorBuilder: (ctx, err, st) => const Center(
+                                    child: Icon(Icons.broken_image),
+                                  ),
+                                ),
                         ),
                         const SizedBox(height: 6),
                         SizedBox(
@@ -663,6 +808,28 @@ class _StoreQrTabState extends State<StoreQrTab> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('QRデザイン'),
+                trailing: DropdownButton<_QrDesign>(
+                  value: _qrDesign,
+                  onChanged: (v) => setState(() => _qrDesign = v!),
+                  items: const [
+                    DropdownMenuItem(
+                      value: _QrDesign.classic,
+                      child: Text('デフォルト（四角）'),
+                    ),
+                    DropdownMenuItem(
+                      value: _QrDesign.roundEyes,
+                      child: Text('丸い目＋四角ドット'),
+                    ),
+                    DropdownMenuItem(
+                      value: _QrDesign.dots,
+                      child: Text('丸ドット'),
+                    ),
+                  ],
+                ),
+              ),
               _SliderTile(
                 label: 'QRサイズ（%）',
                 value: _qrScale,
@@ -745,11 +912,9 @@ class _StoreQrTabState extends State<StoreQrTab> {
           valueListenable: _paperVN,
           builder: (_, paper, __) {
             final def = _paperDefs[paper]!;
-            final aspect = () {
-              final wMm = _landscape ? def.heightMm : def.widthMm;
-              final hMm = _landscape ? def.widthMm : def.heightMm;
-              return wMm / hMm;
-            }();
+            final wMm = _landscape ? def.heightMm : def.widthMm;
+            final hMm = _landscape ? def.widthMm : def.heightMm;
+            final aspect = wMm / hMm;
 
             return AspectRatio(
               aspectRatio: aspect,
@@ -770,6 +935,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
 
                   final selected = options.firstWhere(
                     (o) => o.id == _selectedPosterId,
+                    orElse: () => options.first,
                   );
                   final posterWidget = selected.isAsset
                       ? Image.asset(selected.assetPath!, fit: BoxFit.cover)
@@ -778,71 +944,86 @@ class _StoreQrTabState extends State<StoreQrTab> {
                   final left = _qrPos.dx * w - boxSidePx / 2;
                   final top = _qrPos.dy * h - boxSidePx / 2;
 
-                  return _connected!
-                      ? Stack(
-                          children: [
-                            Positioned.fill(
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(12),
-                                child: posterWidget,
+                  final showQr =
+                      _publicStoreUrl != null && _publicStoreUrl!.isNotEmpty;
+
+                  // ★ ここを必ず return する！
+                  return Stack(
+                    children: [
+                      Positioned.fill(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: posterWidget,
+                        ),
+                      ),
+                      if (showQr)
+                        Positioned(
+                          left: left,
+                          top: top,
+                          width: boxSidePx,
+                          height: boxSidePx,
+                          child: GestureDetector(
+                            onPanUpdate: (details) {
+                              setState(() {
+                                final nx = (_qrPos.dx + details.delta.dx / w)
+                                    .clamp(halfX, 1 - halfX)
+                                    .toDouble(); // ★ clamp の戻り値を double に
+                                final ny = (_qrPos.dy + details.delta.dy / h)
+                                    .clamp(halfY, 1 - halfY)
+                                    .toDouble();
+                                _qrPos = Offset(nx, ny);
+                              });
+                            },
+                            onDoubleTap: () =>
+                                setState(() => _qrPos = const Offset(0.5, 0.5)),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: _putWhiteBg
+                                    ? Colors.white
+                                    : Colors.transparent,
+                                borderRadius: BorderRadius.circular(8),
+                                boxShadow: _putWhiteBg
+                                    ? const [
+                                        BoxShadow(
+                                          color: Color(0x22000000),
+                                          blurRadius: 6,
+                                          offset: Offset(0, 2),
+                                        ),
+                                      ]
+                                    : null,
+                                border: Border.all(color: Colors.black12),
                               ),
-                            ),
-                            if (_publicStoreUrl != null)
-                              Positioned(
-                                left: left,
-                                top: top,
-                                width: boxSidePx,
-                                height: boxSidePx,
-                                child: GestureDetector(
-                                  onPanUpdate: (details) {
-                                    setState(() {
-                                      final nx =
-                                          (_qrPos.dx + details.delta.dx / w)
-                                              .clamp(halfX, 1 - halfX);
-                                      final ny =
-                                          (_qrPos.dy + details.delta.dy / h)
-                                              .clamp(halfY, 1 - halfY);
-                                      _qrPos = Offset(nx, ny);
-                                    });
-                                  },
-                                  onDoubleTap: () => setState(
-                                    () => _qrPos = const Offset(0.5, 0.5),
+                              alignment: Alignment.center,
+                              child: Padding(
+                                padding: EdgeInsets.all(
+                                  _putWhiteBg ? padPx : 0,
+                                ),
+                                child: QrImageView(
+                                  data: _publicStoreUrl!,
+                                  version: QrVersions.auto,
+                                  gapless: true,
+                                  size: qrSidePx,
+                                  eyeStyle: QrEyeStyle(
+                                    color: Colors.black,
+                                    eyeShape:
+                                        _qrDesign == _QrDesign.dots ||
+                                            _qrDesign == _QrDesign.roundEyes
+                                        ? QrEyeShape.circle
+                                        : QrEyeShape.square,
                                   ),
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      color: _putWhiteBg
-                                          ? Colors.white
-                                          : Colors.transparent,
-                                      borderRadius: BorderRadius.circular(8),
-                                      boxShadow: _putWhiteBg
-                                          ? const [
-                                              BoxShadow(
-                                                color: Color(0x22000000),
-                                                blurRadius: 6,
-                                                offset: Offset(0, 2),
-                                              ),
-                                            ]
-                                          : null,
-                                      border: Border.all(color: Colors.black12),
-                                    ),
-                                    alignment: Alignment.center,
-                                    child: Padding(
-                                      padding: EdgeInsets.all(
-                                        _putWhiteBg ? padPx : 0,
-                                      ),
-                                      child: QrImageView(
-                                        data: _publicStoreUrl!,
-                                        version: QrVersions.auto,
-                                        gapless: true,
-                                        size: qrSidePx,
-                                      ),
-                                    ),
+                                  dataModuleStyle: QrDataModuleStyle(
+                                    color: Colors.black,
+                                    dataModuleShape: _qrDesign == _QrDesign.dots
+                                        ? QrDataModuleShape.circle
+                                        : QrDataModuleShape.square,
                                   ),
                                 ),
                               ),
-                          ],
-                        )
-                      : Stack();
+                            ),
+                          ),
+                        ),
+                    ],
+                  );
                 },
               ),
             );
@@ -871,7 +1052,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
                             children: [
                               Expanded(child: pdfButton()),
                               const SizedBox(width: 12),
-                              Expanded(child: uploadButton()),
+                              Expanded(child: uploadButton(isC: isC)),
                             ],
                           ),
                           const SizedBox(height: 16),
@@ -886,21 +1067,30 @@ class _StoreQrTabState extends State<StoreQrTab> {
                   ),
                 ),
                 const SizedBox(width: 16),
-                Expanded(
-                  child: Align(
-                    alignment: Alignment.topCenter,
-                    child: previewPane(),
-                  ),
-                ),
+                _connected!
+                    ? Expanded(
+                        child: Align(
+                          alignment: Alignment.topCenter,
+                          child: previewPane(),
+                        ),
+                      )
+                    : Expanded(
+                        child: Center(
+                          child: Text("初期登録を終えると、QRコードを含んだポスターを作成することができます。"),
+                        ),
+                      ),
               ],
             ),
           );
         } else {
+          if (waitingConnect) const LinearProgressIndicator(minHeight: 2);
           return SingleChildScrollView(
             padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (waitingConnect)
+                  const LinearProgressIndicator(minHeight: 2), // ← こう
                 connectNotice(),
                 if (_connected!) ...[
                   paperSelector(),
@@ -909,7 +1099,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
                     children: [
                       Expanded(child: pdfButton()),
                       const SizedBox(width: 12),
-                      Expanded(child: uploadButton()),
+                      Expanded(child: uploadButton(isC: isC)),
                     ],
                   ),
                   const SizedBox(height: 16),
