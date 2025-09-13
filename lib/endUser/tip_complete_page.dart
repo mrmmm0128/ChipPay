@@ -6,6 +6,10 @@ import 'package:url_launcher/url_launcher_string.dart';
 import 'package:yourpay/endUser/public_store_page.dart';
 import 'package:yourpay/endUser/utils/design.dart';
 
+// ▼ 追加：アプリ内再生用
+import 'package:video_player/video_player.dart';
+import 'package:chewie/chewie.dart';
+
 class TipCompletePage extends StatefulWidget {
   final String tenantId;
   final String? tenantName;
@@ -46,28 +50,18 @@ class _TipCompletePageState extends State<TipCompletePage> {
     final isSubC = _isSubscriptionC(data);
 
     // 特典リンクは subscription.extras または直下にある可能性に両対応
-    final extras =
-        (data['subscription']?['extras'] as Map?)?.cast<String, dynamic>() ??
-        {};
-    final googleReviewUrl =
-        (extras['googleReviewUrl'] as String?) ??
-        (data['googleReviewUrl'] as String?) ??
-        '';
-    final lineOfficialUrl =
-        (extras['lineOfficialUrl'] as String?) ??
-        (data['lineOfficialUrl'] as String?) ??
-        '';
+    final extras = (data['c_perks'] as Map?)?.cast<String, dynamic>() ?? {};
+    final googleReviewUrl = (extras['reviewUrl'] as String?) ?? '';
+    final lineOfficialUrl = (extras['lineUrl'] as String?) ?? '';
 
-    // 感謝の写真/動画は c_perks.* に格納
+    // 感謝の動画は c_perks.* に格納（※写真は使わない）
     final perks = (data['c_perks'] as Map?)?.cast<String, dynamic>() ?? {};
-    final thanksPhotoUrl = (perks['thanksPhotoUrl'] as String?) ?? '';
     final thanksVideoUrl = (perks['thanksVideoUrl'] as String?) ?? '';
 
     return _LinksGateResult(
       isSubC: isSubC,
       googleReviewUrl: googleReviewUrl,
       lineOfficialUrl: lineOfficialUrl,
-      thanksPhotoUrl: thanksPhotoUrl,
       thanksVideoUrl: thanksVideoUrl,
     );
   }
@@ -121,9 +115,39 @@ class _TipCompletePageState extends State<TipCompletePage> {
     await launchUrlString(url, mode: LaunchMode.externalApplication);
   }
 
+  // ▼ 追加：黒枠タップでモーダル再生
   Future<void> _openThanksVideo(String url) async {
     if (url.isEmpty) return;
-    // 既存の動画プレビュー（モーダル）を利用
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) {
+        final videoCtrl = VideoPlayerController.networkUrl(Uri.parse(url));
+        final chewieCtrl = ChewieController(
+          videoPlayerController: videoCtrl,
+          autoPlay: true,
+          looping: false,
+          allowMuting: true,
+          allowPlaybackSpeedChanging: true,
+          materialProgressColors: ChewieProgressColors(),
+        );
+
+        return Dialog(
+          insetPadding: const EdgeInsets.all(16),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: AspectRatio(
+            aspectRatio: 16 / 9,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Chewie(controller: chewieCtrl),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -140,7 +164,11 @@ class _TipCompletePageState extends State<TipCompletePage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.check_circle, size: 80),
+                Image.asset(
+                  'assets/endUser/checked.png',
+                  width: 80,
+                  height: 80,
+                ),
                 const SizedBox(height: 12),
                 Text(tr("success_page.success"), style: AppTypography.label()),
                 if (widget.employeeName != null || widget.amount != null) ...[
@@ -166,7 +194,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
 
                 const SizedBox(height: 20),
 
-                // ▼ 感謝の写真/動画（Cプラン & URLがある時だけ表示）
+                // ▼ 「動画のみ」表示ブロック
                 FutureBuilder<_LinksGateResult>(
                   future: _linksGateFuture,
                   builder: (context, snap) {
@@ -177,66 +205,67 @@ class _TipCompletePageState extends State<TipCompletePage> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       );
                     }
-                    if (!snap.hasData) return const SizedBox.shrink();
-                    final r = snap.data!;
-                    final hasPhoto = (r.thanksPhotoUrl?.isNotEmpty ?? false);
-                    final hasVideo = (r.thanksVideoUrl?.isNotEmpty ?? false);
-                    if (!r.isSubC || (!hasPhoto && !hasVideo)) {
+                    if (!snap.hasData) {
                       return const SizedBox.shrink();
                     }
 
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          tr(
-                            'success_page.thanks_from_store',
-                          ), // 例: "お店からのメッセージ"
-                          style: AppTypography.body(),
-                          textAlign: TextAlign.left,
-                        ),
-                        const SizedBox(height: 8),
+                    final r = snap.data!;
+                    final hasVideo =
+                        (r.thanksVideoUrl != null &&
+                        r.thanksVideoUrl!.isNotEmpty);
 
-                        if (hasPhoto) ...[
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(12),
+                    // Cプラン & 動画URLあり → 黒枠+再生ボタン
+                    if (r.isSubC && hasVideo) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            tr('success_page.thanks_from_store'),
+                            style: AppTypography.body(),
+                            textAlign: TextAlign.left,
+                          ),
+                          const SizedBox(height: 8),
+                          GestureDetector(
+                            onTap: () => _openThanksVideo(r.thanksVideoUrl!),
                             child: AspectRatio(
                               aspectRatio: 16 / 9,
-                              child: Image.network(
-                                r.thanksPhotoUrl!,
-                                fit: BoxFit.cover,
-                                loadingBuilder: (c, child, progress) {
-                                  if (progress == null) return child;
-                                  return const Center(
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.black,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Stack(
+                                  alignment: Alignment.center,
+                                  children: const [
+                                    // 中央の再生ボタン
+                                    Icon(
+                                      Icons.play_circle_fill,
+                                      color: Colors.white,
+                                      size: 72,
                                     ),
-                                  );
-                                },
-                                errorBuilder: (_, __, ___) => Container(
-                                  color: const Color(0x11000000),
-                                  child: const Center(
-                                    child: Icon(Icons.broken_image),
-                                  ),
+                                  ],
                                 ),
                               ),
                             ),
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 12),
+                          const Divider(),
                         ],
+                      );
+                    }
 
-                        if (hasVideo)
-                          SizedBox(
-                            width: double.infinity,
-                            child: OutlinedButton.icon(
-                              icon: const Icon(Icons.play_circle_outline),
-                              label: Text(
-                                tr('success_page.watch_thanks_video'),
-                              ), // 例: "感謝の動画を見る"
-                              onPressed: () =>
-                                  _openThanksVideo(r.thanksVideoUrl!),
-                            ),
+                    // それ以外（A/Bプランや動画無し）はデフォ画像を表示
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // デフォルト画像（仮パス）
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.asset(
+                            'assets/images/thanks_placeholder.png',
+                            fit: BoxFit.cover,
                           ),
+                        ),
                         const SizedBox(height: 12),
                         const Divider(),
                       ],
@@ -265,7 +294,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
                 const SizedBox(height: 24),
                 const Divider(),
 
-                // ▼ サブスクC限定（Googleレビュー / LINE公式）
+                // ▼（従来どおり）サブスクC限定：Googleレビュー / LINE
                 FutureBuilder<_LinksGateResult>(
                   future: _linksGateFuture,
                   builder: (context, snap) {
@@ -285,8 +314,12 @@ class _TipCompletePageState extends State<TipCompletePage> {
                     final r = snap.data!;
                     if (!r.isSubC) return const SizedBox.shrink();
 
-                    final hasReview = (r.googleReviewUrl?.isNotEmpty ?? false);
-                    final hasLine = (r.lineOfficialUrl?.isNotEmpty ?? false);
+                    final hasReview =
+                        (r.googleReviewUrl != null &&
+                        r.googleReviewUrl!.isNotEmpty);
+                    final hasLine =
+                        (r.lineOfficialUrl != null &&
+                        r.lineOfficialUrl!.isNotEmpty);
                     if (!hasReview && !hasLine) return const SizedBox.shrink();
 
                     return Column(
@@ -331,19 +364,21 @@ class _TipCompletePageState extends State<TipCompletePage> {
   }
 }
 
+// ※ 既存の _LinksGateResult を使っている前提です。
+//   isSubC / googleReviewUrl / lineOfficialUrl / thanksVideoUrl を持つクラス。
+// class _LinksGateResult { ... }
+
 /// ここで “Cプラン判定 + 特典リンク + 感謝の写真/動画” をまとめて返す
 class _LinksGateResult {
   final bool isSubC;
   final String? googleReviewUrl;
   final String? lineOfficialUrl;
-  final String? thanksPhotoUrl;
   final String? thanksVideoUrl;
 
   _LinksGateResult({
     required this.isSubC,
     this.googleReviewUrl,
     this.lineOfficialUrl,
-    this.thanksPhotoUrl,
     this.thanksVideoUrl,
   });
 }

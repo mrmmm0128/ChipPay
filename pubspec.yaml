@@ -51,6 +51,7 @@ dependencies:
   google_fonts: ^6.3.1
   easy_localization: ^3.0.3
   video_player: ^2.8.6
+  chewie: ^1.13.0
   
 
 dev_dependencies:
@@ -76,6 +77,7 @@ flutter:
     - assets/fonts/NotoSansJP-VariableFont_wght.ttf
     - assets/fonts/LINESeedJP_A_TTF_Bd.ttf
     - assets/translations/
+    - assets/endUser/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

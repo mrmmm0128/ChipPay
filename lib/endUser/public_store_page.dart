@@ -255,10 +255,9 @@ class PublicStorePageState extends State<PublicStorePage> {
             ?.toUpperCase();
         final isTypeC = subType == 'C';
 
-        final lineUrl =
-            (tData?['publicLinks']?['lineOfficialUrl'] as String?) ?? '';
+        final lineUrl = (tData?['c_perks']?['reviewUrl'] as String?) ?? '';
         final googleReviewUrl =
-            (tData?['publicLinks']?['googleReviewUrl'] as String?) ?? '';
+            (tData?['c_perks']?['lineUrl'] as String?) ?? '';
 
         return Scaffold(
           backgroundColor: AppPalette.pageBg,
@@ -289,7 +288,7 @@ class PublicStorePageState extends State<PublicStorePage> {
           body: SingleChildScrollView(
             controller: _scrollController,
             padding: const EdgeInsets.only(
-              top: 12,
+              top: 24,
               bottom: 24,
               left: 12,
               right: 12,
@@ -302,16 +301,13 @@ class PublicStorePageState extends State<PublicStorePage> {
                   child: RichText(
                     textAlign: TextAlign.center,
                     text: TextSpan(
-                      style: AppTypography.headlineHuge(
-                        color: AppPalette.black,
-                      ),
                       children: [
                         WidgetSpan(
                           alignment: PlaceholderAlignment.baseline, // ← 基準線に揃える
                           baseline: TextBaseline.ideographic, // ← 日本語に適した基準線
                           child: StrokeText(
                             'チップ',
-                            style: AppTypography.headlineHuge(),
+                            style: AppTypography.headlineHuge0(),
                             strokeWidth: 4,
                           ),
                         ),
@@ -682,6 +678,7 @@ class _Sectionbar extends StatelessWidget {
               ),
             ),
           ),
+          SizedBox(height: 8),
         ],
       ),
     );

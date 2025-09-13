@@ -10,7 +10,8 @@ class AppPalette {
 
   // ブランド黄色（画像のトーンに近い少し濃いめ）:
   // 必要ならここを差し替えるだけで全体が変わります
-  static const Color yellow = Color(0xFFFCC400);
+  //static const Color yellow = Color(0xFFFCC400);
+  static const Color yellow = Color.fromRGBO(255, 218, 78, 1);
 
   // 背景
   static const Color pageBg = Color(0xFFF7F7F7);
@@ -38,6 +39,14 @@ class AppTypography {
   static TextStyle headlineHuge({Color? color}) => TextStyle(
     fontFamily: fontFamily,
     fontSize: 54,
+    fontWeight: FontWeight.w900,
+    height: 1.1,
+    color: color ?? AppPalette.black,
+  );
+
+  static TextStyle headlineHuge0({Color? color}) => TextStyle(
+    fontFamily: fontFamily,
+    fontSize: 64,
     fontWeight: FontWeight.w900,
     height: 1.1,
     color: color ?? AppPalette.black,
