@@ -23,8 +23,14 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
   String? tenantName;
   String? uid;
 
-  final _amountCtrl = TextEditingController(text: '500'); // デフォルト500
+  final _amountCtrl = TextEditingController(text: '0'); // デフォルト
   bool _loading = false;
+
+  // ★追加: 送金者コメント
+  final _messageCtrl = TextEditingController();
+  String? _senderMessage;
+  // 最大文字数はお好みで
+  static const int _maxMessageLength = 200;
 
   static const int _maxAmount = 1000000; // バックエンド制限と合わせる
 
@@ -53,12 +59,57 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
   @override
   void dispose() {
     _amountCtrl.dispose();
+    _messageCtrl.dispose();
     super.dispose();
   }
 
   int _currentAmount() {
     final v = int.tryParse(_amountCtrl.text) ?? 0;
     return v.clamp(0, _maxAmount);
+  }
+
+  // ★追加: メッセージ入力ダイアログ
+  Future<void> _editSenderMessage() async {
+    _messageCtrl.text = _senderMessage ?? '';
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('メッセージを添える'),
+        content: TextField(
+          controller: _messageCtrl,
+          maxLines: 4,
+          maxLength: _maxMessageLength,
+          decoration: const InputDecoration(
+            hintText: '（任意）スタッフへ一言メッセージ',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              _messageCtrl.clear();
+              Navigator.pop(context, true);
+            },
+            child: const Text('クリア'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (saved == true) {
+      setState(
+        () => _senderMessage = _messageCtrl.text.trim().isEmpty
+            ? null
+            : _messageCtrl.text.trim(),
+      );
+    }
   }
 
   void _initFromUrlIfNeeded() {
@@ -169,6 +220,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
     }
   }
 
+  // ② 送信処理にコメント同梱
   Future<void> _sendTip() async {
     if (tenantId == null || employeeId == null) return;
     final amount = _currentAmount();
@@ -195,17 +247,18 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
         'employeeId': employeeId,
         'amount': amount,
         'memo': 'Tip to ${name ?? ''}',
+        // ★追加: 送金者のコメントを一緒に送る
+        'payerMessage': _senderMessage ?? '',
       });
 
       final data = Map<String, dynamic>.from(result.data as Map);
       final checkoutUrl = data['checkoutUrl'] as String;
       final sessionId = data['sessionId'] as String;
 
-      // Stripe Checkout へ
       await launchUrlString(
         checkoutUrl,
-        mode: LaunchMode.platformDefault, // Webは同タブ
-        webOnlyWindowName: '_self', // 同じタブに強制
+        mode: LaunchMode.platformDefault,
+        webOnlyWindowName: '_self',
       );
       await _ensureAnonSignIn();
 
@@ -421,11 +474,9 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                                     color: AppPalette.yellow,
                                   ),
                                   backgroundColor: AppPalette.yellow,
-                                  selectedColor: AppPalette.black,
+                                  selectedColor: AppPalette.yellow,
                                   labelStyle: TextStyle(
-                                    color: active
-                                        ? AppPalette.white
-                                        : AppPalette.black,
+                                    color: AppPalette.black,
                                     fontWeight: FontWeight.w700,
                                   ),
                                   onSelected: (_) => _setAmount(v),
@@ -469,6 +520,32 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                 ),
 
                 const SizedBox(height: 10),
+
+                // ③ build() 内「金額カード」直下あたりに表示（プリセットの下など）
+                // presets の Wrap(...) のすぐ下あたりに以下を追加
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.message_outlined),
+                  title: Text(
+                    _senderMessage == null || _senderMessage!.isEmpty
+                        ? 'メッセージを添える（任意）'
+                        : 'メッセージを編集',
+                    style: AppTypography.body(),
+                  ),
+                  subtitle:
+                      (_senderMessage != null && _senderMessage!.isNotEmpty)
+                      ? Text(
+                          _senderMessage!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTypography.small(),
+                        )
+                      : null,
+                  trailing: OutlinedButton(
+                    onPressed: _editSenderMessage,
+                    child: Text(_senderMessage == null ? '追加' : '編集'),
+                  ),
+                ),
 
                 // ===== 下段（テンキー＋開発ボタン）: 余り全てを占有 =====
                 Expanded(

@@ -37,13 +37,13 @@
         "attention" : "1~1,000,000 円で入力してください",
         "miss_URL" : "決済URLの取得に失敗しました",
         "error" : "エラー: {}",
-        "tip_for_store" : "店舗にチップを贈る",
-        "tip_for_store1" : "{tenantName}にチップを贈る"
+        "tip_for_store" : "店舗にチップを送る",
+        "tip_for_store1" : "{tenantName}にチップを送る"
     },
     "success_page" : {
         "title" : "送金成功",
         "store": "お店",
-        "initiate1": "他のスタッフにチップを贈る",
+        "initiate1": "他のスタッフにもチップを送る",
         "success": "チップを送金しました。",
         "for": "宛先: {Name}",
         "amount": "金額: {Amount}",

@@ -553,25 +553,39 @@ export const onTipSucceededSendMailV2 = onDocumentWritten(
   }
 );
 
+// --------------- メール本文の組み立て＆送信 ---------------
 async function sendTipNotification(
   tenantId: string,
   tipId: string,
   resendApiKey: string,
   uid: string
-) {
+): Promise<void> {
+  // tips ドキュメント取得
   const tipRef = db.collection(uid).doc(tenantId).collection("tips").doc(tipId);
   const tipSnap = await tipRef.get();
   if (!tipSnap.exists) return;
 
-  const tip = tipSnap.data()!;
-  const amount: number = (tip.amount as number) ?? 0;
-  const currency = (tip.currency as string)?.toUpperCase() ?? "JPY";
+  const tip = tipSnap.data() ?? {};
+  const amount: number = typeof tip.amount === "number" ? tip.amount : 0;
+  const currency: string =
+    typeof tip.currency === "string" ? tip.currency.toUpperCase() : "JPY";
   const recipient: any = tip.recipient ?? {};
-  const isEmployee = recipient.type === "employee" || !!tip.employeeId;
+  const isEmployee: boolean =
+    recipient.type === "employee" || Boolean(tip.employeeId);
 
+  // ★ 追加: 送金者メッセージ（payerMessage / senderMessage / memo の順）
+  const payerMessageRaw =
+    (typeof tip.payerMessage === "string" && tip.payerMessage) ||
+    (typeof tip.senderMessage === "string" && tip.senderMessage) ||
+    "";
+  const payerMessage = payerMessageRaw.toString().trim();
+
+  // 宛先決定
   const to: string[] = [];
   if (isEmployee) {
-    const empId = (tip.employeeId as string) ?? recipient.employeeId;
+    const empId: string | undefined =
+      (tip.employeeId as string | undefined) ||
+      (recipient.employeeId as string | undefined);
     if (empId) {
       const empSnap = await db
         .collection(uid)
@@ -585,8 +599,9 @@ async function sendTipNotification(
   } else {
     const tenSnap = await db.collection(uid).doc(tenantId).get();
     const notify = tenSnap.get("notificationEmails") as string[] | undefined;
-    if (notify?.length) to.push(...notify);
+    if (Array.isArray(notify) && notify.length > 0) to.push(...notify);
   }
+
   if (to.length === 0) {
     const fallback =
       (tip.employeeEmail as string | undefined) ||
@@ -599,36 +614,59 @@ async function sendTipNotification(
     return;
   }
 
+  // 表示値
   const isJPY = currency === "JPY";
-  const money = isJPY ? `¥${amount.toLocaleString("ja-JP")}` : `${amount} ${currency}`;
+  const money = isJPY
+    ? `¥${Number(amount || 0).toLocaleString("ja-JP")}`
+    : `${amount} ${currency}`;
   const name = isEmployee
-    ? tip.employeeName ?? recipient.employeeName ?? "スタッフ"
-    : tip.storeName ?? recipient.storeName ?? "店舗";
-  const memo = (tip.memo as string) || "";
-  const createdAt: Date = tip.createdAt?.toDate?.() ?? new Date();
+    ? (tip.employeeName as string | undefined) ??
+      (recipient.employeeName as string | undefined) ??
+      "スタッフ"
+    : (tip.storeName as string | undefined) ??
+      (recipient.storeName as string | undefined) ??
+      "店舗";
 
-  const subject = isEmployee ? `チップを受け取りました: ${money}` : `店舗宛のチップ: ${money}`;
-  const text = [
+  const memo =
+    (typeof tip.memo === "string" ? tip.memo : "") /*従来のメモも存続*/;
+  const createdAt: Date =
+    (tip.createdAt?.toDate?.() as Date | undefined) ?? new Date();
+  const subject = isEmployee
+    ? `チップを受け取りました: ${money}`
+    : `店舗宛のチップ: ${money}`;
+
+  const lines = [
     `受取先: ${name}`,
     `金額: ${money}`,
     memo ? `メモ: ${memo}` : "",
+    // ★ 送金者からのメッセージ
+    payerMessage ? `送金者からのメッセージ: ${payerMessage}` : "",
     `日時: ${createdAt.toLocaleString("ja-JP")}`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ].filter(Boolean);
+
+  const text = lines.join("\n");
 
   const html = `
-  <div style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; line-height:1.6; color:#111">
-    <h2 style="margin:0 0 12px">🎉 ${subject}</h2>
-    <p style="margin:0 0 6px">受取先：<strong>${escapeHtml(name)}</strong></p>
-    <p style="margin:0 0 6px">金額：<strong>${escapeHtml(money)}</strong></p>
-    ${memo ? `<p style="margin:0 0 6px">メモ：${escapeHtml(memo)}</p>` : ""}
-    <p style="margin:0 0 6px">日時：${createdAt.toLocaleString("ja-JP")}</p>
-  </div>`;
+<div style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; line-height:1.6; color:#111">
+  <h2 style="margin:0 0 12px">🎉 ${escapeHtml(subject)}</h2>
+  <p style="margin:0 0 6px">受取先：<strong>${escapeHtml(name)}</strong></p>
+  <p style="margin:0 0 6px">金額：<strong>${escapeHtml(money)}</strong></p>
+  ${memo ? `<p style="margin:0 0 6px">メモ：${escapeHtml(memo)}</p>` : ""}
+  ${
+    payerMessage
+      ? `<p style="margin:0 0 6px">送金者からのメッセージ：${escapeHtml(
+          payerMessage
+        )}</p>`
+      : ""
+  }
+  <p style="margin:0 0 6px">日時：${escapeHtml(
+    createdAt.toLocaleString("ja-JP")
+  )}</p>
+</div>`;
 
+  // Resend で送信
   const { Resend } = await import("resend");
   const resend = new Resend(resendApiKey);
-
   await resend.emails.send({
     from: "YourPay 通知 <sendtip_app@appfromkomeda.jp>",
     to,
@@ -637,11 +675,18 @@ async function sendTipNotification(
     html,
   });
 
+  // 送信記録
   await tipRef.set(
-    { notification: { emailedAt: admin.firestore.FieldValue.serverTimestamp(), to } },
+    {
+      notification: {
+        emailedAt: admin.firestore.FieldValue.serverTimestamp(),
+        to,
+      },
+    },
     { merge: true }
   );
 }
+
 
 /* ===================== Stripe Webhook ===================== */
 export const stripeWebhook = functions

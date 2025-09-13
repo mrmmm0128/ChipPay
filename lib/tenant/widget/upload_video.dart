@@ -29,7 +29,7 @@ class _StaffThanksVideoManagerState extends State<StaffThanksVideoManager> {
       .collection('publicThanks')
       .doc(widget.tenantId)
       .collection('staff')
-      .doc(widget.staffId)
+      .doc(widget.staffName)
       .collection('videos');
 
   Future<void> _pickAndUpload() async {
