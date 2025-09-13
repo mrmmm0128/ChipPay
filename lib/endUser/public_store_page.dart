@@ -259,9 +259,8 @@ class PublicStorePageState extends State<PublicStorePage> {
         final isTypeC =
             subType == 'C' || ((tenantPlan ?? '').toUpperCase() == 'C');
 
-        final lineUrl = (tData?['c_perks']?['reviewUrl'] as String?) ?? '';
-        final googleReviewUrl =
-            (tData?['c_perks']?['lineUrl'] as String?) ?? '';
+        final lineUrl = (tData?['c_perks.lineUrl'] as String?) ?? '';
+        final googleReviewUrl = (tData?['c_perk.reviewUrl'] as String?) ?? '';
 
         return Scaffold(
           backgroundColor: AppPalette.pageBg,

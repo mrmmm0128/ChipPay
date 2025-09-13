@@ -140,6 +140,7 @@ class MyApp extends StatelessWidget {
       '/qr-all': (_) => const PublicStaffQrListPage(),
       '/qr-all/qr-builder': (_) => const QrPosterBuilderPage(),
       '/chechout-end': (_) => const LoginScreen(),
+      '/p': (_) => const PublicStorePage(),
     };
 
     final builder = staticRoutes[uri.path];
@@ -167,8 +168,6 @@ class MyApp extends StatelessWidget {
         fontFamily: 'LINEseed',
       ),
 
-      home: const Root(),
-
       onGenerateRoute: _onGenerateRoute,
     );
   }
@@ -188,6 +187,7 @@ class Root extends StatelessWidget {
           );
         }
 
+        // 現在のパス（HashStrategy対応）
         String currentPath() {
           final uri = Uri.base;
           if (uri.fragment.isNotEmpty) {
@@ -201,7 +201,8 @@ class Root extends StatelessWidget {
         final path = currentPath();
         const publicPaths = {'/qr-all', '/qr-builder', '/staff', '/p'};
 
-        if (snap.data == null && publicPaths.contains(path)) {
+        // ❶ パブリックパスはログインに関係なくパブリック画面をそのまま表示
+        if (publicPaths.contains(path)) {
           switch (path) {
             case '/qr-all':
               return const PublicStaffQrListPage();
@@ -214,45 +215,14 @@ class Root extends StatelessWidget {
           }
         }
 
+        // ❷ それ以外：未ログインならゲート
         if (snap.data == null) {
           return const BootGate();
         }
 
-        return const BootGate();
+        // ❸ ログイン済みの既定画面（必要なら StoreOrAdminSwitcher など）
+        return const StoreDetailScreen();
       },
     );
-  }
-}
-
-class StoreOrAdminSwitcher extends StatefulWidget {
-  const StoreOrAdminSwitcher({super.key});
-
-  @override
-  State<StoreOrAdminSwitcher> createState() => _StoreOrAdminSwitcherState();
-}
-
-class _StoreOrAdminSwitcherState extends State<StoreOrAdminSwitcher> {
-  String? _role;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadClaims();
-  }
-
-  Future<void> _loadClaims() async {
-    final user = FirebaseAuth.instance.currentUser!;
-    final result = await user.getIdTokenResult(true);
-    setState(() => _role = (result.claims?['role'] as String?) ?? 'staff');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_role == null) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    } else {
-      // TODO: 店舗ダッシュボード等へ遷移させる（今はログイン画面に戻す）
-      return const StoreDetailScreen();
-    }
   }
 }

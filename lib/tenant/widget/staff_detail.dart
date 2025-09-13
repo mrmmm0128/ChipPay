@@ -280,6 +280,7 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
         }
 
         // フォーム初期値
+        final staffName = data['name'] ?? '';
         _nameCtrl.value = TextEditingValue(
           text: (data['name'] ?? '') as String,
         );
@@ -396,6 +397,7 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
                     StaffThanksVideoManager(
                       tenantId: widget.tenantId,
                       staffId: widget.employeeId,
+                      staffName: staffName,
                     ),
 
                   const SizedBox(height: 16),

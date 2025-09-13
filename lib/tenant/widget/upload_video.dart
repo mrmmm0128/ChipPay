@@ -9,13 +9,13 @@ import 'package:video_player/video_player.dart';
 class StaffThanksVideoManager extends StatefulWidget {
   final String tenantId;
   final String staffId;
-  final String? staffName;
+  final String staffName;
 
   const StaffThanksVideoManager({
     super.key,
     required this.tenantId,
     required this.staffId,
-    this.staffName,
+    required this.staffName,
   });
 
   @override
@@ -63,7 +63,7 @@ class _StaffThanksVideoManagerState extends State<StaffThanksVideoManager> {
       final ext = contentType.split('/').last;
 
       final storagePath =
-          'publicThanks/${widget.tenantId}/staff/${widget.staffId}/videos/${docRef.id}.$ext';
+          'publicThanks/${widget.tenantId}/staff/${widget.staffName}/videos/${docRef.id}.$ext';
       final storageRef = FirebaseStorage.instance.ref(storagePath);
 
       // 進捗ダイアログ
