@@ -272,9 +272,7 @@ class _LoginScreenState extends State<LoginScreen> {
           await _sendVerificationEmail(user);
           await FirebaseAuth.instance.signOut();
           if (!mounted) return;
-          setState(
-            () => _error = 'メール認証が未完了です。受信箱のリンクで認証してください（確認メールを再送しました）。',
-          );
+          setState(() => _error = 'メール認証が未完了です。');
           return;
         }
 
@@ -282,8 +280,6 @@ class _LoginScreenState extends State<LoginScreen> {
         await _ensureUserDocExists();
 
         if (!mounted) return;
-        // ★ ここを変更：管理者は選択ダイアログを出す
-        //await _routeAfterLogin(context, user);
       }
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
@@ -395,13 +391,7 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(
-                  "T I P R I",
-                  style: TextStyle(
-                    fontSize: width / 15,
-                    fontFamily: "LINEseed",
-                  ),
-                ),
+                Image.asset("assets/posters/tipri.png", width: width / 5),
                 const SizedBox(height: 8),
                 Text(
                   "チップを通じて、より良い接客・ホスピタリティを実現しませんか？",

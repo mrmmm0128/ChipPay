@@ -558,7 +558,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                       ),
                     ),
                     padding: const EdgeInsets.symmetric(
-                      vertical: 8,
+                      vertical: 10,
                       horizontal: 12,
                     ),
                     child: Column(
@@ -583,64 +583,8 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
                           ),
                         ),
                         const SizedBox(height: 8),
+
                         // 開発用ボタン（下段内に収める）
-                        SizedBox(
-                          width: double.infinity,
-                          child: FilledButton.icon(
-                            onPressed: _loading
-                                ? null
-                                : () {
-                                    if (tenantId == null ||
-                                        employeeId == null) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        const SnackBar(
-                                          content: Text('スタッフ情報が不明です'),
-                                        ),
-                                      );
-                                      return;
-                                    }
-                                    final amount = _currentAmount();
-                                    if (amount < 100) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        const SnackBar(
-                                          content: Text('チップは100円から送ることができます'),
-                                        ),
-                                      );
-                                      return;
-                                    }
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => TipCompletePage(
-                                          tenantId: tenantId!,
-                                          tenantName: tenantName ?? '店舗',
-                                          employeeName: name,
-                                          amount: amount,
-                                          uid: uid,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                            style: FilledButton.styleFrom(
-                              backgroundColor: AppPalette.white,
-                              foregroundColor: AppPalette.black,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                side: const BorderSide(
-                                  color: AppPalette.black,
-                                  width: AppDims.border,
-                                ),
-                              ),
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                            ),
-                            icon: const Icon(Icons.volunteer_activism),
-                            label: const Text('決済完了画面へ遷移'),
-                          ),
-                        ),
                       ],
                     ),
                   ),

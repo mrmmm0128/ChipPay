@@ -75,10 +75,12 @@ flutter:
   assets:
     - assets/posters/store_poster.png
     - assets/posters/ZOTMAN.png
+    - assets/posters/tipri.png
     - assets/fonts/NotoSansJP-VariableFont_wght.ttf
     - assets/fonts/LINESeedJP_A_TTF_Bd.ttf
     - assets/translations/
     - assets/endUser/
+    
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

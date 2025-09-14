@@ -421,11 +421,7 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
               ],
             ),
           )
-        : Scaffold(
-            body: Expanded(
-              child: Center(child: Text("新規登録を完了すると、スタッフを追加することができます。")),
-            ),
-          );
+        : Scaffold(body: Center(child: Text("新規登録を完了すると、スタッフを追加することができます。")));
   }
 }
 

@@ -124,6 +124,8 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
     super.initState();
     // 初回だけ Future を生成（以降は使い回す）
     user = FirebaseAuth.instance.currentUser!;
+    print(user);
+
     if (user != null && !_tenantInitialized) {
       _initialTenantFuture = _resolveInitialTenant(user);
     }
@@ -543,15 +545,7 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text(
-              "T i p r i",
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
-                fontSize: 20,
-                fontFamily: "LINEseed",
-              ),
-            ),
+            Image.asset("assets/posters/tipri.png", height: 22),
             if (_isAdmin) const SizedBox(width: 8),
             if (_isAdmin)
               OutlinedButton.icon(
@@ -606,83 +600,17 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
         ),
       ),
 
-      // Drawer（狭幅時）
-      drawer: isNarrow
-          ? Drawer(
-              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: FirebaseFirestore.instance
-                    .collection(user.uid)
-                    .where('memberUids', arrayContains: user.uid)
-                    .snapshots(),
-                builder: (context, snap) {
-                  List<TenantOption> options = [];
-                  if (snap.hasData) {
-                    options = snap.data!.docs.map((d) {
-                      final data = d.data();
-                      final name = (data['name'] as String?)?.trim();
-                      return TenantOption(
-                        id: d.id,
-                        name: (name?.isNotEmpty ?? false) ? name! : '店舗',
-                      );
-                    }).toList();
-                  }
-                  if (tenantId != null &&
-                      !options.any((e) => e.id == tenantId)) {
-                    options = [
-                      ...options,
-                      TenantOption(id: tenantId!, name: tenantName ?? '店舗'),
-                    ];
-                  }
-
-                  if (options.isEmpty) {
-                    return FutureBuilder<List<TenantOption>>(
-                      future: _loadTenantOptionsFallback(user.uid),
-                      builder: (context, fb) {
-                        final opts = fb.data ?? const <TenantOption>[];
-                        return AppDrawer(
-                          tenantName: tenantName,
-                          currentTenantId: tenantId,
-                          currentIndex: _currentIndex,
-                          onTapIndex: (i) => setState(() => _currentIndex = i),
-                          tenantOptions: opts,
-                          onChangeTenant: (id) async =>
-                              _handleChangeTenant(user.uid, id),
-                          onCreateTenant: () async => createTenantDialog(),
-                        );
-                      },
-                    );
-                  }
-
-                  return AppDrawer(
-                    tenantName: tenantName,
-                    currentTenantId: tenantId,
-                    currentIndex: _currentIndex,
-                    onTapIndex: (i) => setState(() => _currentIndex = i),
-                    tenantOptions: options,
-                    onChangeTenant: (id) async =>
-                        _handleChangeTenant(user.uid, id),
-                    onCreateTenant: () async => createTenantDialog(),
-                  );
-                },
-              ),
-            )
-          : null,
-
       body: hasTenant
-          ? Column(
-              children: [
-                Expanded(
-                  child: IndexedStack(
-                    index: _currentIndex,
-                    children: [
-                      StoreHomeTab(tenantId: tenantId!, tenantName: tenantName),
-                      StoreQrTab(tenantId: tenantId!, tenantName: tenantName),
-                      StoreStaffTab(tenantId: tenantId!),
-                      StoreSettingsTab(tenantId: tenantId!),
-                    ],
-                  ),
-                ),
-              ],
+          ? SafeArea(
+              child: IndexedStack(
+                index: _currentIndex,
+                children: [
+                  StoreHomeTab(tenantId: tenantId!, tenantName: tenantName),
+                  StoreQrTab(tenantId: tenantId!, tenantName: tenantName),
+                  StoreStaffTab(tenantId: tenantId!),
+                  StoreSettingsTab(tenantId: tenantId!),
+                ],
+              ),
             )
           : Center(
               child: Column(
