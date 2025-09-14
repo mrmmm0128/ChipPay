@@ -132,12 +132,16 @@ class PublicStorePageState extends State<PublicStorePage> {
   bool _showAllMembers = false;
 
   final _scrollController = ScrollController();
+  bool _showIntro = true; // ← 追加：最初の3秒だけ true
 
   @override
   void initState() {
     super.initState();
     _searchCtrl.addListener(() {
       setState(() => _query = _searchCtrl.text.trim().toLowerCase());
+    });
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _showIntro = false);
     });
   }
 
@@ -152,6 +156,7 @@ class PublicStorePageState extends State<PublicStorePage> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _loadFromRouteOrQuery();
+    precacheImage(const AssetImage('assets/posters/tipri.png'), context);
   }
 
   // 追加：クエリ取得ヘルパー（? と # 両方対応）
@@ -236,6 +241,25 @@ class PublicStorePageState extends State<PublicStorePage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_showIntro) {
+      return Scaffold(
+        backgroundColor: AppPalette.yellow,
+        body: Center(
+          child: LayoutBuilder(
+            builder: (context, c) {
+              final w = c.maxWidth;
+              // 幅の35%を基準にしつつ、最小/最大サイズを制限
+              final double size = (w * 0.35).clamp(140.0, 320.0);
+              return Image.asset(
+                'assets/posters/tipri.png',
+                width: size,
+                fit: BoxFit.contain,
+              );
+            },
+          ),
+        ),
+      );
+    }
     // tenantId 不明 → 404 表示（現状どおり）
     if (tenantId == null) {
       return Scaffold(body: Center(child: Text(tr("status.not_found"))));
@@ -270,17 +294,6 @@ class PublicStorePageState extends State<PublicStorePage> {
             elevation: 0,
             automaticallyImplyLeading: false,
             scrolledUnderElevation: 0,
-            // title: Text(
-            //   tenantName ?? tr('store0'),
-            //   style: AppTypography.body(),
-            // ),
-            // bottom: PreferredSize(
-            //   preferredSize: const Size.fromHeight(1),
-            //   child: Container(
-            //     color: AppPalette.border, // 線の色
-            //     height: AppDims.border,
-            //   ),
-            // ),
             actions: const [
               Padding(
                 padding: EdgeInsets.only(right: 12),
@@ -291,7 +304,7 @@ class PublicStorePageState extends State<PublicStorePage> {
           body: SingleChildScrollView(
             controller: _scrollController,
             padding: const EdgeInsets.only(
-              top: 24,
+              top: 80,
               bottom: 24,
               left: 12,
               right: 12,
@@ -300,37 +313,59 @@ class PublicStorePageState extends State<PublicStorePage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 // ── HERO：チップを贈ろう ─────────────────────
+                // Center(
+                //   child: RichText(
+                //     textAlign: TextAlign.center,
+                //     text: TextSpan(
+                //       children: [
+                //         WidgetSpan(
+                //           alignment: PlaceholderAlignment.baseline, // ← 基準線に揃える
+                //           baseline: TextBaseline.ideographic, // ← 日本語に適した基準線
+                //           child: StrokeText(
+                //             'チップ',
+                //             style: AppTypography.headlineHuge0(),
+                //             strokeWidth: 12,
+                //           ),
+                //         ),
+                //         TextSpan(
+                //           text: 'を\n',
+                //           style: AppTypography.headlineLarge(),
+                //         ),
+                //         // ← 改行を独立させて高さを盛る
+                //         const WidgetSpan(child: SizedBox(height: 15)),
+                //         TextSpan(
+                //           text: '\n',
+                //           style: AppTypography.headlineLarge(),
+                //         ),
+                //         TextSpan(
+                //           text: '贈ろう',
+                //           style: AppTypography.headlineHuge(),
+                //         ),
+                //       ],
+                //     ),
+                //   ),
+                // ),
                 Center(
-                  child: RichText(
-                    textAlign: TextAlign.center,
-                    text: TextSpan(
-                      children: [
-                        WidgetSpan(
-                          alignment: PlaceholderAlignment.baseline, // ← 基準線に揃える
-                          baseline: TextBaseline.ideographic, // ← 日本語に適した基準線
-                          child: StrokeText(
-                            'チップ',
-                            style: AppTypography.headlineHuge0(),
-                            strokeWidth: 4,
-                          ),
-                        ),
-                        TextSpan(
-                          text: 'を\n',
-                          style: AppTypography.headlineLarge(),
-                        ),
-                        TextSpan(
-                          text: '贈ろう',
-                          style: AppTypography.headlineHuge(),
-                        ),
-                      ],
-                    ),
+                  child: LayoutBuilder(
+                    builder: (context, c) {
+                      final w = c.maxWidth;
+                      // 幅の35%を基準にしつつ、最小/最大サイズを制限
+                      final double size = (w * 0.5).clamp(140.0, 320.0);
+                      return Image.asset(
+                        'assets/posters/tipri.png',
+                        width: size,
+                        fit: BoxFit.contain,
+                      );
+                    },
                   ),
                 ),
 
-                SizedBox(height: 12),
+                //SizedBox(height: 12),
+                SizedBox(height: 50),
 
                 // ── メンバー ────────────────────────────────
-                _Sectionbar(title: tr('section.members')),
+                //_Sectionbar(title: tr('section.members')),
+                _Sectionbar(title: "どのスタッフにチップを贈りますか？"),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(
                     AppDims.pad,
@@ -639,13 +674,13 @@ class _Sectionbar extends StatelessWidget {
   const _Sectionbar({
     this.color = AppPalette.border,
     this.thickness = AppDims.border,
-    this.notchWidth = 18,
+    this.notchWidth = 25,
     this.notchHeight = 10,
     this.margin = const EdgeInsets.only(
-      top: 12,
+      top: 18,
       left: 12,
       right: 12,
-      bottom: 4,
+      bottom: 8,
     ),
     this.alignment = Alignment.center, // 左寄せ=Alignment.centerLeft, 右寄せ=...Right
     required this.title,
