@@ -5,8 +5,8 @@
       "number": "第{rank}名"
     },
     "section": {
-      "members": "成员",
-      "store": "店铺",
+      "members": "给工作人员小费",
+      "store": "给商店小费",
       "initiate1": "请多多支持",
       "initiate2": "开始使用 Tipri"
     },

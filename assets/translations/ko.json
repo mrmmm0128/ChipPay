@@ -5,8 +5,8 @@
       "number": "{rank}위"
     },
     "section": {
-      "members": "멤버",
-      "store": "가게",
+      "members": "직원에게 팁을 주자",
+      "store": "가게에 칩을 주자",
       "initiate1": "협조 부탁드립니다",
       "initiate2": "Tipri 도입하기"
     },

@@ -365,7 +365,7 @@ class PublicStorePageState extends State<PublicStorePage> {
 
                 // ── メンバー ────────────────────────────────
                 //_Sectionbar(title: tr('section.members')),
-                _Sectionbar(title: "どのスタッフにチップを贈りますか？"),
+                _Sectionbar(title: tr('section.member')),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(
                     AppDims.pad,

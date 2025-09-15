@@ -166,6 +166,7 @@ class MyApp extends StatelessWidget {
           brightness: Brightness.light,
         ),
         fontFamily: 'LINEseed',
+        scaffoldBackgroundColor: Colors.white,
       ),
 
       onGenerateRoute: _onGenerateRoute,

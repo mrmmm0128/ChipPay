@@ -5,8 +5,8 @@
         "number" : "第{rank}位"
     },
     "section": {
-        "members": "メンバー",
-        "store": "お店",
+        "members": "スタッフにチップを贈ろう",
+        "store": "お店にチップを贈ろう",
         "initiate1" : "ご協力お願いします",
         "initiate2" : "チップリを導入しよう"
     },

@@ -327,17 +327,27 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
             ),
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, _CommentAction.cancel),
-              child: const Text('戻る'),
-            ),
-            OutlinedButton(
-              onPressed: () => Navigator.pop(context, _CommentAction.skip),
-              child: const Text('スキップ'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, _CommentAction.ok),
-              child: const Text('決済へ進む'),
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: () =>
+                        Navigator.pop(context, _CommentAction.cancel),
+                    child: const Text('戻る'),
+                  ),
+                ),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () =>
+                        Navigator.pop(context, _CommentAction.skip),
+                    child: const Text('スキップ'),
+                  ),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, _CommentAction.ok),
+                  child: const Text('決済へ進む'),
+                ),
+              ],
             ),
           ],
         ),
