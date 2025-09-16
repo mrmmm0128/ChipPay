@@ -46,7 +46,7 @@ class StatusCard extends StatelessWidget {
           label: switch (initStatus) {
             'paid' => '初期費用: 支払い済み',
             'checkout_open' => '初期費用: 決済中',
-            _ => '初期費用: 未',
+            _ => '初期費用: 未払い',
           },
           kind: switch (initStatus) {
             'paid' => _ChipKind.good,
@@ -70,18 +70,16 @@ class StatusCard extends StatelessWidget {
 
         final subChip = _statusChip(
           label:
-              'サブスク: $subPlan / ${subStatus.toUpperCase()}${nextAt != null ? '（次回: ${_ymd(nextAt)}）' : ''}${overdue ? '（未払い）' : ''}',
+              'サブスク: $subPlan ${subStatus.toUpperCase()}${nextAt != null ? '（次回: ${_ymd(nextAt)}）' : ''}${overdue ? '（未払い）' : ''}',
           kind: overdue
               ? _ChipKind.bad
               : (subStatus == 'active' || subStatus == 'trialing')
               ? _ChipKind.good
-              : (subStatus == 'none' ? _ChipKind.bad : _ChipKind.warn),
+              : _ChipKind.bad,
         );
 
         // Connect
         final chargesEnabled = m['connect']?['charges_enabled'] == true;
-        final payoutsEnabled = m['connect']?['payouts_enabled'] == true;
-        final detailsSubmitted = m['connect']?['details_submitted'] == true;
         final currentlyDue =
             (m['connect']?['requirements']?['currently_due'] as List?)
                 ?.length ??
@@ -93,17 +91,10 @@ class StatusCard extends StatelessWidget {
             runSpacing: 8,
             children: [
               _statusChip(
-                label: 'details_submitted: ${detailsSubmitted ? 'OK' : '—'}',
-                kind: detailsSubmitted ? _ChipKind.good : _ChipKind.warn,
-              ),
-              _statusChip(
-                label: 'charges_enabled: ${chargesEnabled ? 'OK' : '—'}',
+                label: 'コネクトアカウント: ${chargesEnabled ? '登録済み' : '未登録'}',
                 kind: chargesEnabled ? _ChipKind.good : _ChipKind.bad,
               ),
-              _statusChip(
-                label: 'payouts_enabled: ${payoutsEnabled ? 'OK' : '—'}',
-                kind: payoutsEnabled ? _ChipKind.good : _ChipKind.warn,
-              ),
+
               if (currentlyDue > 0)
                 _statusChip(
                   label: '要提出: $currentlyDue 件',
@@ -274,14 +265,13 @@ class Filters extends StatelessWidget {
 
           // ステータスフィルタ
           FilterChip(
-            label: const Text('status: active'),
+            label: const Text(
+              '初期登録済',
+              style: TextStyle(height: 1.2, fontWeight: FontWeight.w700),
+            ),
+
             selected: activeOnly,
             onSelected: onToggleActive,
-          ),
-          FilterChip(
-            label: const Text('charges_enabled'),
-            selected: chargesEnabledOnly,
-            onSelected: onToggleCharges,
           ),
 
           // 並び替え

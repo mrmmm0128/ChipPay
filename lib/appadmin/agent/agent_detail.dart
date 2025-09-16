@@ -119,6 +119,18 @@ class AgencyDetailPage extends StatelessWidget {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: Colors.black),
+        ),
+        titleTextStyle: const TextStyle(
+          color: Colors.black,
+          fontSize: 18,
+          fontWeight: FontWeight.w700,
+        ),
+        contentTextStyle: const TextStyle(color: Colors.black),
         title: const Text('代理店情報を編集'),
         content: SingleChildScrollView(
           child: Column(
@@ -159,10 +171,23 @@ class AgencyDetailPage extends StatelessWidget {
         ),
         actions: [
           TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.black, // 文字色
+              overlayColor: Colors.black12, // 押下時の波紋色も黒系に
+            ),
             onPressed: () => Navigator.pop(context, false),
             child: const Text('キャンセル'),
           ),
           FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.black, // 背景
+              foregroundColor: Colors.white, // 文字色
+              overlayColor: Colors.white12, // 押下時の波紋
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: const BorderSide(color: Colors.black),
+              ),
+            ),
             onPressed: () => Navigator.pop(context, true),
             child: const Text('保存'),
           ),

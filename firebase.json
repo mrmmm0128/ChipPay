@@ -3,8 +3,7 @@
     "source": "functions"
   },
   "hosting": {
-    "site": "muscleshare-b34dd",
-    "public": "build/web",
+    "public": "y",
     "ignore": [
       "firebase.json",
       "**/.*",

@@ -11,15 +11,13 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  // ★ 管理者メールのホワイトリスト（任意で追加）
-  static const Set<String> _kAdminEmails = {'appfromkomeda@gmail.com'};
-
   final _formKey = GlobalKey<FormState>();
   final _email = TextEditingController();
   final _pass = TextEditingController();
   final _passConfirm = TextEditingController();
   final _nameCtrl = TextEditingController();
   final _companyCtrl = TextEditingController();
+  Map<String, dynamic>? _args;
 
   bool _loading = false;
   bool _isSignUp = false;
@@ -34,6 +32,13 @@ class _LoginScreenState extends State<LoginScreen> {
   void initState() {
     super.initState();
     _email.addListener(_clearErrorOnType);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _args ??=
+        ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
   }
 
   @override
@@ -67,47 +72,6 @@ class _LoginScreenState extends State<LoginScreen> {
         ],
       ),
     );
-  }
-
-  Future<void> _goToFirstTenantOrStore() async {
-    final currentUid = FirebaseAuth.instance.currentUser?.uid;
-    if (currentUid == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('ログイン状態が確認できませんでした')));
-      return;
-    }
-    try {
-      final qs = await FirebaseFirestore.instance
-          .collection(currentUid)
-          .limit(1)
-          .get();
-      if (!mounted) return;
-
-      if (qs.docs.isEmpty) {
-        Navigator.pushReplacementNamed(context, '/store');
-        return;
-      }
-
-      final firstDoc = qs.docs.first;
-      final data = firstDoc.data();
-      final tenantId = firstDoc.id;
-      final tenantName = (data['name'] as String?)?.trim();
-
-      Navigator.pushReplacementNamed(
-        context,
-        '/store',
-        arguments: <String, dynamic>{
-          'tenantId': tenantId,
-          if (tenantName != null && tenantName.isNotEmpty)
-            'tenantName': tenantName,
-        },
-      );
-    } catch (_) {
-      if (!mounted) return;
-      Navigator.pushReplacementNamed(context, '/store');
-    }
   }
 
   String? _validatePassword(String? v) {
@@ -158,62 +122,6 @@ class _LoginScreenState extends State<LoginScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('確認メールを送信しました。メール内のリンクで認証してください。')),
     );
-  }
-
-  /// ★ 管理者なら「管理 or 通常」を選ばせて遷移。一般はそのまま既存遷移
-  Future<void> _routeAfterLogin(BuildContext context, User user) async {
-    final email = (user.email ?? '').toLowerCase();
-    final isAdmin = email == 'appfromkomeda@gmail.com'; // ← あなたの判定ロジック
-
-    if (!isAdmin) {
-      await _goToFirstTenantOrStore(); // 通常ルート
-      return;
-    }
-
-    // ★ Web のフォーカス競合を避けるため、事前にアンフォーカス
-    FocusManager.instance.primaryFocus?.unfocus();
-
-    final choice = await showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogCtx) => AlertDialog(
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.transparent,
-        title: const Text('ログイン先を選択', style: TextStyle(color: Colors.black87)),
-        content: const Text(
-          '管理者アカウントとしてログインしています。どちらの画面に入りますか？',
-          style: TextStyle(color: Colors.black87),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogCtx, 'normal'),
-            child: const Text('通常画面', style: TextStyle(color: Colors.black87)),
-          ),
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: Colors.black,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () => Navigator.pop(dialogCtx, 'admin'),
-            icon: const Icon(Icons.admin_panel_settings),
-            label: const Text('管理ダッシュボード'),
-          ),
-        ],
-      ),
-    );
-
-    if (!context.mounted) return;
-
-    // ★ ここがポイント：ダイアログ完全破棄を待って“次のフレーム”で遷移
-    await Future<void>.delayed(const Duration(milliseconds: 10));
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!context.mounted) return;
-      if (choice == 'admin') {
-        Navigator.of(context).pushReplacementNamed('/admin');
-      } else {
-        _goToFirstTenantOrStore();
-      }
-    });
   }
 
   Future<void> _submit() async {
@@ -278,6 +186,25 @@ class _LoginScreenState extends State<LoginScreen> {
 
         // users/{uid} 作成・更新
         await _ensureUserDocExists();
+
+        // users/{uid} 作成・更新 後の直後に追加
+        final returnTo = _args?['returnTo'] as String?;
+        if (returnTo != null) {
+          // 承認ページから push で来ているなら pop で戻るのが最小遷移
+          if (Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+          } else {
+            // 直接 /login に来たケースなどは置き換え遷移で承認ページへ
+            Navigator.of(context).pushReplacementNamed(
+              returnTo,
+              arguments: {
+                'tenantId': _args?['tenantId'],
+                'token': _args?['token'],
+              },
+            );
+          }
+          return; // ここで終了
+        }
 
         if (!mounted) return;
       }

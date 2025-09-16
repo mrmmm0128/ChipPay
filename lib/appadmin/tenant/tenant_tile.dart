@@ -1,6 +1,5 @@
 // ======= 店舗行（売上は非同期集計） =======
 import 'package:flutter/material.dart';
-import 'package:yourpay/appadmin/admin_dashboard_screen.dart';
 import 'package:yourpay/appadmin/util.dart';
 
 class TenantTile extends StatefulWidget {

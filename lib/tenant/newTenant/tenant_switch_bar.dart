@@ -8,7 +8,20 @@ import 'package:yourpay/tenant/newTenant/onboardingSheet.dart';
 class TenantSwitcherBar extends StatefulWidget {
   final String? currentTenantId;
   final String? currentTenantName;
+
+  /// 従来のコールバック（後方互換のため残す）
   final void Function(String tenantId, String? tenantName) onChanged;
+
+  /// ★拡張版：ownerUid と招待フラグも渡す（任意）
+  ///   - 親が対応済みならこちらを呼びます
+  ///   - 未設定なら従来の onChanged を呼びます
+  final void Function(
+    String tenantId,
+    String? tenantName,
+    String ownerUid,
+    bool invited,
+  )?
+  onChangedEx;
 
   /// 余白（控えめにデフォルト調整）
   final EdgeInsetsGeometry padding;
@@ -16,6 +29,7 @@ class TenantSwitcherBar extends StatefulWidget {
   const TenantSwitcherBar({
     super.key,
     required this.onChanged,
+    this.onChangedEx, // ★追加
     this.currentTenantId,
     this.currentTenantName,
     this.padding = const EdgeInsets.fromLTRB(16, 8, 16, 6),
@@ -28,31 +42,129 @@ class TenantSwitcherBar extends StatefulWidget {
 class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
   final _functions = FirebaseFunctions.instanceFor(region: 'us-central1');
 
-  String? _selectedId;
+  String? _selectedId; // 旧：tenantId ベースの選択（互換用途）
+  String? _selectedKey; // ★新：ownerUid/tenantId の複合キー
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
   // メモ化した参照
   late final CollectionReference<Map<String, dynamic>> _tenantCol;
-  late final Stream<QuerySnapshot<Map<String, dynamic>>> _tenantStream;
+
+  // 結合ストリーム（自分のテナント + 招待テナント）
+  late final Stream<List<_TenantRow>> _combinedStream;
+  late final StreamController<List<_TenantRow>> _combinedCtrl;
+  final Map<String, StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>>
+  _invitedDocSubs = {}; // key = "$ownerUid/$tenantId"
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _ownedSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _invitedIndexSub;
+  final Map<String, _TenantRow> _rows = {}; // key = "$ownerUid/$tenantId"
+
+  // 複合キー
+  String _keyOf(String ownerUid, String tenantId) => '$ownerUid/$tenantId';
 
   @override
   void initState() {
     super.initState();
 
-    // 初期選択は props からのみ同期（親が決める）
+    // 初期選択は props からのみ同期（親が決める・旧互換）
     _selectedId = widget.currentTenantId;
 
     // ユーザーが未ログインなら以降の処理は行わない（nullチェック）
     final uid = _uid;
     if (uid != null) {
       _tenantCol = FirebaseFirestore.instance.collection(uid);
-      // ★ snapshots を1度だけ作成（再購読を防ぐ）
-      _tenantStream = _tenantCol.snapshots();
+      _combinedCtrl = StreamController<List<_TenantRow>>.broadcast();
+      _combinedStream = _combinedCtrl.stream;
+
+      void emit() {
+        final list = _rows.values.toList()
+          ..sort(
+            (a, b) => (a.data['name'] ?? '').toString().toLowerCase().compareTo(
+              (b.data['name'] ?? '').toString().toLowerCase(),
+            ),
+          );
+        _combinedCtrl.add(list);
+      }
+
+      // (1) 自分のテナント
+      _ownedSub = _tenantCol.snapshots().listen((qs) {
+        // まず自分のキー領域を消してから追加
+        _rows.removeWhere((k, _) => k.startsWith('$uid/'));
+        for (final d in qs.docs) {
+          final key = _keyOf(uid, d.id);
+          _rows[key] = _TenantRow(
+            ownerUid: uid,
+            tenantId: d.id,
+            data: d.data(),
+            invited: false,
+          );
+        }
+        emit();
+      });
+
+      // (2) 招待インデックス /<uid>/invited を購読し、各オーナー配下の実体をさらに購読
+      final invitedRef = FirebaseFirestore.instance
+          .collection(uid)
+          .doc('invited');
+      _invitedIndexSub = invitedRef.snapshots().listen((doc) {
+        final map = (doc.data()?['tenants'] as Map<String, dynamic>?) ?? {};
+        final should = <String>{};
+
+        map.forEach((tenantId, v) {
+          final ownerUid = (v is Map ? v['ownerUid'] : null)?.toString() ?? '';
+          if (ownerUid.isEmpty) return;
+          final key = _keyOf(ownerUid, tenantId as String);
+          should.add(key);
+
+          if (_invitedDocSubs.containsKey(key)) return;
+
+          _invitedDocSubs[key] = FirebaseFirestore.instance
+              .collection(ownerUid)
+              .doc(tenantId)
+              .snapshots()
+              .listen((ds) {
+                if (ds.exists) {
+                  _rows[key] = _TenantRow(
+                    ownerUid: ownerUid,
+                    tenantId: ds.id,
+                    data: ds.data() ?? {},
+                    invited: ownerUid != uid,
+                  );
+                } else {
+                  _rows.remove(key);
+                }
+                emit();
+              });
+        });
+
+        // 不要になった購読を解除
+        for (final key
+            in _invitedDocSubs.keys
+                .where((k) => !should.contains(k))
+                .toList()) {
+          _invitedDocSubs.remove(key)?.cancel();
+          _rows.remove(key);
+        }
+        emit();
+      });
     } else {
-      // ダミー（空のstream）…未ログインケース
       _tenantCol = FirebaseFirestore.instance.collection('_');
-      _tenantStream = const Stream.empty();
+      _combinedCtrl = StreamController<List<_TenantRow>>();
+      _combinedStream = const Stream.empty();
     }
+  }
+
+  @override
+  void dispose() {
+    for (final s in _invitedDocSubs.values) {
+      s.cancel();
+    }
+    _invitedDocSubs.clear();
+    _ownedSub?.cancel();
+    _invitedIndexSub?.cancel();
+    try {
+      _combinedCtrl.close();
+    } catch (_) {}
+    super.dispose();
   }
 
   @override
@@ -60,7 +172,8 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
     super.didUpdateWidget(oldWidget);
     // 親が選択IDを更新したら、その値をそのまま反映（build中に通知はしない）
     if (oldWidget.currentTenantId != widget.currentTenantId) {
-      _selectedId = widget.currentTenantId;
+      _selectedId = widget.currentTenantId; // 旧互換：キー化は build 内で解決
+      // _selectedKey は rows が出揃ってから同定する
     }
   }
 
@@ -134,8 +247,6 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
       dividerColor: Colors.black12,
     );
   }
-
-  // ... 省略（このState内のメンバー: _uid, _selectedId, _functions, bwTheme, OnboardingSheet, widget.onChanged などは既存のまま） ...
 
   Future<void> createTenantDialog() async {
     final nameCtrl = TextEditingController();
@@ -301,10 +412,19 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
       );
     }
 
-    // ❸ UI更新 & 親へ通知
+    // ❸ UI更新 & 親へ通知（★キーも更新）
     if (!mounted) return;
-    setState(() => _selectedId = tenantId);
-    widget.onChanged(tenantId, name);
+    setState(() {
+      _selectedId = tenantId; // 旧互換
+      _selectedKey = _keyOf(uid, tenantId); // 新
+    });
+
+    // 親通知（拡張→従来の順）
+    if (widget.onChangedEx != null) {
+      widget.onChangedEx!(tenantId, name, uid, false);
+    } else {
+      widget.onChanged(tenantId, name);
+    }
 
     // ❹ オンボーディング開始（同じ tenantId を渡す）
     await startOnboarding(tenantId, name);
@@ -325,8 +445,6 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
       );
       return;
     }
-
-    // 既に onChanged 済みなので、ここでは何もしない（必要なら status を見て分岐可能）
   }
 
   /// 代理店コードから agencies を逆引きし、見つかれば tenant にリンク & contracts を作成
@@ -424,8 +542,8 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
   Widget build(BuildContext context) {
     return Padding(
       padding: widget.padding,
-      child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: _tenantStream, // ★ 毎回同じ Stream
+      child: StreamBuilder<List<_TenantRow>>(
+        stream: _combinedStream,
         builder: (context, snap) {
           if (snap.hasError) {
             return _wrap(
@@ -442,10 +560,8 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
             return _wrap(child: const LinearProgressIndicator(minHeight: 2));
           }
 
-          final docs = snap.data!.docs;
-
-          // 店舗ゼロ
-          if (docs.isEmpty) {
+          final rows = snap.data!;
+          if (rows.isEmpty) {
             return _wrap(
               child: Row(
                 children: [
@@ -473,32 +589,57 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
             );
           }
 
-          // ドロップダウン項目
-          final items = docs.map((d) {
-            final name = (d.data()['name'] ?? '(no name)').toString();
+          // ドロップダウン項目（value は複合キー）
+          final items = rows.map((r) {
+            final name = (r.data['name'] ?? '(no name)').toString();
+            final isInvited = r.invited;
+            final key = _keyOf(r.ownerUid, r.tenantId);
             return DropdownMenuItem<String>(
-              value: d.id,
-              child: Text(
-                name,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.black87,
-                  fontFamily: 'LINEseed',
-                ),
+              value: key,
+              child: Row(
+                children: [
+                  if (isInvited) ...[
+                    const Icon(Icons.group_add, size: 16),
+                    const SizedBox(width: 6),
+                  ],
+                  Flexible(
+                    child: Text(
+                      isInvited ? '$name（招待）' : name,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.black87,
+                        fontFamily: 'LINEseed',
+                      ),
+                    ),
+                  ),
+                ],
               ),
             );
           }).toList();
 
-          // 現在選択中のドキュメント（_selectedId が null の可能性も考慮）
-          QueryDocumentSnapshot<Map<String, dynamic>>? selectedDoc;
-          if (_selectedId != null) {
-            try {
-              selectedDoc = docs.firstWhere((d) => d.id == _selectedId);
-            } catch (_) {
-              selectedDoc = null;
+          // 現在選択中の行を決定（優先：_selectedKey → 旧互換：_selectedId）
+          _TenantRow? selectedRow;
+          if (_selectedKey != null) {
+            selectedRow = rows.cast<_TenantRow?>().firstWhere(
+              (r) => _keyOf(r!.ownerUid, r.tenantId) == _selectedKey,
+              orElse: () => null,
+            );
+          } else if (_selectedId != null) {
+            final uid = _uid;
+            // 旧互換：tenantId が一致、かつ自分所有を優先（なければ最初に一致したもの）
+            selectedRow = rows.cast<_TenantRow?>().firstWhere(
+              (r) => r!.tenantId == _selectedId && r.ownerUid == uid,
+              orElse: () => rows.cast<_TenantRow?>().firstWhere(
+                (r) => r!.tenantId == _selectedId,
+                orElse: () => null,
+              ),
+            );
+            if (selectedRow != null) {
+              _selectedKey = _keyOf(selectedRow.ownerUid, selectedRow.tenantId);
             }
           }
-          final selectedData = selectedDoc?.data();
+
+          final selectedData = selectedRow?.data;
           final selectedIsDraft = (selectedData?['status'] == 'nonactive');
           final selectedName = (selectedData?['name'] ?? '') as String?;
 
@@ -509,20 +650,30 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                   child: DropdownButtonFormField<String>(
                     isExpanded: true,
                     isDense: true,
-                    value: _selectedId, // ← null なら未選択表示
+                    value: _selectedKey, // ★複合キーを使う
                     items: items,
                     iconEnabledColor: Colors.black54,
                     dropdownColor: Colors.white,
                     style: const TextStyle(color: Colors.black87, fontSize: 14),
-                    onChanged: (v) async {
-                      if (v == null || v == _selectedId) return;
+                    onChanged: (key) async {
+                      if (key == null || key == _selectedKey) return;
 
                       // 先に内部状態を更新（UIを即反映）
-                      setState(() => _selectedId = v);
+                      setState(() => _selectedKey = key);
 
-                      final doc = docs.firstWhere((e) => e.id == v);
-                      final data = doc.data();
+                      final idx = rows.indexWhere(
+                        (e) => _keyOf(e.ownerUid, e.tenantId) == key,
+                      );
+                      final row = idx >= 0 ? rows[idx] : rows.first;
+
+                      final data = row.data;
                       final name = (data['name'] ?? '') as String?;
+                      final ownerUid = row.ownerUid;
+                      final tenantId = row.tenantId;
+                      final invited = row.invited;
+
+                      // 旧互換：_selectedId も併記
+                      _selectedId = tenantId;
 
                       // 未完了なら「続きから再開」ダイアログ
                       if (data['status'] == 'nonactive') {
@@ -586,12 +737,16 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                         );
 
                         if (shouldResume == true) {
-                          await startOnboarding(v, name ?? '');
+                          await startOnboarding(tenantId, name ?? '');
                         }
                       }
 
-                      // ★ 親へはここで初めて通知（ユーザー選択の完了時）
-                      widget.onChanged(v, name);
+                      // ★ 親へ通知：ExがあればEx、なければ従来API
+                      if (widget.onChangedEx != null) {
+                        widget.onChangedEx!(tenantId, name, ownerUid, invited);
+                      } else {
+                        widget.onChanged(tenantId, name);
+                      }
                     },
                     decoration: InputDecoration(
                       labelText: '店舗を選択',
@@ -619,9 +774,10 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                 const SizedBox(width: 8),
 
                 // 選択中のときだけ補助ボタンを表示
-                if (selectedDoc != null && selectedIsDraft)
+                if (selectedRow != null && selectedIsDraft)
                   OutlinedButton.icon(
                     onPressed: () async {
+                      if (_selectedId == null) return;
                       await startOnboarding(_selectedId!, selectedName ?? '');
                     },
                     icon: const Icon(Icons.play_arrow, size: 18),
@@ -631,9 +787,10 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                     ),
                     style: _outlineSmall,
                   ),
-                if (selectedDoc != null && !selectedIsDraft)
+                if (selectedRow != null && !selectedIsDraft)
                   OutlinedButton.icon(
                     onPressed: () async {
+                      if (_selectedId == null) return;
                       await startOnboarding(_selectedId!, selectedName ?? '');
                     },
                     label: const Text(
@@ -701,4 +858,17 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
     textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
     visualDensity: VisualDensity.compact,
   );
+}
+
+class _TenantRow {
+  final String ownerUid;
+  final String tenantId;
+  final Map<String, dynamic> data;
+  final bool invited; // 招待テナントなら true
+  const _TenantRow({
+    required this.ownerUid,
+    required this.tenantId,
+    required this.data,
+    required this.invited,
+  });
 }

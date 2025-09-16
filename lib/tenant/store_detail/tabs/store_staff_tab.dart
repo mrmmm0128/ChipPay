@@ -6,12 +6,13 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // クリップボード
-import 'package:yourpay/tenant/widget/staff_detail.dart';
-import 'package:yourpay/tenant/widget/staff_entry.dart';
+import 'package:yourpay/tenant/widget/store_staff/staff_detail.dart';
+import 'package:yourpay/tenant/widget/store_staff/staff_entry.dart';
 
 class StoreStaffTab extends StatefulWidget {
   final String tenantId;
-  const StoreStaffTab({super.key, required this.tenantId});
+  final String? ownerId;
+  const StoreStaffTab({super.key, required this.tenantId, this.ownerId});
 
   @override
   State<StoreStaffTab> createState() => _StoreStaffTabState();
@@ -44,7 +45,7 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
   Future<void> _loadConnectedOnce() async {
     try {
       final doc = await FirebaseFirestore.instance
-          .collection(uid!)
+          .collection(widget.ownerId!)
           .doc(widget.tenantId)
           .get();
 
@@ -87,7 +88,7 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
     String email,
   ) async {
     final q = await FirebaseFirestore.instance
-        .collection(uid!)
+        .collection(widget.ownerId!)
         .doc(tenantId)
         .collection('employees')
         .where('email', isEqualTo: _normalizeEmail(email))
@@ -215,6 +216,7 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
         findTenantDupByEmail: _findTenantDupByEmail,
         confirmDuplicateDialog: _confirmDuplicateDialog,
         loadMyTenants: _loadMyTenants,
+        ownerId: widget.ownerId!,
       ),
     );
   }
@@ -316,7 +318,7 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
                       Expanded(
                         child: StreamBuilder<QuerySnapshot>(
                           stream: FirebaseFirestore.instance
-                              .collection(uid!)
+                              .collection(widget.ownerId!)
                               .doc(widget.tenantId)
                               .collection('employees')
                               .orderBy('createdAt', descending: true)
@@ -386,6 +388,7 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
                                       builder: (_) => StaffDetailScreen(
                                         tenantId: widget.tenantId,
                                         employeeId: empId,
+                                        ownerId: widget.ownerId!,
                                       ),
                                     ),
                                   );
@@ -432,6 +435,7 @@ class _AddStaffDialog extends StatefulWidget {
   final String initialName;
   final String initialEmail;
   final String initialComment;
+  final String ownerId;
 
   bool addingEmp;
   Uint8List? empPhotoBytes;
@@ -480,6 +484,7 @@ class _AddStaffDialog extends StatefulWidget {
     required this.findTenantDupByEmail,
     required this.confirmDuplicateDialog,
     required this.loadMyTenants,
+    required this.ownerId,
   });
 
   @override
@@ -792,6 +797,7 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
       name: name,
       email: email,
       comment: comment,
+      ownerId: widget.ownerId,
     );
   }
 
@@ -800,6 +806,7 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
     required String name,
     required String email,
     required String comment,
+    required String ownerId,
   }) async {
     // 親へ進捗通知（ローカル状態で）
     widget.onLocalStateChanged(
@@ -813,7 +820,7 @@ class _AddStaffDialogState extends State<_AddStaffDialog>
       final uid = FirebaseAuth.instance.currentUser?.uid;
       final user = FirebaseAuth.instance.currentUser!;
       final empRef = FirebaseFirestore.instance
-          .collection(uid!)
+          .collection(ownerId)
           .doc(tenantId)
           .collection('employees')
           .doc();

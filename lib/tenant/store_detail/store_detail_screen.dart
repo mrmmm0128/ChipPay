@@ -4,7 +4,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:yourpay/tenant/newTenant/onboardingSheet.dart';
-import 'package:yourpay/tenant/widget/drawer.dart';
+import 'package:yourpay/tenant/widget/store_home/drawer.dart';
 import 'package:yourpay/tenant/store_detail/tabs/srore_home_tab.dart';
 import 'package:yourpay/tenant/store_detail/tabs/store_qr_tab.dart';
 import 'package:yourpay/tenant/store_detail/tabs/store_setting_tab.dart';
@@ -37,6 +37,8 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
   String? tenantName;
   bool _loggingOut = false;
   bool _loading = true;
+  String? ownerUid;
+  bool invited = false;
 
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   final _empNameCtrl = TextEditingController();
@@ -55,6 +57,142 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
 
   // 初期テナント解決用 Future（※毎buildで新規作成しない）
   Future<Map<String, String?>?>? _initialTenantFuture;
+
+  Future<void> _openAlertsPanel() async {
+    final tid = tenantId;
+    if (tid == null) return;
+
+    // 1) ownerUid を tenantIndex から取得（招待テナント対応）
+    String? ownerUid;
+    try {
+      final idx = await FirebaseFirestore.instance
+          .collection('tenantIndex')
+          .doc(tid)
+          .get();
+      ownerUid = idx.data()?['uid'] as String?;
+    } catch (_) {}
+    // 自分オーナーのケースのフォールバック
+    ownerUid ??= FirebaseAuth.instance.currentUser?.uid;
+
+    if (ownerUid == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('通知の取得に失敗しました（ownerUid 不明）')),
+      );
+      return;
+    }
+
+    // 2) alerts を新しい順で取得
+    final col = FirebaseFirestore.instance
+        .collection(ownerUid)
+        .doc(tid)
+        .collection('alerts');
+
+    final qs = await col.orderBy('createdAt', descending: true).limit(50).get();
+
+    final alerts = qs.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+
+    // 3) 未読を既読に（表示するタイミングで一括マーク）
+    if (alerts.isNotEmpty) {
+      final batch = FirebaseFirestore.instance.batch();
+      for (final d in qs.docs) {
+        final read = (d.data()['read'] as bool?) ?? false;
+        if (!read) {
+          batch.set(d.reference, {
+            'read': true,
+            'readAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+      }
+      await batch.commit();
+    }
+
+    if (!mounted) return;
+
+    // 4) 一覧を BottomSheet で表示（message, createdAt を軽く表示）
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: false,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  height: 4,
+                  width: 40,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.black12,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'お知らせ',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'LINEseed',
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                if (alerts.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Text('新しいお知らせはありません'),
+                  )
+                else
+                  Flexible(
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: alerts.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (ctx, i) {
+                        final a = alerts[i];
+                        final msg = (a['message'] as String?)?.trim();
+                        final createdAt = a['createdAt'];
+                        String when = '';
+                        if (createdAt is Timestamp) {
+                          final dt = createdAt.toDate().toLocal();
+                          // シンプルな表示（intl なしで）
+                          when =
+                              '${dt.year}/${dt.month.toString().padLeft(2, '0')}/${dt.day.toString().padLeft(2, '0')} '
+                              '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+                        }
+
+                        return ListTile(
+                          leading: const Icon(Icons.notifications),
+                          title: Text(
+                            (msg == null || msg.isEmpty) ? 'お知らせ' : msg,
+                            style: const TextStyle(fontFamily: 'LINEseed'),
+                          ),
+                          subtitle: when.isEmpty ? null : Text(when),
+                          dense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 0,
+                            vertical: 4,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   Map<String, String> _queryFromHashAndSearch() {
     final u = Uri.base;
@@ -129,9 +267,26 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
     if (user != null && !_tenantInitialized) {
       _initialTenantFuture = _resolveInitialTenant(user);
     }
+    ownerUid = user.uid;
     // 初期化中は setState しない。完了後に必要なら1回だけ反映する。
     _checkAdmin();
     _loading = false;
+  }
+
+  Future<List<Map<String, dynamic>>> checkAlerts({
+    required String ownerUid,
+    required String tenantId,
+    int limit = 50,
+  }) async {
+    final snap = await FirebaseFirestore.instance
+        .collection(ownerUid)
+        .doc(tenantId)
+        .collection('alerts')
+        .orderBy('createdAt', descending: true)
+        .limit(limit)
+        .get();
+
+    return snap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
   }
 
   // ★ 初期化完了前は setState しないで代入のみ。完了後に変化があれば setState。
@@ -241,9 +396,12 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
         });
 
         if (!mounted) return;
+        // 作成直後の setState 内
         setState(() {
           tenantId = ref.id;
           tenantName = name;
+          ownerUid = user.uid; // ← 追加（自分のテナント）
+          invited = false;
           _tenantInitialized = true;
         });
 
@@ -318,11 +476,14 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
       if (args is Map) {
         final id = args['tenantId'] as String?;
         final nameArg = args['tenantName'] as String?;
+        final oUid = args['ownerUid'] as String?; // ← 追加（あれば優先）
+
         if (id != null && id.isNotEmpty) {
           // ★ BootGate から来たテナントをそのまま採用して
           //   初期テナント解決(FutureBuilder)をスキップする
           tenantId = id;
           tenantName = nameArg;
+          ownerUid = oUid ?? ownerUid; // 無ければ既定の user.uid のまま
           _tenantInitialized = true; // ← これがポイント
 
           // Stripeイベントを保留していた場合は、初期化済みになった今処理する
@@ -580,17 +741,30 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
                   currentTenantId: tenantId,
                   currentTenantName: tenantName,
                   onChanged: (id, name) {
-                    if (id == tenantId) return; // 同一IDなら無駄な再描画を防止
+                    // 従来（後方互換）
+                    if (id == tenantId) return;
                     setState(() {
                       tenantId = id;
                       tenantName = name;
+                      ownerUid = user.uid; // ← 従来自テナント扱い
+                      invited = false;
+                    });
+                  },
+                  // ★ 追加：拡張コールバック
+                  onChangedEx: (id, name, oUid, isInvited) {
+                    if (id == tenantId && oUid == ownerUid) return;
+                    setState(() {
+                      tenantId = id;
+                      tenantName = name;
+                      ownerUid = oUid; // ← 実体のオーナーUIDを保持
+                      invited = isInvited;
                     });
                   },
                 ),
               ),
             ),
           IconButton(
-            onPressed: () {},
+            onPressed: tenantId == null ? null : _openAlertsPanel,
             icon: const Icon(Icons.notifications_outlined),
           ),
         ],
@@ -605,10 +779,18 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
               child: IndexedStack(
                 index: _currentIndex,
                 children: [
-                  StoreHomeTab(tenantId: tenantId!, tenantName: tenantName),
-                  StoreQrTab(tenantId: tenantId!, tenantName: tenantName),
-                  StoreStaffTab(tenantId: tenantId!),
-                  StoreSettingsTab(tenantId: tenantId!),
+                  StoreHomeTab(
+                    tenantId: tenantId!,
+                    tenantName: tenantName,
+                    ownerId: ownerUid!,
+                  ),
+                  StoreQrTab(
+                    tenantId: tenantId!,
+                    tenantName: tenantName,
+                    ownerId: ownerUid!,
+                  ),
+                  StoreStaffTab(tenantId: tenantId!, ownerId: ownerUid!),
+                  StoreSettingsTab(tenantId: tenantId!, ownerId: ownerUid!),
                 ],
               ),
             )

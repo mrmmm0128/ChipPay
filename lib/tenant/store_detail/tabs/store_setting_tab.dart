@@ -7,14 +7,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:yourpay/tenant/widget/subscription_card.dart';
-import 'package:yourpay/tenant/widget/show_video_preview.dart';
-import 'package:yourpay/tenant/widget/c_perk.dart';
-import 'package:yourpay/tenant/widget/trial_progress_bar.dart';
+import 'package:yourpay/tenant/widget/store_setting/subscription_card.dart';
+import 'package:yourpay/tenant/widget/store_staff/show_video_preview.dart';
+import 'package:yourpay/tenant/widget/store_setting/c_perk.dart';
+import 'package:yourpay/tenant/widget/store_setting/trial_progress_bar.dart';
 
 class StoreSettingsTab extends StatefulWidget {
   final String tenantId;
-  const StoreSettingsTab({super.key, required this.tenantId});
+  final String? ownerId;
+  const StoreSettingsTab({super.key, required this.tenantId, this.ownerId});
 
   @override
   State<StoreSettingsTab> createState() => _StoreSettingsTabState();
@@ -169,7 +170,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
       final filename =
           'gratitude_${DateTime.now().millisecondsSinceEpoch}.$ext';
       final ref = FirebaseStorage.instance.ref(
-        '$uid/$tenantId/c_plan/$filename',
+        '${widget.ownerId}/$tenantId/c_plan/$filename',
       );
 
       await ref.putData(bytes, SettableMetadata(contentType: contentType));
@@ -315,7 +316,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
       try {
         await _functions.httpsCallable('removeTenantMember').call({
           'tenantId': widget.tenantId,
-          'uid': uid,
+          'uid': widget.ownerId,
         });
       } catch (e) {
         if (!mounted) return;
@@ -682,7 +683,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
   Future<void> _loadConnectedOnce() async {
     try {
       final doc = await FirebaseFirestore.instance
-          .collection(uid!)
+          .collection(widget.ownerId!)
           .doc(widget.tenantId)
           .get();
       final c = (doc.data()?['connect']?['charges_enabled'] as bool?) ?? false;
@@ -816,7 +817,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
 
                   // ★ 選択された tid から毎回“そのときだけ”参照を作る
                   final tenantRef = FirebaseFirestore.instance
-                      .collection(uid)
+                      .collection(widget.ownerId!)
                       .doc(tid);
 
                   final publicThankRef = FirebaseFirestore.instance
@@ -1521,7 +1522,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                                 m.data()
                                                     as Map<String, dynamic>;
                                             return AdminEntry(
-                                              uid: m.id,
+                                              uid: widget.ownerId!,
                                               email:
                                                   (md['email'] as String?) ??
                                                   '',

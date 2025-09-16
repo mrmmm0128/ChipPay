@@ -2,7 +2,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:yourpay/loading.dart';
+import 'package:yourpay/tenant/loading.dart';
 import 'package:yourpay/tenant/login_screens.dart';
 
 class BootGate extends StatefulWidget {
@@ -17,6 +17,7 @@ class _BootGateState extends State<BootGate> {
 
   bool _navigated = false;
   late final DateTime _splashUntil;
+  bool get _isCurrentRoute => (ModalRoute.of(context)?.isCurrent ?? false);
 
   @override
   void initState() {
@@ -55,13 +56,15 @@ class _BootGateState extends State<BootGate> {
         }
 
         // ログイン済み & 認証済み → 最初の店舗へ（最低2秒は表示してから）
-        if (!_navigated) {
+        // ログイン済み & 認証済み → 最初の店舗へ
+        if (!_navigated && _isCurrentRoute) {
           _navigated = true;
           WidgetsBinding.instance.addPostFrameCallback((_) async {
+            // 直前で別画面が前面に来ていないか再確認
+            if (!mounted || !_isCurrentRoute) return;
             await _ensureMinSplash();
-            if (mounted) {
-              await _goToFirstTenantOrStore(context, user.uid);
-            }
+            if (!mounted || !_isCurrentRoute) return;
+            await _goToFirstTenantOrStore(context, user.uid);
           });
         }
 

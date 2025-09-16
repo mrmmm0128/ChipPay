@@ -9,15 +9,17 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:yourpay/tenant/method/fetchPlan.dart';
-import 'package:yourpay/tenant/widget/upload_video.dart';
+import 'package:yourpay/tenant/widget/store_staff/upload_video.dart';
 
 class StaffDetailScreen extends StatefulWidget {
   final String tenantId;
   final String employeeId;
+  final String ownerId;
   const StaffDetailScreen({
     super.key,
     required this.tenantId,
     required this.employeeId,
+    required this.ownerId,
   });
 
   @override
@@ -38,7 +40,7 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
   @override
   void initState() {
     super.initState();
-    fetchPlanStringById(uid!, widget.tenantId).then((p) {
+    fetchPlanStringById(widget.ownerId!, widget.tenantId).then((p) {
       if (!mounted) return;
       setState(() => _plan = p);
     });
@@ -50,7 +52,7 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
 
   String _staffTipUrl(String tenantId, String employeeId, {int? initAmount}) {
     final qp = <String, String>{
-      'u': uid!,
+      'u': widget.ownerId!,
       't': tenantId,
       'e': employeeId,
       if (initAmount != null) 'a': '$initAmount',
@@ -210,7 +212,7 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final empRef = FirebaseFirestore.instance
-        .collection(uid!)
+        .collection(widget.ownerId!)
         .doc(widget.tenantId)
         .collection('employees')
         .doc(widget.employeeId);

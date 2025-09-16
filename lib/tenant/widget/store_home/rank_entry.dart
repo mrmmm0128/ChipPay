@@ -9,12 +9,14 @@ class RankEntry {
   final String name;
   final int amount;
   final int count;
+  final String ownerId;
   RankEntry({
     required this.rank,
     required this.employeeId,
     required this.name,
     required this.amount,
     required this.count,
+    required this.ownerId,
   });
 }
 
@@ -24,6 +26,7 @@ class RankingGrid extends StatelessWidget {
   final List<RankEntry> entries;
   final bool shrinkWrap; // ← 追加
   final ScrollPhysics? physics; // ← 追加
+  final String ownerId;
 
   const RankingGrid({
     super.key,
@@ -31,6 +34,7 @@ class RankingGrid extends StatelessWidget {
     required this.entries,
     this.shrinkWrap = false, // 既定は従来どおり
     this.physics,
+    required this.ownerId,
   });
 
   @override
@@ -59,7 +63,11 @@ class RankingGrid extends StatelessWidget {
             final e = entries[i];
             return Padding(
               padding: const EdgeInsets.fromLTRB(8, 10, 8, 6),
-              child: EmployeeRankTile(tenantId: tenantId, entry: e),
+              child: EmployeeRankTile(
+                tenantId: tenantId,
+                entry: e,
+                ownerId: ownerId,
+              ),
             );
           },
         );
@@ -71,10 +79,12 @@ class RankingGrid extends StatelessWidget {
 class EmployeeRankTile extends StatelessWidget {
   final String tenantId;
   final RankEntry entry;
+  final String ownerId;
   const EmployeeRankTile({
     super.key,
     required this.tenantId,
     required this.entry,
+    required this.ownerId,
   });
 
   @override
@@ -100,6 +110,7 @@ class EmployeeRankTile extends StatelessWidget {
                       child: _EmployeePhoto(
                         tenantId: tenantId,
                         employeeId: entry.employeeId,
+                        ownerId: ownerId,
                       ),
                     ),
                   ),
@@ -159,14 +170,19 @@ class EmployeeRankTile extends StatelessWidget {
 class _EmployeePhoto extends StatelessWidget {
   final String tenantId;
   final String employeeId;
-  _EmployeePhoto({required this.tenantId, required this.employeeId});
+  final String ownerId;
+  _EmployeePhoto({
+    required this.tenantId,
+    required this.employeeId,
+    required this.ownerId,
+  });
   final uid = FirebaseAuth.instance.currentUser?.uid;
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<DocumentSnapshot>(
       stream: FirebaseFirestore.instance
-          .collection(uid!)
+          .collection(ownerId!)
           .doc(tenantId)
           .collection('employees')
           .doc(employeeId)

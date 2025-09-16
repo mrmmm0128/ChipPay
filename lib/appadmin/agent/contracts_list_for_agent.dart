@@ -63,9 +63,9 @@ class ContractsListForAgent extends StatelessWidget {
                 final tm = st.data?.data() ?? {};
                 final init = (tm['billing']?['initialFee']?['status'] ?? 'none')
                     .toString();
-                final subSt = (tm['subscription']?['status'] ?? 'none')
+                final subSt = (tm['subscription']?['status'] ?? '').toString();
+                final subPl = (tm['subscription']?['plan'] ?? '選択なし')
                     .toString();
-                final subPl = (tm['subscription']?['plan'] ?? '-').toString();
                 final chg = tm['connect']?['charges_enabled'] == true;
 
                 // 次回日（nextPaymentAt or currentPeriodEnd）
@@ -107,7 +107,7 @@ class ContractsListForAgent extends StatelessWidget {
                             ? '初期費用済'
                             : init == 'checkout_open'
                             ? '初期費用:決済中'
-                            : '初期費用:未',
+                            : '初期費用:未払い',
                         init == 'paid'
                             ? _ChipKind.good
                             : (init == 'checkout_open'
@@ -115,19 +115,17 @@ class ContractsListForAgent extends StatelessWidget {
                                   : _ChipKind.bad),
                       ),
                       _mini(
-                        'サブスク:$subPl/${subSt.toUpperCase()}'
+                        'サブスク:$subPl ${subSt.toUpperCase()}'
                         '${nextAt != null ? '・次回:${_ymd(nextAt)}' : ''}'
                         '${overdue ? '・未払い' : ''}',
                         overdue
                             ? _ChipKind.bad
                             : (subSt == 'active' || subSt == 'trialing')
                             ? _ChipKind.good
-                            : (subSt == 'none'
-                                  ? _ChipKind.bad
-                                  : _ChipKind.warn),
+                            : _ChipKind.bad,
                       ),
                       _mini(
-                        chg ? 'charges_enabled' : 'charges_disabled',
+                        chg ? 'コネクトアカウント登録済' : 'コネクトアカウント未登録',
                         chg ? _ChipKind.good : _ChipKind.bad,
                       ),
                       const Icon(Icons.chevron_right),

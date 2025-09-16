@@ -115,7 +115,6 @@ async function upsertTenantIndex(uid, tenantId, stripeAccountId) {
             .set({ uid, tenantId, stripeAccountId }, { merge: true });
     }
 }
-/* ===================== Firestore ルール系 ===================== */
 async function assertTenantAdmin(tenantId, uid) {
     // ルート: {collection: <uid>, doc: <tenantId>}
     const tRef = db.collection(uid).doc(tenantId);
@@ -124,7 +123,6 @@ async function assertTenantAdmin(tenantId, uid) {
         throw new functions.https.HttpsError("not-found", "Tenant not found");
     }
     const data = tSnap.data() || {};
-    // 1) members フィールド（配列）
     const members = (data.members ?? []);
     if (Array.isArray(members) && members.length) {
         const inMembers = members.some((m) => {
@@ -232,10 +230,6 @@ async function ensureCustomer(uid, tenantId, email, name) {
     await upsertTenantIndex(uid, tenantId);
     return customer.id;
 }
-/* ============================================================
- *  公開ページ: チップ（スタッフ宛）
- *  ※ uid 不明 → tenantIndex から逆引き
- * ==========================================================*/
 exports.createTipSessionPublic = functions
     .region("us-central1")
     .runWith({
@@ -337,10 +331,6 @@ exports.createTipSessionPublic = functions
     });
     return { checkoutUrl: session.url, sessionId: session.id, tipDocId: tipRef.id };
 });
-/* ============================================================
- *  公開ページ: チップ（店舗宛）
- *  ※ uid 不明 → tenantIndex から逆引き
- * ==========================================================*/
 exports.createStoreTipSessionPublic = functions
     .region("us-central1")
     .runWith({
@@ -464,19 +454,28 @@ exports.onTipSucceededSendMailV2 = (0, firestore_1.onDocumentWritten)({
         return;
     await sendTipNotification(event.params.tenantId, event.params.tipId, exports.RESEND_API_KEY.value(), event.params.uid);
 });
+// --------------- メール本文の組み立て＆送信 ---------------
 async function sendTipNotification(tenantId, tipId, resendApiKey, uid) {
+    // tips ドキュメント取得
     const tipRef = db.collection(uid).doc(tenantId).collection("tips").doc(tipId);
     const tipSnap = await tipRef.get();
     if (!tipSnap.exists)
         return;
-    const tip = tipSnap.data();
-    const amount = tip.amount ?? 0;
-    const currency = tip.currency?.toUpperCase() ?? "JPY";
+    const tip = tipSnap.data() ?? {};
+    const amount = typeof tip.amount === "number" ? tip.amount : 0;
+    const currency = typeof tip.currency === "string" ? tip.currency.toUpperCase() : "JPY";
     const recipient = tip.recipient ?? {};
-    const isEmployee = recipient.type === "employee" || !!tip.employeeId;
-    const to = [];
+    const isEmployee = recipient.type === "employee" || Boolean(tip.employeeId);
+    // ★ 追加: 送金者メッセージ（payerMessage / senderMessage / memo の順）
+    const payerMessageRaw = (typeof tip.payerMessage === "string" && tip.payerMessage) ||
+        (typeof tip.senderMessage === "string" && tip.senderMessage) ||
+        "";
+    const payerMessage = payerMessageRaw.toString().trim();
+    const toSet = new Set();
+    // 1) 受け取り者（スタッフ or 店舗）
     if (isEmployee) {
-        const empId = tip.employeeId ?? recipient.employeeId;
+        const empId = tip.employeeId ||
+            recipient.employeeId;
         if (empId) {
             const empSnap = await db
                 .collection(uid)
@@ -486,14 +485,55 @@ async function sendTipNotification(tenantId, tipId, resendApiKey, uid) {
                 .get();
             const empEmail = empSnap.get("email");
             if (empEmail)
-                to.push(empEmail);
+                toSet.add(empEmail);
         }
     }
     else {
-        const tenSnap = await db.collection(uid).doc(tenantId).get();
-        const notify = tenSnap.get("notificationEmails");
-        if (notify?.length)
-            to.push(...notify);
+        // 店舗宛のとき、店舗の連絡先が tip/recipient にあれば追加
+        const storeEmail = tip.storeEmail ||
+            recipient.storeEmail;
+        if (storeEmail)
+            toSet.add(storeEmail);
+    }
+    // 2) 店舗管理者（通知メール配列）
+    const tenSnap = await db.collection(uid).doc(tenantId).get();
+    const notify = tenSnap.get("notificationEmails");
+    if (Array.isArray(notify)) {
+        for (const e of notify) {
+            if (typeof e === "string" && e.includes("@"))
+                toSet.add(e);
+        }
+    }
+    // 3) 店舗管理者（members コレクションの admin/owner）
+    try {
+        const memSnap = await db
+            .collection(uid)
+            .doc(tenantId)
+            .collection("members")
+            .get();
+        for (const m of memSnap.docs) {
+            const md = m.data() || {};
+            const role = String(md.role ?? "admin").toLowerCase();
+            if (role === "admin" || role === "owner") {
+                const em = md.email;
+                if (em && em.includes("@"))
+                    toSet.add(em);
+            }
+        }
+    }
+    catch {
+    }
+    if (toSet.size === 0) {
+        const fallback = tip.employeeEmail ||
+            recipient.employeeEmail ||
+            tip.storeEmail;
+        if (fallback)
+            toSet.add(fallback);
+    }
+    const to = Array.from(toSet);
+    if (to.length === 0) {
+        console.warn("[tip mail] no recipient", { tenantId, tipId });
+        return;
     }
     if (to.length === 0) {
         const fallback = tip.employeeEmail ||
@@ -506,30 +546,44 @@ async function sendTipNotification(tenantId, tipId, resendApiKey, uid) {
         console.warn("[tip mail] no recipient", { tenantId, tipId });
         return;
     }
+    // 表示値
     const isJPY = currency === "JPY";
-    const money = isJPY ? `¥${amount.toLocaleString("ja-JP")}` : `${amount} ${currency}`;
+    const money = isJPY
+        ? `¥${Number(amount || 0).toLocaleString("ja-JP")}`
+        : `${amount} ${currency}`;
     const name = isEmployee
-        ? tip.employeeName ?? recipient.employeeName ?? "スタッフ"
-        : tip.storeName ?? recipient.storeName ?? "店舗";
-    const memo = tip.memo || "";
+        ? tip.employeeName ??
+            recipient.employeeName ??
+            "スタッフ"
+        : tip.storeName ??
+            recipient.storeName ??
+            "店舗";
+    const memo = (typeof tip.memo === "string" ? tip.memo : "") /*従来のメモも存続*/;
     const createdAt = tip.createdAt?.toDate?.() ?? new Date();
-    const subject = isEmployee ? `チップを受け取りました: ${money}` : `店舗宛のチップ: ${money}`;
-    const text = [
+    const subject = isEmployee
+        ? `チップを受け取りました: ${money}`
+        : `店舗宛のチップ: ${money}`;
+    const lines = [
         `受取先: ${name}`,
         `金額: ${money}`,
         memo ? `メモ: ${memo}` : "",
+        // ★ 送金者からのメッセージ
+        payerMessage ? `送金者からのメッセージ: ${payerMessage}` : "",
         `日時: ${createdAt.toLocaleString("ja-JP")}`,
-    ]
-        .filter(Boolean)
-        .join("\n");
+    ].filter(Boolean);
+    const text = lines.join("\n");
     const html = `
-  <div style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; line-height:1.6; color:#111">
-    <h2 style="margin:0 0 12px">🎉 ${subject}</h2>
-    <p style="margin:0 0 6px">受取先：<strong>${escapeHtml(name)}</strong></p>
-    <p style="margin:0 0 6px">金額：<strong>${escapeHtml(money)}</strong></p>
-    ${memo ? `<p style="margin:0 0 6px">メモ：${escapeHtml(memo)}</p>` : ""}
-    <p style="margin:0 0 6px">日時：${createdAt.toLocaleString("ja-JP")}</p>
-  </div>`;
+<div style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; line-height:1.6; color:#111">
+  <h2 style="margin:0 0 12px">🎉 ${escapeHtml(subject)}</h2>
+  <p style="margin:0 0 6px">受取先：<strong>${escapeHtml(name)}</strong></p>
+  <p style="margin:0 0 6px">金額：<strong>${escapeHtml(money)}</strong></p>
+  ${memo ? `<p style="margin:0 0 6px">メモ：${escapeHtml(memo)}</p>` : ""}
+  ${payerMessage
+        ? `<p style="margin:0 0 6px">送金者からのメッセージ：${escapeHtml(payerMessage)}</p>`
+        : ""}
+  <p style="margin:0 0 6px">日時：${escapeHtml(createdAt.toLocaleString("ja-JP"))}</p>
+</div>`;
+    // Resend で送信
     const { Resend } = await Promise.resolve().then(() => __importStar(require("resend")));
     const resend = new Resend(resendApiKey);
     await resend.emails.send({
@@ -539,7 +593,13 @@ async function sendTipNotification(tenantId, tipId, resendApiKey, uid) {
         text,
         html,
     });
-    await tipRef.set({ notification: { emailedAt: admin.firestore.FieldValue.serverTimestamp(), to } }, { merge: true });
+    // 送信記録
+    await tipRef.set({
+        notification: {
+            emailedAt: admin.firestore.FieldValue.serverTimestamp(),
+            to,
+        },
+    }, { merge: true });
 }
 /* ===================== Stripe Webhook ===================== */
 exports.stripeWebhook = functions
@@ -607,6 +667,13 @@ exports.stripeWebhook = functions
         receivedAt: admin.firestore.FieldValue.serverTimestamp(),
         handled: false,
     });
+    // ★ 両方へ保存する小ヘルパ（{uid}/{tenantId} と tenantIndex）
+    async function writeIndexAndOwner(uid, tenantId, patch) {
+        await Promise.all([
+            db.collection(uid).doc(tenantId).set(patch, { merge: true }),
+            db.collection("tenantIndex").doc(tenantId).set({ ...patch, uid, tenantId }, { merge: true }),
+        ]);
+    }
     try {
         /* ========== 1) Checkout 完了 ========== */
         if (type === "checkout.session.completed") {
@@ -630,21 +697,22 @@ exports.stripeWebhook = functions
                             ? planSnap.data()?.feePercent
                             : undefined;
                     }
-                    // uid の確定（meta 優先 → index）
+                    // uid の確定
                     let uid = uidMeta;
                     if (!uid) {
                         const tRefIdx = await tenantRefByIndex(tenantId);
                         uid = tRefIdx.parent.id;
                     }
-                    const tRef = tenantRefByUid(uid, tenantId);
                     const periodEndTs = tsFromSec(sub.current_period_end);
-                    await tRef.set({
+                    // ★ ここでは owner側のみ（下の subscription.updated でも反映されます）
+                    await tenantRefByUid(uid, tenantId).set({
                         subscription: {
                             plan,
                             status: sub.status,
                             stripeCustomerId: customerId,
                             stripeSubscriptionId: sub.id,
-                            ...putIf(periodEndTs, { currentPeriodEnd: periodEndTs }),
+                            ...putIf(periodEndTs, { currentPeriodEnd: periodEndTs, nextPaymentAt: periodEndTs }),
+                            overdue: sub.status === "past_due" || sub.status === "unpaid", // ★追加
                             ...(typeof feePercent === "number" ? { feePercent } : {}),
                         },
                     }, { merge: true });
@@ -785,7 +853,6 @@ exports.stripeWebhook = functions
                             ? Math.max(0, gross - appFeeAmount - stripeFee - storeCut)
                             : 0;
                         // ====== 決済手段・カード要約の抽出 ======
-                        // PaymentMethod（展開済みを想定）
                         let pm = null;
                         if (pi.payment_method && typeof pi.payment_method !== "string") {
                             pm = pi.payment_method;
@@ -794,42 +861,37 @@ exports.stripeWebhook = functions
                             try {
                                 pm = await stripe.paymentMethods.retrieve(pi.payment_method, requestOptions);
                             }
-                            catch (e) {
-                                // 取得に失敗しても致命ではないので握りつぶす
+                            catch {
                                 pm = null;
                             }
                         }
-                        const pmd = latestCharge?.payment_method_details; // 決済手段の詳細（カード/ApplePay等）
+                        const pmd = latestCharge?.payment_method_details;
                         const cardOnCharge = pmd?.type === "card" ? pmd.card : undefined;
-                        // PaymentMethod.card から exp_month/year, funding, country 等が取れる
                         const cardOnPM = pm?.type === "card" ? pm.card : undefined;
                         const paymentSummary = {
-                            method: pmd?.type || pm?.type || pi.payment_method_types?.[0], // 例: 'card', 'konbini', 'us_bank_account' 等
+                            method: pmd?.type || pm?.type || pi.payment_method_types?.[0],
                             paymentIntentId: pi.id,
                             chargeId: latestCharge?.id ||
                                 (typeof pi.latest_charge === "string" ? pi.latest_charge : null),
                             paymentMethodId: pm?.id || (typeof pi.payment_method === "string" ? pi.payment_method : null),
-                            captureMethod: pi.capture_method, // 'automatic' など
+                            captureMethod: pi.capture_method,
                             created: tsFromSec(pi.created) ?? nowTs(),
                         };
-                        // カードの安全な要約（フルPAN/CVCは保存しない）
                         if (paymentSummary.method === "card" || cardOnPM || cardOnCharge) {
                             paymentSummary.card = {
-                                brand: (cardOnCharge?.brand || cardOnPM?.brand || "").toString().toUpperCase() || null, // VISA 等
+                                brand: (cardOnCharge?.brand || cardOnPM?.brand || "").toString().toUpperCase() || null,
                                 last4: cardOnCharge?.last4 || cardOnPM?.last4 || null,
                                 expMonth: cardOnPM?.exp_month ?? null,
                                 expYear: cardOnPM?.exp_year ?? null,
-                                funding: cardOnPM?.funding ?? null, // 'debit' | 'credit' | ...
+                                funding: cardOnPM?.funding ?? null,
                                 country: cardOnPM?.country ?? null,
-                                network: cardOnCharge?.network || cardOnPM?.networks?.preferred || null, // 'visa' 等
-                                wallet: cardOnCharge?.wallet?.type || null, // 'apple_pay' | 'google_pay' 等
-                                // threeDSecure などの結果が取れればここに（取得できない環境もあるのでOptional）
+                                network: cardOnCharge?.network || cardOnPM?.networks?.preferred || null,
+                                wallet: cardOnCharge?.wallet?.type || null,
                                 threeDSecure: cardOnCharge?.three_d_secure?.result ??
                                     pmd?.card?.three_d_secure?.result ??
                                     null,
                             };
                         }
-                        // ====== Firestore へ反映 ======
                         await tipRef.set({
                             fees: {
                                 platform: appFeeAmount,
@@ -843,7 +905,7 @@ exports.stripeWebhook = functions
                                 toStore,
                                 toStaff,
                             },
-                            payment: paymentSummary, // ← 決済手段・カード要約を保存
+                            payment: paymentSummary,
                             feesComputedAt: admin.firestore.FieldValue.serverTimestamp(),
                         }, { merge: true });
                     }
@@ -903,21 +965,25 @@ exports.stripeWebhook = functions
                     ? planSnap.data()?.feePercent
                     : undefined;
             }
-            await tenantRefByUid(uid, tenantId).set({
+            // ★ nextPaymentAt と overdue を追加し、両ドキュメントに反映
+            const subPatch = {
                 subscription: {
                     plan,
                     status: sub.status,
                     stripeCustomerId: sub.customer ?? undefined,
                     stripeSubscriptionId: sub.id,
-                    ...putIf(periodEndTs, { currentPeriodEnd: periodEndTs }),
+                    ...putIf(periodEndTs, { currentPeriodEnd: periodEndTs, nextPaymentAt: periodEndTs }),
                     trial: {
                         status: isTrialing ? "trialing" : "none",
                         ...putIf(trialStartTs, { trialStart: trialStartTs }),
                         ...putIf(trialEndTs, { trialEnd: trialEndTs }),
                     },
+                    overdue: sub.status === "past_due" || sub.status === "unpaid", // ★追加
                     ...(typeof feePercent === "number" ? { feePercent } : {}),
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                 },
-            }, { merge: true });
+            };
+            await writeIndexAndOwner(uid, tenantId, subPatch);
             // トライアル終了直後に再トライアル防止フラグを付与
             try {
                 if (sub.status === "active" && typeof sub.trial_end === "number" && sub.trial_end * 1000 <= Date.now()) {
@@ -943,16 +1009,19 @@ exports.stripeWebhook = functions
                     uid = tRefIdx.parent.id;
                 }
                 const periodEndTs = tsFromSec(sub.current_period_end);
-                await tenantRefByUid(uid, tenantId).set({
+                const patch = {
                     subscription: {
                         status: "canceled",
                         stripeSubscriptionId: sub.id,
-                        ...putIf(periodEndTs, { currentPeriodEnd: periodEndTs }),
+                        ...putIf(periodEndTs, { currentPeriodEnd: periodEndTs, nextPaymentAt: periodEndTs }),
+                        overdue: false,
+                        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                     },
-                }, { merge: true });
+                };
+                await writeIndexAndOwner(uid, tenantId, patch);
             }
         }
-        /* ========== 4) 請求書 ========== */
+        /* ========== 4) 請求書（支払成功/失敗） ========== */
         if (type === "invoice.payment_succeeded" || type === "invoice.payment_failed") {
             const inv = event.data.object;
             const customerId = inv.customer;
@@ -976,13 +1045,16 @@ exports.stripeWebhook = functions
             // 既存のテナント検索・invoices 保存
             const idxSnap = await db.collection("tenantIndex").get();
             for (const d of idxSnap.docs) {
-                const { uid, tenantId } = d.data();
+                const data = d.data();
+                const uid = data.uid;
+                const tenantId = data.tenantId;
                 const t = await db.collection(uid).doc(tenantId).get();
                 if (t.exists && t.get("subscription.stripeCustomerId") === customerId) {
                     const createdTs = tsFromSec(inv.created) ?? nowTs();
                     const line0 = inv.lines?.data?.[0]?.period;
                     const psTs = tsFromSec(line0?.start ?? inv.created) ?? createdTs;
                     const peTs = tsFromSec(line0?.end ?? inv.created) ?? createdTs;
+                    // invoices コレクションは従来どおり保存
                     await db
                         .collection(uid)
                         .doc(tenantId)
@@ -1000,6 +1072,35 @@ exports.stripeWebhook = functions
                         period_end: peTs,
                         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                     }, { merge: true });
+                    // ★ 未払い/解消 と 次回再試行（失敗時）・直近請求サマリを保存（owner & index）
+                    const nextAttemptTs = tsFromSec(inv.next_payment_attempt);
+                    const subPatch = type === "invoice.payment_failed"
+                        ? {
+                            subscription: {
+                                overdue: true,
+                                latestInvoice: {
+                                    id: inv.id,
+                                    status: inv.status,
+                                    amountDue: inv.amount_due ?? null,
+                                    hostedInvoiceUrl: inv.hosted_invoice_url ?? null,
+                                },
+                                ...putIf(nextAttemptTs, { nextPaymentAttemptAt: nextAttemptTs }),
+                                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                            },
+                        }
+                        : {
+                            subscription: {
+                                overdue: false,
+                                latestInvoice: {
+                                    id: inv.id,
+                                    status: inv.status,
+                                    amountPaid: inv.amount_paid ?? null,
+                                    hostedInvoiceUrl: inv.hosted_invoice_url ?? null,
+                                },
+                                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                            },
+                        };
+                    await writeIndexAndOwner(uid, tenantId, subPatch);
                     break;
                 }
             }
@@ -1010,6 +1111,18 @@ exports.stripeWebhook = functions
             try {
                 const tRef = await tenantRefByStripeAccount(acct.id);
                 await tRef.set({
+                    connect: {
+                        charges_enabled: !!acct.charges_enabled,
+                        payouts_enabled: !!acct.payouts_enabled,
+                        details_submitted: !!acct.details_submitted,
+                        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                    },
+                }, { merge: true });
+                // インデックスにも反映
+                const tSnap = await tRef.get();
+                const tenantId = tSnap.id;
+                const idx = db.collection("tenantIndex").doc(tenantId);
+                await idx.set({
                     connect: {
                         charges_enabled: !!acct.charges_enabled,
                         payouts_enabled: !!acct.payouts_enabled,
@@ -1042,6 +1155,15 @@ exports.stripeWebhook = functions
                             currency: (pi.currency ?? "jpy").toUpperCase(),
                             stripePaymentIntentId: pi.id,
                             paidAt: admin.firestore.FieldValue.serverTimestamp(),
+                            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                        },
+                    },
+                }, { merge: true });
+                // インデックスにも反映
+                await db.collection("tenantIndex").doc(tenantId).set({
+                    billing: {
+                        initialFee: {
+                            status: "paid",
                             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                         },
                     },
@@ -1083,16 +1205,21 @@ exports.stripeWebhook = functions
     }
 });
 /* ===================== 招待 ===================== */
-exports.inviteTenantAdmin = functions.https.onCall(async (data, context) => {
-    const uid = context.auth?.uid;
+exports.inviteTenantAdmin = (0, https_1.onCall)({
+    region: "us-central1",
+    memory: "256MiB",
+    secrets: [exports.RESEND_API_KEY],
+}, async (req) => {
+    const uid = req.auth?.uid;
     if (!uid)
-        throw new functions.https.HttpsError("unauthenticated", "Sign in");
-    const tenantId = (data?.tenantId || "").toString();
-    const emailRaw = (data?.email || "").toString();
+        throw new https_1.HttpsError("unauthenticated", "Sign in");
+    const tenantId = (req.data?.tenantId || "").toString();
+    const emailRaw = (req.data?.email || "").toString();
     const emailLower = emailRaw.trim().toLowerCase();
     if (!tenantId || !emailLower.includes("@")) {
-        throw new functions.https.HttpsError("invalid-argument", "bad tenantId/email");
+        throw new https_1.HttpsError("invalid-argument", "bad tenantId/email");
     }
+    // 権限チェック
     await assertTenantAdmin(tenantId, uid);
     // すでにメンバーならメール送らず終了
     const userByEmail = await admin.auth().getUserByEmail(emailLower).catch(() => null);
@@ -1102,27 +1229,28 @@ exports.inviteTenantAdmin = functions.https.onCall(async (data, context) => {
         if (mem.exists)
             return { ok: true, alreadyMember: true };
     }
+    // 招待トークンを作成（DB にはハッシュのみ保存）
     const token = crypto.randomBytes(32).toString("hex");
     const tokenHash = sha256(token);
     const expiresAt = admin.firestore.Timestamp.fromDate(new Date(Date.now() + 1000 * 60 * 60 * 24 * 7) // 7日
     );
     // 既存の pending 招待があれば上書き（＝再送）
-    const existing = await db
-        .collection(`${uid}/${tenantId}/invites`)
+    const invitesCol = db.collection(`${uid}/${tenantId}/invites`);
+    const existing = await invitesCol
         .where("emailLower", "==", emailLower)
         .where("status", "==", "pending")
         .limit(1)
         .get();
     let inviteRef;
     if (existing.empty) {
-        inviteRef = db.collection(`${uid}/${tenantId}/invites`).doc();
+        inviteRef = invitesCol.doc();
         await inviteRef.set({
             emailLower,
             tokenHash,
             status: "pending",
             invitedBy: {
                 uid,
-                email: context.auth?.token?.email || null,
+                email: req.auth?.token?.email || null,
             },
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             expiresAt,
@@ -1136,39 +1264,50 @@ exports.inviteTenantAdmin = functions.https.onCall(async (data, context) => {
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
     }
+    // 受諾URL
     const acceptUrl = `${APP_ORIGIN}/#/admin-invite?tenantId=${tenantId}&token=${token}`;
-    // ---- Trigger Email from Firestore による送信 ----
-    // NOTE: `to` は配列で指定。拡張の Default FROM を設定済みなら from は省略可。
-    await db.collection("mail").add({
+    // Resend で送信（onTipSucceededSendMailV2 と同じ方式）
+    const { Resend } = await Promise.resolve().then(() => __importStar(require("resend")));
+    const resend = new Resend(exports.RESEND_API_KEY.value());
+    const subject = "管理者招待のお知らせ";
+    const text = `管理者として招待されました。\n` +
+        `以下のURLから承認してください（7日以内）：\n${acceptUrl}`;
+    const html = `
+<div style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; line-height:1.6; color:#111">
+  <h2 style="margin:0 0 12px">${escapeHtml(subject)}</h2>
+  <p style="margin:0 0 6px">管理者として招待されました。</p>
+  <p style="margin:0 0 6px">7日以内に以下のリンクから承認してください。</p>
+  <p style="margin:8px 0"><a href="${acceptUrl}">${escapeHtml(acceptUrl)}</a></p>
+</div>`.trim();
+    await resend.emails.send({
+        from: "YourPay 通知 <sendtip_app@appfromkomeda.jp>",
         to: [emailLower],
-        message: {
-            subject: "管理者招待のお知らせ",
-            text: `管理者として招待されました。\n以下のURLから承認してください（7日以内）：\n${acceptUrl}`,
-            html: `
-        <p>管理者として招待されました。</p>
-        <p><a href="${acceptUrl}">こちらのリンク</a>を開いて承認してください（7日以内）。</p>
-        <p>リンク: ${acceptUrl}</p>
-      `,
-        },
-        // 必要なら個別に上書き可能：
-        // from: "YourPay <noreply@your-domain>",
-        // replyTo: "support@your-domain",
+        subject,
+        text,
+        html,
     });
+    // 送信記録
+    await inviteRef.set({ emailedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     return { ok: true };
 });
 exports.acceptTenantAdminInvite = functions.https.onCall(async (data, context) => {
-    const uid = context.auth?.uid;
+    const authedUid = context.auth?.uid;
     const email = (context.auth?.token?.email || "").toLowerCase();
-    if (!uid || !email)
+    if (!authedUid || !email)
         throw new functions.https.HttpsError("unauthenticated", "Sign in");
     const tenantId = (data?.tenantId || "").toString();
     const token = (data?.token || "").toString();
     if (!tenantId || !token) {
         throw new functions.https.HttpsError("invalid-argument", "tenantId/token required");
     }
+    // ★ オーナー uid を tenantIndex から取得
+    const idx = await db.collection("tenantIndex").doc(tenantId).get();
+    if (!idx.exists)
+        throw new functions.https.HttpsError("not-found", "tenantIndex not found");
+    const ownerUid = idx.data().uid;
     const tokenHash = sha256(token);
     const q = await db
-        .collection(`${uid}/${tenantId}/invites`)
+        .collection(`${ownerUid}/${tenantId}/invites`) // ★ ownerUid 配下
         .where("tokenHash", "==", tokenHash)
         .limit(1)
         .get();
@@ -1186,8 +1325,10 @@ exports.acceptTenantAdminInvite = functions.https.onCall(async (data, context) =
         throw new functions.https.HttpsError("permission-denied", "Invite email mismatch");
     }
     await db.runTransaction(async (tx) => {
-        const memRef = db.doc(`${uid}/${tenantId}/members/${uid}`);
-        const tRef = db.doc(`${uid}/${tenantId}`);
+        const memRef = db.doc(`${ownerUid}/${tenantId}/members/${authedUid}`);
+        const tRef = db.doc(`${ownerUid}/${tenantId}`);
+        // ★ 追加: 承認したユーザー側の "invited" ドキュメントに保存する参照
+        const invitedRef = db.collection(authedUid).doc("invited");
         // members に追加
         tx.set(memRef, {
             role: "admin",
@@ -1195,31 +1336,66 @@ exports.acceptTenantAdminInvite = functions.https.onCall(async (data, context) =
             displayName: context.auth?.token?.name || null,
             addedAt: admin.firestore.FieldValue.serverTimestamp(),
         }, { merge: true });
-        // tenant ドキュメントにもUIDを積む（使っているなら）
-        tx.set(tRef, { memberUids: admin.firestore.FieldValue.arrayUnion(uid) }, { merge: true });
+        // tenant ドキュメントに UID を積む
+        tx.set(tRef, { memberUids: admin.firestore.FieldValue.arrayUnion(authedUid) }, { merge: true });
         // 招待を accepted に
         tx.update(inviteDoc.ref, {
             status: "accepted",
             acceptedAt: admin.firestore.FieldValue.serverTimestamp(),
-            acceptedBy: { uid, email },
+            acceptedBy: { uid: authedUid, email },
         });
+        // ★ 追加: 承認ユーザー側に { ownerUid, tenantId } を保存
+        // 複数テナントに対応できるよう、tenants.<tenantId> に入れて merge
+        tx.set(invitedRef, {
+            tenants: {
+                [tenantId]: {
+                    ownerUid,
+                    tenantId,
+                    acceptedAt: admin.firestore.FieldValue.serverTimestamp(),
+                },
+            },
+        }, { merge: true });
     });
     return { ok: true };
 });
 exports.cancelTenantAdminInvite = functions.https.onCall(async (data, context) => {
-    const uid = context.auth?.uid;
-    if (!uid)
+    const actorUid = context.auth?.uid;
+    if (!actorUid)
         throw new functions.https.HttpsError("unauthenticated", "Sign in");
     const tenantId = (data?.tenantId || "").toString();
     const inviteId = (data?.inviteId || "").toString();
     if (!tenantId || !inviteId) {
         throw new functions.https.HttpsError("invalid-argument", "tenantId/inviteId required");
     }
-    await assertTenantAdmin(tenantId, uid);
-    await db.doc(`${uid}/${tenantId}/invites/${inviteId}`).update({
+    // ★ tenantIndex からオーナー uid を取得
+    const idx = await db.collection("tenantIndex").doc(tenantId).get();
+    if (!idx.exists)
+        throw new functions.https.HttpsError("not-found", "tenantIndex not found");
+    const ownerUid = idx.data().uid;
+    // ★ 権限チェック：オーナー名前空間のテナントで、呼び出しユーザーが admin/owner か
+    const tSnap = await db.collection(ownerUid).doc(tenantId).get();
+    if (!tSnap.exists)
+        throw new functions.https.HttpsError("not-found", "Tenant not found");
+    const members = (tSnap.data()?.members ?? []);
+    const isAdmin = Array.isArray(members) &&
+        members.some((m) => {
+            if (typeof m === "string")
+                return m === actorUid;
+            if (m && typeof m === "object") {
+                const mid = m.uid ?? m.id ?? m.userId;
+                const role = String(m.role ?? "admin").toLowerCase();
+                return mid === actorUid && (role === "admin" || role === "owner");
+            }
+            return false;
+        });
+    if (!isAdmin) {
+        throw new functions.https.HttpsError("permission-denied", "Not tenant admin");
+    }
+    // ★ 招待はオーナー uid 名前空間にある
+    await db.doc(`${ownerUid}/${tenantId}/invites/${inviteId}`).update({
         status: "canceled",
         canceledAt: admin.firestore.FieldValue.serverTimestamp(),
-        canceledBy: uid,
+        canceledBy: actorUid,
     });
     return { ok: true };
 });

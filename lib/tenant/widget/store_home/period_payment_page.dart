@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:yourpay/tenant/widget/subscription_card.dart';
+import 'package:yourpay/tenant/widget/store_setting/subscription_card.dart';
 
 enum RecipientFilter { all, storeOnly, staffOnly }
 
@@ -11,6 +11,7 @@ class PeriodPaymentsPage extends StatefulWidget {
   final String? tenantName;
   final DateTime? start;
   final DateTime? endExclusive;
+  final String ownerId;
 
   // ルートから渡された初期フィルタ
   final RecipientFilter recipientFilter;
@@ -22,6 +23,7 @@ class PeriodPaymentsPage extends StatefulWidget {
     this.start,
     this.endExclusive,
     this.recipientFilter = RecipientFilter.all,
+    required this.ownerId,
   });
 
   @override
@@ -107,9 +109,34 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
     'other': 'その他',
   };
 
+  // －－追加：型安全なヘルパー－－
+  Map<String, dynamic>? _asMap(dynamic v) {
+    if (v is Map) return v.cast<String, dynamic>();
+    return null;
+  }
+
+  String? _asString(dynamic v) {
+    if (v is String) return v;
+    if (v is num) return v.toString();
+    return null;
+  }
+
+  String? _extractWalletType(
+    Map<String, dynamic>? pay,
+    Map<String, dynamic>? card,
+  ) {
+    final w = (card?['wallet']) ?? (pay?['wallet']) ?? (pay?['walletType']);
+    if (w is String) return w.toLowerCase();
+    if (w is Map) {
+      final t = _asString(w['type']);
+      return t?.toLowerCase();
+    }
+    return null;
+  }
+
   Query _buildQuery() {
     Query q = FirebaseFirestore.instance
-        .collection(uid!)
+        .collection(widget.ownerId!)
         .doc(widget.tenantId)
         .collection('tips')
         .where('status', isEqualTo: 'succeeded');
@@ -140,59 +167,56 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
     }
   }
 
-  // 決済方法のキーを抽出（フィルタ用に正規化）
-  // 返り値例: 'card' / 'apple_pay' / 'google_pay' / 'konbini' / 'link' / 'alipay' / 'wechat_pay' / 'other' / null(不明)
   String? _pmKeyFromDoc(Map<String, dynamic> d) {
-    final pay = ((d['payment'] ?? d['paymentSummary']) as Map?)
-        ?.cast<String, dynamic>();
+    final pay = _asMap(d['payment']) ?? _asMap(d['paymentSummary']);
     if (pay == null) return null;
 
-    final methodRaw = (pay['method'] as String?)?.toLowerCase();
-    final card =
-        (pay['card'] as Map?)?.cast<String, dynamic>() ??
-        (pay['cardOnCharge'] as Map?)?.cast<String, dynamic>() ??
-        (pay['cardOnPM'] as Map?)?.cast<String, dynamic>();
-    final wallet =
-        ((card?['wallet'] as Map?)?['type'] ??
-                pay['wallet'] ??
-                pay['walletType'])
-            ?.toString()
-            .toLowerCase();
+    final methodRaw = _asString(pay['method'])?.toLowerCase();
 
-    String normalize(String? m) {
-      if (m == null) return 'other';
-      if (m == 'card') {
+    final card =
+        _asMap(pay['card']) ??
+        _asMap(pay['cardOnCharge']) ??
+        _asMap(pay['cardOnPM']);
+
+    final wallet = _extractWalletType(
+      pay,
+      card,
+    ); // "apple_pay" / "google_pay" / null
+
+    switch (methodRaw) {
+      case null:
+        return 'other';
+      case 'card':
         if (wallet == 'apple_pay') return 'apple_pay';
         if (wallet == 'google_pay') return 'google_pay';
         return 'card';
-      }
-      const known = {'konbini', 'link', 'alipay', 'wechat_pay'};
-      return known.contains(m) ? m : 'other';
+      case 'konbini':
+      case 'link':
+      case 'alipay':
+      case 'wechat_pay':
+        return methodRaw;
+      default:
+        return 'other';
     }
-
-    return normalize(methodRaw);
   }
 
-  // 決済方法の日本語ラベル（表示用）
   String _pmLabelFromDoc(Map<String, dynamic> d) {
-    final pay = ((d['payment'] ?? d['paymentSummary']) as Map?)
-        ?.cast<String, dynamic>();
+    final pay = _asMap(d['payment']) ?? _asMap(d['paymentSummary']);
     if (pay == null) return '';
 
-    final methodRaw = (pay['method'] as String?)?.toLowerCase();
-    final card =
-        (pay['card'] as Map?)?.cast<String, dynamic>() ??
-        (pay['cardOnCharge'] as Map?)?.cast<String, dynamic>() ??
-        (pay['cardOnPM'] as Map?)?.cast<String, dynamic>();
+    final methodRaw = _asString(pay['method'])?.toLowerCase();
 
-    final brand = (card?['brand'] ?? pay['cardBrand'])?.toString();
-    final last4 = (card?['last4'] ?? pay['cardLast4'])?.toString();
-    final wallet =
-        ((card?['wallet'] as Map?)?['type'] ??
-                pay['wallet'] ??
-                pay['walletType'])
-            ?.toString()
-            .toLowerCase();
+    final card =
+        _asMap(pay['card']) ??
+        _asMap(pay['cardOnCharge']) ??
+        _asMap(pay['cardOnPM']);
+
+    final brand = _asString((card?['brand']) ?? pay['cardBrand']);
+    final last4 = _asString((card?['last4']) ?? pay['cardLast4']);
+    final wallet = _extractWalletType(
+      pay,
+      card,
+    ); // "apple_pay" / "google_pay" / null
 
     String jpMethod(String? m) {
       switch (m) {
@@ -214,16 +238,19 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
     }
 
     final base = jpMethod(methodRaw);
+
     if (methodRaw == 'card') {
       final tailBrand = (brand != null && brand.isNotEmpty)
           ? brand.toUpperCase()
           : 'カード';
       final tail4 = (last4 != null && last4.isNotEmpty) ? ' •••• $last4' : '';
+      // Apple/Google Pay の場合は括弧でブランド/下4桁を補足表示
       if (wallet == 'apple_pay' || wallet == 'google_pay') {
         return '$base（$tailBrand$tail4）';
       }
       return '$tailBrand$tail4';
     }
+
     return base;
   }
 
@@ -279,7 +306,6 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
                 ),
                 const SizedBox(height: 8),
 
-                // ▼ プルダウン2種：受取先 / 決済方法
                 Row(
                   children: [
                     Expanded(
@@ -373,11 +399,9 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
           }
           final docs = snap.data!.docs;
 
-          // 受取先・決済方法・名前検索の順でクライアント側フィルタ
           final filtered = (() {
             Iterable<QueryDocumentSnapshot> it = docs;
 
-            // 受取先（店舗/スタッフ）
             it = it.where((doc) {
               final d = doc.data() as Map<String, dynamic>;
               final rec = (d['recipient'] as Map?)?.cast<String, dynamic>();
@@ -393,7 +417,6 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
               }
             });
 
-            // 決済方法
             if (_pmFilter != 'all') {
               it = it.where((doc) {
                 final d = doc.data() as Map<String, dynamic>;
@@ -407,7 +430,6 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
               });
             }
 
-            // 名前検索（部分一致）
             if (_search.isNotEmpty) {
               it = it.where((doc) {
                 final d = doc.data() as Map<String, dynamic>;
@@ -437,7 +459,6 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
                   ? 'スタッフ: ${rec?['employeeName'] ?? d['employeeName'] ?? 'スタッフ'}'
                   : '店舗: ${rec?['storeName'] ?? d['storeName'] ?? '店舗'}';
 
-              // 元金（支払額）
               final amountNum = (d['amount'] as num?) ?? 0;
               final currency =
                   (d['currency'] as String?)?.toUpperCase() ?? 'JPY';
@@ -446,10 +467,8 @@ class _PeriodPaymentsPageState extends State<PeriodPaymentsPage> {
                   ? '$sym${amountNum.toInt()}'
                   : '${amountNum.toInt()} $currency';
 
-              // 決済方法表示
               final pmText = _pmLabelFromDoc(d);
 
-              // 日時
               String when = '';
               final ts = d['createdAt'];
               if (ts is Timestamp) {

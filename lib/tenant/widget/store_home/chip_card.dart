@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:yourpay/tenant/widget/subscription_card.dart';
+import 'package:yourpay/tenant/widget/store_setting/subscription_card.dart';
 
-/// 期間ピル（黒=選択中）
 class RangePill extends StatelessWidget {
   final String label;
   final bool active;
@@ -50,7 +49,6 @@ class RangePill extends StatelessWidget {
   }
 }
 
-/// 店舗向け・スタッフ向けの内訳（2枚）
 class SplitMetricsRow extends StatelessWidget {
   final int storeYen;
   final int storeCount;
@@ -154,8 +152,8 @@ class _MetricCardMini extends StatelessWidget {
   final String label;
   final String value;
   final String sub;
-  final VoidCallback? onCardTap; // 本体
-  final VoidCallback? onHelpTap; // はてな
+  final VoidCallback? onCardTap;
+  final VoidCallback? onHelpTap;
 
   const _MetricCardMini({
     required this.icon,
@@ -240,7 +238,6 @@ class _MetricCardMini extends StatelessWidget {
   }
 }
 
-/// 合計金額・件数の2枚組メトリクス
 class HomeMetrics extends StatelessWidget {
   final int totalYen;
   final int count;
@@ -327,7 +324,6 @@ class _MetricCard extends StatelessWidget {
   }
 }
 
-/// スタッフ集計用の軽いモデル
 class StaffAgg {
   StaffAgg({required this.name});
   final String name;

@@ -6,15 +6,14 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:yourpay/appadmin/admin_dashboard_screen.dart';
-import 'package:yourpay/bootGate.dart';
+import 'package:yourpay/tenant/bootGate.dart';
 import 'package:yourpay/endUser/tip_complete_page.dart';
-import 'package:yourpay/tenant/account_detail_screen.dart';
+import 'package:yourpay/tenant/widget/store_setting/account_detail_screen.dart';
 import 'package:yourpay/endUser/public_store_page.dart';
 import 'package:yourpay/endUser/staff_detail_page.dart';
 import 'package:yourpay/tenant/staff_qr/public_staff_qr_list_page.dart';
 import 'package:yourpay/tenant/staff_qr/qr_poster_build_page.dart';
 import 'package:yourpay/tenant/store_admin_add/accept_invite_screen.dart';
-import 'package:yourpay/tenant/store_list_screen.dart';
 import 'tenant/login_screens.dart';
 import 'tenant/store_detail/store_detail_screen.dart';
 import 'endUser/payer_landing_screen.dart';
@@ -131,7 +130,6 @@ class MyApp extends StatelessWidget {
     final staticRoutes = <String, WidgetBuilder>{
       '/': (_) => const Root(),
       '/login': (_) => const BootGate(),
-      '/stores': (_) => const StoreListScreen(),
       '/store': (_) => const StoreDetailScreen(),
       '/staff': (_) => const StaffDetailPage(),
       '/account': (_) => const AccountDetailScreen(),

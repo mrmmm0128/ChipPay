@@ -332,6 +332,12 @@ class OnboardingSheetState extends State<OnboardingSheet> {
           'businessProfile': {'product_description': 'チップ受け取り（チッププラットフォーム）'},
           'tosAccepted': true,
         },
+        "payoutSchedule": {
+          "monthly": 'weekly', // 'manual' | 'daily' | 'weekly' | 'monthly'
+          //weeklyAnchor: 'friday',    // weekly のとき
+          "monthlyAnchor": 1, // monthly のとき
+          "delayDays": 'minimum', // or number（国により制限あり）
+        },
       };
       final res = await caller.call(payload);
       final data = (res.data as Map?) ?? {};
@@ -604,7 +610,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'アカウント登録ありがとうございます！コネクトアカウントとメンバー追加を進めましょう。',
+            'アカウント登録ありがとうございます！',
             style: TextStyle(fontFamily: 'LINEseed'),
           ),
         ),

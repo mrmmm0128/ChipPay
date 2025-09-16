@@ -20,11 +20,14 @@ class StoreQrTab extends StatefulWidget {
   final String tenantId;
   final String? tenantName;
   final String posterAssetPath; // 例: 'assets/posters/store_poster.png'
+  final String? ownerId;
   const StoreQrTab({
     super.key,
     required this.tenantId,
     this.tenantName,
+
     this.posterAssetPath = 'assets/posters/store_poster.png',
+    this.ownerId,
   });
 
   @override
@@ -192,7 +195,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
     final u = FirebaseAuth.instance.currentUser?.uid;
     assert(u != null, 'Not signed in');
     _postersRef = FirebaseFirestore.instance
-        .collection(u!)
+        .collection(widget.ownerId!)
         .doc(widget.tenantId)
         .collection('posters');
 
@@ -212,7 +215,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
 
       final u = FirebaseAuth.instance.currentUser?.uid;
       _postersRef = FirebaseFirestore.instance
-          .collection(u!)
+          .collection(widget.ownerId!)
           .doc(widget.tenantId)
           .collection('posters');
 
@@ -230,7 +233,9 @@ class _StoreQrTabState extends State<StoreQrTab> {
 
   Future<void> _initialize() async {
     final c = await fetchIsCPlan(
-      FirebaseFirestore.instance.collection(uid!).doc(widget.tenantId),
+      FirebaseFirestore.instance
+          .collection(widget.ownerId!)
+          .doc(widget.tenantId),
     );
     if (!mounted) return;
     setState(() => isC = c); // ★ 取得後に描画更新
@@ -239,7 +244,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
   Future<void> _loadConnectedOnce() async {
     try {
       final doc = await FirebaseFirestore.instance
-          .collection(uid!)
+          .collection(widget.ownerId!)
           .doc(widget.tenantId)
           .get();
       final c = (doc.data()?['connect']?['charges_enabled'] as bool?) ?? false;

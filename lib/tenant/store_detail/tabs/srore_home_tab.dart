@@ -2,11 +2,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:yourpay/fonts/jp_font.dart';
-import 'package:yourpay/tenant/widget/subscription_card.dart';
+import 'package:yourpay/tenant/widget/store_setting/subscription_card.dart';
 
-import 'package:yourpay/tenant/widget/chip_card.dart';
-import 'package:yourpay/tenant/widget/rank_entry.dart';
-import 'package:yourpay/tenant/widget/period_payment_page.dart';
+import 'package:yourpay/tenant/widget/store_home/chip_card.dart';
+import 'package:yourpay/tenant/widget/store_home/rank_entry.dart';
+import 'package:yourpay/tenant/widget/store_home/period_payment_page.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
@@ -14,7 +14,13 @@ import 'package:printing/printing.dart';
 class StoreHomeTab extends StatefulWidget {
   final String tenantId;
   final String? tenantName;
-  const StoreHomeTab({super.key, required this.tenantId, this.tenantName});
+  final String? ownerId;
+  const StoreHomeTab({
+    super.key,
+    required this.tenantId,
+    this.tenantName,
+    this.ownerId,
+  });
 
   @override
   State<StoreHomeTab> createState() => _StoreHomeTabState();
@@ -68,7 +74,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
     if (key == _lastTipsKey && _tipsStream != null) return;
 
     Query<Map<String, dynamic>> q = FirebaseFirestore.instance
-        .collection(uid)
+        .collection(widget.ownerId!)
         .doc(widget.tenantId)
         .collection('tips')
         .where('status', isEqualTo: 'succeeded');
@@ -124,7 +130,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
     if (name.isEmpty && tid != null && tid.isNotEmpty) {
       try {
         final doc = await FirebaseFirestore.instance
-            .collection(uid!)
+            .collection(widget.ownerId!)
             .doc(tid)
             .get();
         name = (doc.data()?['name'] as String?) ?? '';
@@ -279,7 +285,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
 
       // 現行の手数料設定（古いレコードのフォールバック用）
       final tSnap = await FirebaseFirestore.instance
-          .collection(uid!)
+          .collection(widget.ownerId!)
           .doc(widget.tenantId)
           .get();
       final tData = tSnap.data() ?? {};
@@ -300,7 +306,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
 
       // 期間の Tips を取得
       final qs = await FirebaseFirestore.instance
-          .collection(uid!)
+          .collection(widget.ownerId!)
           .doc(widget.tenantId)
           .collection('tips')
           .where('status', isEqualTo: 'succeeded')
@@ -723,6 +729,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
           start: b.start,
           endExclusive: b.endExclusive,
           recipientFilter: filter, // ★ ここ！
+          ownerId: widget.ownerId!,
         ),
       ),
     );
@@ -1071,6 +1078,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                   name: e.value.name,
                   amount: e.value.total,
                   count: e.value.count,
+                  ownerId: widget.ownerId!,
                 );
               });
 
@@ -1123,6 +1131,7 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                     entries: entries,
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
+                    ownerId: widget.ownerId!,
                   ),
                 ],
               );

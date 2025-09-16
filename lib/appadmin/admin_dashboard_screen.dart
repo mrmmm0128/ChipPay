@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:yourpay/appadmin/agent/agent_list.dart';
+import 'package:yourpay/appadmin/admin_announsment.dart';
 import 'package:yourpay/appadmin/tenant/tenant_list_view.dart';
 import 'package:yourpay/appadmin/util.dart';
 
@@ -394,6 +394,22 @@ class _AdminDashboardHomeState extends State<AdminDashboardHome> {
         appBar: AppBar(
           title: const Text('運営ダッシュボード'),
           actions: [
+            IconButton(
+              tooltip: '再読込',
+              onPressed: () => setState(() => _revCache.clear()),
+              icon: const Icon(Icons.refresh),
+            ),
+            IconButton(
+              tooltip: 'お知らせ配信',
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const AdminAnnouncementPage(),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.campaign_outlined),
+            ),
             IconButton(
               tooltip: '再読込',
               onPressed: () => setState(() => _revCache.clear()),
