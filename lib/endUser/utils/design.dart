@@ -14,7 +14,7 @@ class AppPalette {
   //static const Color yellow = Color.fromRGBO(255, 218, 78, 1);
 
   // 背景
-  static const Color pageBg = Color(0xFFF7F7F7);
+  static const Color pageBg = Color(0xFFFFFFFF);
 
   // 枠色・線
   static const Color border = black;

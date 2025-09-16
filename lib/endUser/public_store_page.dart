@@ -365,7 +365,7 @@ class PublicStorePageState extends State<PublicStorePage> {
 
                 // ── メンバー ────────────────────────────────
                 //_Sectionbar(title: tr('section.members')),
-                _Sectionbar(title: tr('section.member')),
+                _Sectionbar(title: tr('section.members')),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(
                     AppDims.pad,
@@ -640,7 +640,7 @@ class _YellowActionButton extends StatelessWidget {
                 width: AppDims.border2,
               ),
             ),
-            child: Icon(icon, color: AppPalette.black, weight: 3200),
+            child: Icon(icon, color: AppPalette.black, size: 38),
           ),
 
           const SizedBox(width: 16),
