@@ -1,9 +1,12 @@
 // lib/tenant/store_detail_screen.dart
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:yourpay/tenant/newTenant/onboardingSheet.dart';
+import 'package:yourpay/tenant/newTenant/tenant_switch_drawer.dart';
 import 'package:yourpay/tenant/widget/store_home/drawer.dart';
 import 'package:yourpay/tenant/store_detail/tabs/srore_home_tab.dart';
 import 'package:yourpay/tenant/store_detail/tabs/store_qr_tab.dart';
@@ -685,6 +688,97 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
     return Theme(data: _bwTheme(context), child: _buildScaffold(context, user));
   }
 
+  // Future<void> _openTenantSwitcherSheet() async {
+  //   await showModalBottomSheet(
+  //     context: context,
+  //     isScrollControlled: false,
+  //     backgroundColor: Colors.white,
+  //     shape: const RoundedRectangleBorder(
+  //       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+  //     ),
+  //     builder: (sheetCtx) {
+  //       final maxW = (MediaQuery.of(sheetCtx).size.width * 0.9).clamp(
+  //         320.0,
+  //         560.0,
+  //       );
+  //       return Theme(
+  //         data: _bwTheme(context),
+  //         child: SafeArea(
+  //           top: false,
+  //           child: Padding(
+  //             padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+  //             child: Center(
+  //               child: ConstrainedBox(
+  //                 constraints: BoxConstraints(maxWidth: maxW.toDouble()),
+  //                 child: Column(
+  //                   mainAxisSize: MainAxisSize.min,
+  //                   children: [
+  //                     Container(
+  //                       height: 4,
+  //                       width: 40,
+  //                       margin: const EdgeInsets.only(bottom: 12),
+  //                       decoration: BoxDecoration(
+  //                         color: Colors.black12,
+  //                         borderRadius: BorderRadius.circular(2),
+  //                       ),
+  //                     ),
+  //                     const Align(
+  //                       alignment: Alignment.centerLeft,
+  //                       child: Text(
+  //                         '店舗を選択',
+  //                         style: TextStyle(
+  //                           fontSize: 16,
+  //                           fontWeight: FontWeight.w700,
+  //                           fontFamily: 'LINEseed',
+  //                         ),
+  //                       ),
+  //                     ),
+  //                     const SizedBox(height: 8),
+
+  //                     // ここに TenantSwitcherBar をそのまま入れる
+  //                     TenantSwitcherBar(
+  //                       currentTenantId: tenantId,
+  //                       currentTenantName: tenantName,
+  //                       onChanged: (id, name) {
+  //                         // 従来（後方互換）
+  //                         if (id == tenantId) return;
+  //                         setState(() {
+  //                           tenantId = id;
+  //                           tenantName = name;
+  //                           ownerUid = FirebaseAuth
+  //                               .instance
+  //                               .currentUser
+  //                               ?.uid; // 自テナント扱い
+  //                           invited = false;
+  //                         });
+  //                         Navigator.of(sheetCtx).pop();
+  //                       },
+  //                       onChangedEx: (id, name, oUid, isInvited) {
+  //                         if (id == tenantId && oUid == ownerUid) {
+  //                           Navigator.of(sheetCtx).pop();
+  //                           return;
+  //                         }
+  //                         setState(() {
+  //                           tenantId = id;
+  //                           tenantName = name;
+  //                           ownerUid = oUid; // 実オーナーを保持
+  //                           invited = isInvited;
+  //                         });
+  //                         Navigator.of(sheetCtx).pop();
+  //                       },
+  //                       padding: const EdgeInsets.fromLTRB(0, 8, 0, 0),
+  //                     ),
+  //                   ],
+  //                 ),
+  //               ),
+  //             ),
+  //           ),
+  //         ),
+  //       );
+  //     },
+  //   );
+  // }
+
   // ---- Scaffoldの本体（安定化のため分離）----
   Widget _buildScaffold(BuildContext context, User user) {
     final size = MediaQuery.of(context).size;
@@ -703,11 +797,13 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
         elevation: 0,
         toolbarHeight: 60,
         titleSpacing: 16,
+
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Image.asset("assets/posters/tipri.png", height: 22),
             if (_isAdmin) const SizedBox(width: 8),
+
             if (_isAdmin)
               OutlinedButton.icon(
                 onPressed: () => Navigator.of(context).pushNamed('/admin'),
@@ -730,39 +826,45 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
           ],
         ),
 
-        leading: isNarrow ? const DrawerButton() : null,
+        // leading: isNarrow
+        //     ? IconButton(
+        //         tooltip: '店舗を選択',
+        //         icon: const Icon(Icons.store_mall_directory_outlined),
+        //         onPressed: _openTenantSwitcherSheet,
+        //       )
+        //     : null,
         actions: [
-          if (!isNarrow)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: maxSwitcherW.toDouble()),
-                child: TenantSwitcherBar(
-                  currentTenantId: tenantId,
-                  currentTenantName: tenantName,
-                  onChanged: (id, name) {
-                    // 従来（後方互換）
-                    if (id == tenantId) return;
-                    setState(() {
-                      tenantId = id;
-                      tenantName = name;
-                      ownerUid = user.uid; // ← 従来自テナント扱い
-                      invited = false;
-                    });
-                  },
-                  // ★ 追加：拡張コールバック
-                  onChangedEx: (id, name, oUid, isInvited) {
-                    if (id == tenantId && oUid == ownerUid) return;
-                    setState(() {
-                      tenantId = id;
-                      tenantName = name;
-                      ownerUid = oUid; // ← 実体のオーナーUIDを保持
-                      invited = isInvited;
-                    });
-                  },
-                ),
+          // if (!isNarrow)
+          Padding(
+            padding: const EdgeInsets.only(right: 5),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: maxSwitcherW.toDouble()),
+              child: TenantSwitcherBar(
+                currentTenantId: tenantId,
+                currentTenantName: tenantName,
+                onChanged: (id, name) {
+                  // 従来（後方互換）
+                  if (id == tenantId) return;
+                  setState(() {
+                    tenantId = id;
+                    tenantName = name;
+                    ownerUid = user.uid; // ← 従来自テナント扱い
+                    invited = false;
+                  });
+                },
+                // ★ 追加：拡張コールバック
+                onChangedEx: (id, name, oUid, isInvited) {
+                  if (id == tenantId && oUid == ownerUid) return;
+                  setState(() {
+                    tenantId = id;
+                    tenantName = name;
+                    ownerUid = oUid; // ← 実体のオーナーUIDを保持
+                    invited = isInvited;
+                  });
+                },
               ),
             ),
+          ),
           IconButton(
             onPressed: tenantId == null ? null : _openAlertsPanel,
             icon: const Icon(Icons.notifications_outlined),
@@ -798,12 +900,9 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text('店舗が見つかりませんでした'),
+                  const Text('店舗が見つかりませんでした\n右上の「店舗を作成」から始めましょう'),
                   const SizedBox(height: 12),
-                  FilledButton(
-                    onPressed: createTenantDialog,
-                    child: const Text('店舗を作成する'),
-                  ),
+
                   Container(
                     margin: const EdgeInsets.symmetric(
                       vertical: 8,

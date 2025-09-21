@@ -1,9 +1,14 @@
+import 'dart:typed_data';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:yourpay/endUser/utils/design.dart';
+import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
+import 'package:yourpay/endUser/utils/image_scrol.dart';
 
 /// 黒フチ × 黄色の“縁取りテキスト”
 class StrokeText extends StatelessWidget {
@@ -408,7 +413,8 @@ class PublicStorePageState extends State<PublicStorePage> {
                   ),
                 ),
                 const SizedBox(height: 10),
-
+                Center(child: Text(tr('staff.ranking'))),
+                const SizedBox(height: 10),
                 StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
                       .collection(uid!)
@@ -593,9 +599,23 @@ class PublicStorePageState extends State<PublicStorePage> {
 
                 // ── チップリを導入しよう（PR） ─────────────────
                 _Sectionbar(title: tr('section.initiate2')),
+
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: AppDims.pad),
-                  child: Text('写真を挿入'),
+                  child: SizedBox(
+                    height: 640,
+                    child: ImagesScroller(
+                      assets: const [
+                        'assets/pdf/tipri_page-0001.jpg',
+                        'assets/pdf/tipri_page-0002.jpg',
+                        'assets/pdf/tipri_page-0003.jpg',
+                        'assets/pdf/tipri_page-0004.jpg',
+                        'assets/pdf/tipri_page-0005.jpg',
+                      ],
+
+                      borderRadius: 12,
+                    ),
+                  ),
                 ),
               ],
             ),

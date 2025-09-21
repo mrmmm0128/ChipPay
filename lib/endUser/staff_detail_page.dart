@@ -24,6 +24,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
   String? photoUrl;
   String? tenantName;
   String? uid;
+  bool direct = true;
 
   final _amountCtrl = TextEditingController(text: '0'); // デフォルト
   bool _loading = false;
@@ -48,6 +49,9 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
       photoUrl = args['photoUrl'] as String?;
       tenantName = args['tenantName'] as String?;
       uid = args["uid"] as String?;
+
+      direct = false;
+
       setState(() {});
     }
   }
@@ -105,6 +109,7 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
         ],
       ),
     );
+
     if (saved == true) {
       setState(
         () => _senderMessage = _messageCtrl.text.trim().isEmpty
@@ -151,6 +156,11 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
     final t = pickAny(['t', 'tenantId']); // テナントID
     final e = pickAny(['e', 'employeeId']); // 従業員ID
     final a = pickAny(['a', 'amount']); // 初期金額（任意）
+    final hasDeepLinkParams =
+        (t != null || e != null || u != null || a != null);
+    if (hasDeepLinkParams) {
+      direct = true;
+    }
 
     // 既存の別名キーも継続サポート
     name = name ?? pickAny(['name', 'n']);
@@ -329,23 +339,34 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
           actions: [
             Row(
               children: [
-                Expanded(
-                  child: TextButton(
-                    onPressed: () =>
-                        Navigator.pop(context, _CommentAction.cancel),
-                    child: const Text('戻る'),
+                TextButton(
+                  onPressed: () =>
+                      Navigator.pop(context, _CommentAction.cancel),
+                  child: const Text(
+                    '戻る',
+                    style: TextStyle(fontFamily: "LINEseed", fontSize: 12),
                   ),
                 ),
+
                 Expanded(
                   child: OutlinedButton(
                     onPressed: () =>
                         Navigator.pop(context, _CommentAction.skip),
-                    child: const Text('スキップ'),
+                    child: const Text(
+                      'スキップ',
+                      style: TextStyle(fontFamily: "LINEseed", fontSize: 12),
+                    ),
                   ),
                 ),
-                FilledButton(
-                  onPressed: () => Navigator.pop(context, _CommentAction.ok),
-                  child: const Text('決済へ進む'),
+                const SizedBox(width: 20),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () => Navigator.pop(context, _CommentAction.ok),
+                    child: const Text(
+                      '確定',
+                      style: TextStyle(fontFamily: "LINEseed", fontSize: 12),
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -408,7 +429,6 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
         'employeeId': employeeId,
         'amount': amount,
         'memo': 'Tip to ${name ?? ''}',
-        // ★追加: 送金者のコメントを一緒に送る
         'payerMessage': _senderMessage ?? '',
       });
 
@@ -474,6 +494,9 @@ class _StaffDetailPageState extends State<StaffDetailPage> {
         surfaceTintColor: Colors.transparent,
         shadowColor: Colors.transparent,
         foregroundColor: AppPalette.black,
+
+        automaticallyImplyLeading: direct ? false : true,
+
         toolbarHeight: 30,
         elevation: 0,
         scrolledUnderElevation: 0,

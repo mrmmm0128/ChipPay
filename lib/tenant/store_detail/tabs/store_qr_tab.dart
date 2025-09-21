@@ -247,8 +247,17 @@ class _StoreQrTabState extends State<StoreQrTab> {
           .collection(widget.ownerId!)
           .doc(widget.tenantId)
           .get();
-      final c = (doc.data()?['connect']?['charges_enabled'] as bool?) ?? false;
-      if (mounted) setState(() => _connected = c);
+
+      final connect = (doc.data()?['connect'] as Map<String, dynamic>?) ?? {};
+
+      final chargesEnabled = (connect['charges_enabled'] as bool?) ?? false;
+      final payoutsEnabled = (connect['payouts_enabled'] as bool?) ?? false;
+      final detailsSubmitted = (connect['details_submitted'] as bool?) ?? false;
+
+      // 3 つすべて true のときのみ QR 関連 UI を有効化
+      final allReady = chargesEnabled && payoutsEnabled && detailsSubmitted;
+
+      if (mounted) setState(() => _connected = allReady);
     } catch (_) {
       if (mounted) setState(() => _connected = false);
     }
@@ -269,7 +278,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
 
   String _buildStoreUrl() {
     final origin = Uri.base.origin;
-    return '$origin/#/p?t=${widget.tenantId}&u=$uid';
+    return '$origin/#/p?t=${widget.tenantId}&u=${widget.ownerId}';
     // 必要ならここでサイズやパラメータを追加
   }
 
@@ -312,16 +321,17 @@ class _StoreQrTabState extends State<StoreQrTab> {
       }
 
       final postersCol = FirebaseFirestore.instance
-          .collection(uid!)
+          .collection(widget.ownerId!)
           .doc(widget.tenantId)
           .collection('posters');
 
       final docRef = postersCol.doc();
+
       final contentType = _detectContentType(f.name);
       final ext = contentType.split('/').last;
 
       final storageRef = FirebaseStorage.instance.ref().child(
-        '$uid/${widget.tenantId}/posters/${docRef.id}.$ext',
+        '${widget.ownerId}/${widget.tenantId}/posters/${docRef.id}.$ext',
       );
 
       await storageRef.putData(
@@ -448,6 +458,17 @@ class _StoreQrTabState extends State<StoreQrTab> {
       bytes: await doc.save(),
       filename: 'store_qr_${widget.tenantId}.pdf',
     );
+
+    final postersCol = FirebaseFirestore.instance
+        .collection(widget.ownerId!)
+        .doc(widget.tenantId);
+
+    final Col = FirebaseFirestore.instance
+        .collection("tenantIndex")
+        .doc(widget.tenantId);
+
+    await postersCol.set({"download": "done"}, SetOptions(merge: true));
+    await Col.set({"download": "done"}, SetOptions(merge: true));
   }
 
   // ---------- オンボーディング ----------
@@ -689,7 +710,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
                 onPressed: canUpload ? _addPosterFromFile : null,
                 icon: const Icon(Icons.add_photo_alternate_outlined),
                 label: const Text(
-                  'アップロード',
+                  'アップロード（Cプラン）',
                   style: TextStyle(fontFamily: 'LINEseed'),
                 ),
                 style: OutlinedButton.styleFrom(
@@ -704,17 +725,6 @@ class _StoreQrTabState extends State<StoreQrTab> {
                   ),
                 ),
               ),
-              if (!isC)
-                const Padding(
-                  padding: EdgeInsets.only(top: 8),
-                  child: Text(
-                    'ポスターをカスタムしたい場合はサブスクリプションをCプランに変更してください',
-                    style: TextStyle(
-                      color: Colors.black87,
-                      fontFamily: 'LINEseed',
-                    ),
-                  ),
-                ),
             ],
           );
         }
@@ -889,22 +899,19 @@ class _StoreQrTabState extends State<StoreQrTab> {
                     child: Icon(Icons.info_outline),
                   ),
                   title: const Text(
-                    'Stripeオンボーディング未完了のため、QR発行はできません。',
+                    '発行不可',
                     style: TextStyle(
                       fontWeight: FontWeight.w600,
                       fontFamily: 'LINEseed',
                     ),
                   ),
-                  subtitle: const Text(
-                    '接続後にQRを作成できます。',
-                    style: TextStyle(fontFamily: 'LINEseed'),
-                  ),
+
                   trailing: FilledButton(
                     style: primary,
                     onPressed: () =>
                         startOnboarding(widget.tenantId, widget.tenantName!),
                     child: const Text(
-                      '新規登録を完了する',
+                      'コネクトアカウント作成を完了する',
                       style: TextStyle(fontFamily: 'LINEseed'),
                     ),
                   ),

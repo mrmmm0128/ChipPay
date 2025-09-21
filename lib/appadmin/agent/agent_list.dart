@@ -53,7 +53,8 @@ class AgentsList extends StatelessWidget {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => AgencyDetailPage(agentId: d.id),
+                    builder: (_) =>
+                        AgencyDetailPage(agentId: d.id, agent: false),
                     settings: RouteSettings(arguments: {'agentId': d.id}),
                   ),
                 );

@@ -29,9 +29,6 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
   bool _loadingInvoices = false;
 
   DateTime? _effectiveFromLocal; // 予約の適用開始（未指定なら翌月1日 0:00）
-  String _fmtDate(DateTime d) =>
-      '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')} '
-      '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
 
   String? _selectedPlan;
   String? _pendingPlan;
@@ -55,6 +52,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
   bool _uploadingPhoto = false;
   bool _uploadingVideo = false;
   Uint8List? _thanksPhotoPreviewBytes;
+  bool ownerIsMe = true;
 
   bool? _connected = false;
 
@@ -64,6 +62,11 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
     _effectiveFromLocal = _firstDayOfNextMonth();
     _loadConnectedOnce();
     _tenantIdVN = ValueNotifier(widget.tenantId);
+    if (widget.ownerId == uid) {
+      ownerIsMe = true;
+    } else {
+      ownerIsMe = false;
+    }
   }
 
   @override
@@ -119,7 +122,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
   ) async {
     if (_pendingPlan == null || _pendingPlan == _selectedPlan) return;
     setState(() => _selectedPlan = _pendingPlan);
-    await _showStripeFeeNoticeAndProceed(tenantRef);
+    //await _showStripeFeeNoticeAndProceed(tenantRef);
     if (!mounted) return;
     setState(() {
       _changingPlan = false;
@@ -533,17 +536,17 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
     setState(() => _savingStoreCut = true);
     try {
       await tenantRef.set({
-        'storeDeductionPending': {
-          'effectpercent': p,
+        'storeDeduction': {
+          'percent': p,
 
-          'effectiveFrom': Timestamp.fromDate(eff),
+          //'effectiveFrom': Timestamp.fromDate(eff),
         },
       }, SetOptions(merge: true));
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('店舗が差し引く金額割合を保存しました（${_fmtDate(eff)} から適用）')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('店舗が差し引く金額割合を保存しました')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -554,52 +557,52 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
     }
   }
 
-  Future<void> _showStripeFeeNoticeAndProceed(
-    DocumentReference<Map<String, dynamic>> tenantRef,
-  ) async {
-    if (_updatingPlan) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.transparent,
-        title: const Text('ご確認ください', style: TextStyle(color: Colors.black87)),
-        content: const Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Stripeを通じてチップを受け取る場合、Stripeの決済手数料として元金の2.4%が差し引かれます。（2.4%は標準の値であり、前後する可能性がございます。）',
-              style: TextStyle(color: Colors.black87),
-            ),
-            SizedBox(height: 8),
-            Text(
-              'この手数料は運営手数料とは別に発生します。',
-              style: TextStyle(color: Colors.black54),
-            ),
-          ],
-        ),
-        actionsPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('キャンセル', style: TextStyle(color: Colors.black87)),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: Colors.black,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('次へ'),
-          ),
-        ],
-      ),
-    );
-    if (ok == true) {
-      await _changePlan(tenantRef, _selectedPlan!);
-    }
-  }
+  // Future<void> _showStripeFeeNoticeAndProceed(
+  //   DocumentReference<Map<String, dynamic>> tenantRef,
+  // ) async {
+  //   if (_updatingPlan) return;
+  //   final ok = await showDialog<bool>(
+  //     context: context,
+  //     builder: (_) => AlertDialog(
+  //       backgroundColor: Colors.white,
+  //       surfaceTintColor: Colors.transparent,
+  //       title: const Text('ご確認ください', style: TextStyle(color: Colors.black87)),
+  //       content: const Column(
+  //         mainAxisSize: MainAxisSize.min,
+  //         crossAxisAlignment: CrossAxisAlignment.start,
+  //         children: [
+  //           Text(
+  //             'Stripeを通じてチップを受け取る場合、Stripeの決済手数料として元金の2.4%が差し引かれます。（2.4%は標準の値であり、前後する可能性がございます。）',
+  //             style: TextStyle(color: Colors.black87),
+  //           ),
+  //           SizedBox(height: 8),
+  //           Text(
+  //             'この手数料は運営手数料とは別に発生します。',
+  //             style: TextStyle(color: Colors.black54),
+  //           ),
+  //         ],
+  //       ),
+  //       actionsPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+  //       actions: [
+  //         TextButton(
+  //           onPressed: () => Navigator.pop(context, false),
+  //           child: const Text('キャンセル', style: TextStyle(color: Colors.black87)),
+  //         ),
+  //         FilledButton(
+  //           style: FilledButton.styleFrom(
+  //             backgroundColor: Colors.black,
+  //             foregroundColor: Colors.white,
+  //           ),
+  //           onPressed: () => Navigator.pop(context, true),
+  //           child: const Text('次へ'),
+  //         ),
+  //       ],
+  //     ),
+  //   );
+  //   if (ok == true) {
+  //     await _changePlan(tenantRef, _selectedPlan!);
+  //   }
+  // }
 
   Future<void> _changePlan(
     DocumentReference<Map<String, dynamic>> tenantRef,
@@ -661,36 +664,39 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
     }
   }
 
-  Future<void> _openCustomerPortal() async {
-    try {
-      final res = await _functions.httpsCallable('openCustomerPortal').call({
-        'tenantId': widget.tenantId,
-      });
-      final url = (res.data as Map)['url'] as String;
-      await launchUrlString(
-        url,
-        mode: LaunchMode.platformDefault,
-        webOnlyWindowName: '_self',
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('ポータルを開けませんでした: $e')));
-    }
-  }
-
   Future<void> _loadConnectedOnce() async {
+    final ownerId = widget.ownerId;
+    final tenantId = widget.tenantId;
+
+    if (ownerId == null || tenantId == null) {
+      if (mounted) setState(() => _connected = false);
+      return;
+    }
+
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection(widget.ownerId!)
-          .doc(widget.tenantId)
+      final snap = await FirebaseFirestore.instance
+          .collection(ownerId)
+          .doc(tenantId)
           .get();
-      final c = (doc.data()?['connect']?['charges_enabled'] as bool?) ?? false;
-      if (mounted) {
-        setState(() => _connected = c);
+
+      if (!snap.exists) {
+        if (mounted) setState(() => _connected = false);
+        return;
       }
-    } catch (_) {
+
+      final data = snap.data(); // Map<String, dynamic>?
+      final status = data?['status']; // dynamic
+
+      // 文字列 "active" を想定。大文字/空白ゆらぎにも軽く対応
+      final isActive =
+          (status is String) && status.trim().toLowerCase() == 'active';
+
+      // もし階層に入っているなら例：
+      // final subStatus = (data?['subscription'] as Map<String, dynamic>?)?['status'] as String?;
+      // final isActive = (subStatus?.trim().toLowerCase() == 'active');
+
+      if (mounted) setState(() => _connected = isActive);
+    } catch (e) {
       if (mounted) setState(() => _connected = false);
     }
   }
@@ -726,7 +732,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
   }
 
   // -------- Build --------
-  @override
+
   @override
   Widget build(BuildContext context) {
     if (_connected == null) {
@@ -893,23 +899,57 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                       return ListView(
                         children: [
                           // ===== ここから下はあなたの UI をそのまま（参照だけ tenantRef/publicThankRef を使う） =====
-                          FilledButton.icon(
-                            style: FilledButton.styleFrom(
-                              backgroundColor: Colors.black,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 14,
-                              ),
-                            ),
-                            onPressed: () =>
-                                Navigator.pushNamed(context, '/account'),
-                            icon: const Icon(Icons.manage_accounts),
-                            label: const Text('アカウント情報を確認'),
-                          ),
+                          ownerIsMe
+                              ? Column(
+                                  children: [
+                                    FilledButton.icon(
+                                      style: FilledButton.styleFrom(
+                                        backgroundColor: Colors.black,
+                                        foregroundColor: Colors.white,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 14,
+                                        ),
+                                      ),
+                                      onPressed: () => Navigator.pushNamed(
+                                        context,
+                                        '/account',
+                                      ),
+                                      icon: const Icon(Icons.manage_accounts),
+                                      label: const Text('アカウント情報を確認'),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    FilledButton.icon(
+                                      style: FilledButton.styleFrom(
+                                        backgroundColor: Colors.black,
+                                        foregroundColor: Colors.white,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 14,
+                                        ),
+                                      ),
+                                      onPressed: () => Navigator.pushNamed(
+                                        context,
+                                        '/tenant',
+                                      ),
+                                      icon: const Icon(
+                                        Icons.store_mall_directory_outlined,
+                                      ),
+                                      label: const Text('テナント情報を確認'),
+                                    ),
+                                  ],
+                                )
+                              : const SizedBox(height: 4),
                           const SizedBox(height: 16),
 
                           const Text(
@@ -1027,15 +1067,8 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                                 ? null
                                                 : _enterChangeMode,
                                             icon: const Icon(Icons.tune),
-                                            label: const Text('サブスクを変更'),
+                                            label: const Text('サブスクのプランを変更'),
                                           ),
-                                        ),
-                                        const SizedBox(width: 12),
-                                        OutlinedButton.icon(
-                                          style: outlinedBtnStyle,
-                                          onPressed: _openCustomerPortal,
-                                          icon: const Icon(Icons.credit_card),
-                                          label: const Text('サブスク登録を管理'),
                                         ),
                                       ],
                                     ),
@@ -1051,8 +1084,9 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                                     (_pendingPlan ==
                                                         currentPlan))
                                                 ? null
-                                                : () => _applyPlanChange(
+                                                : () => _changePlan(
                                                     tenantRef,
+                                                    _pendingPlan!,
                                                   ),
                                             icon: _updatingPlan
                                                 ? const SizedBox(
@@ -1093,7 +1127,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
 
                           const SizedBox(height: 24),
                           const Text(
-                            "スタッフから差し引く金額を設定します。",
+                            "スタッフから差し引く金額を設定",
                             style: TextStyle(
                               fontWeight: FontWeight.w700,
                               color: Colors.black87,
@@ -1130,7 +1164,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                       if (ts is Timestamp) eff = ts.toDate();
                                       eff ??= _firstDayOfNextMonth();
                                       final ym =
-                                          '${eff.year}/${eff.month.toString().padLeft(2, '0')}';
+                                          '${eff.year}/${eff.month.toString()}';
                                       return Container(
                                         width: double.infinity,
                                         padding: const EdgeInsets.all(12),
@@ -1155,7 +1189,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                             const SizedBox(width: 8),
                                             Expanded(
                                               child: Text(
-                                                'この変更は「翌月分（$ym）の明細」から自動適用されます。',
+                                                'この変更は「今月分（$ym）の明細」から自動適用されます。',
                                                 style: const TextStyle(
                                                   color: Colors.black87,
                                                   fontFamily: "LINEseed",
@@ -1202,22 +1236,9 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                       final d2 = snap2.data?.data() ?? {};
                                       final active =
                                           (d2['storeDeduction'] as Map?) ?? {};
-                                      final pending =
-                                          (d2['storeDeductionPending']
-                                              as Map?) ??
-                                          {};
 
                                       final activePercent =
                                           (active['percent'] ?? 0).toString();
-                                      final pendingPercent =
-                                          (pending['percent'] ?? 0).toString();
-                                      final pendingStart =
-                                          (pending['effectiveFrom']
-                                              is Timestamp)
-                                          ? (pending['effectiveFrom']
-                                                    as Timestamp)
-                                                .toDate()
-                                          : null;
 
                                       return Column(
                                         crossAxisAlignment:
@@ -1240,48 +1261,48 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                             ],
                                           ),
                                           const SizedBox(height: 6),
-                                          Row(
-                                            children: [
-                                              const Icon(
-                                                Icons.schedule,
-                                                size: 18,
-                                              ),
-                                              const SizedBox(width: 6),
-                                              Expanded(
-                                                child: Text(
-                                                  (pending.isEmpty)
-                                                      ? '予約中の変更はありません'
-                                                      : '予約中：$pendingPercent%（${_fmtDate(pendingStart!)} から）',
-                                                  style: const TextStyle(
-                                                    fontFamily: "LINEseed",
-                                                  ),
-                                                ),
-                                              ),
-                                              if (pending.isNotEmpty)
-                                                TextButton.icon(
-                                                  onPressed: () async {
-                                                    await tenantRef.update({
-                                                      'storeDeductionPending':
-                                                          FieldValue.delete(),
-                                                    });
-                                                    if (!context.mounted) {
-                                                      return;
-                                                    }
-                                                    ScaffoldMessenger.of(
-                                                      context,
-                                                    ).showSnackBar(
-                                                      const SnackBar(
-                                                        content: Text(
-                                                          '変更予約を取り消しました',
-                                                        ),
-                                                      ),
-                                                    );
-                                                  },
-                                                  icon: const Icon(Icons.clear),
-                                                  label: const Text('変更予約を取消'),
-                                                ),
-                                            ],
-                                          ),
+                                          // Row(
+                                          //   children: [
+                                          //     const Icon(
+                                          //       Icons.schedule,
+                                          //       size: 18,
+                                          //     ),
+                                          //     const SizedBox(width: 6),
+                                          //     Expanded(
+                                          //       child: Text(
+                                          //         (pending.isEmpty)
+                                          //             ? '予約中の変更はありません'
+                                          //             : '予約中：$pendingPercent%（${_fmtDate(pendingStart!)} から）',
+                                          //         style: const TextStyle(
+                                          //           fontFamily: "LINEseed",
+                                          //         ),
+                                          //       ),
+                                          //     ),
+                                          //     if (pending.isNotEmpty)
+                                          //       TextButton.icon(
+                                          //         onPressed: () async {
+                                          //           await tenantRef.update({
+                                          //             'storeDeductionPending':
+                                          //                 FieldValue.delete(),
+                                          //           });
+                                          //           if (!context.mounted) {
+                                          //             return;
+                                          //           }
+                                          //           ScaffoldMessenger.of(
+                                          //             context,
+                                          //           ).showSnackBar(
+                                          //             const SnackBar(
+                                          //               content: Text(
+                                          //                 '変更予約を取り消しました',
+                                          //               ),
+                                          //             ),
+                                          //           );
+                                          //         },
+                                          //         icon: const Icon(Icons.clear),
+                                          //         label: const Text('変更予約を取消'),
+                                          //       ),
+                                          //   ],
+                                          // ),
                                           const SizedBox(height: 8),
                                           const SizedBox(height: 12),
                                         ],
@@ -1319,33 +1340,6 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                     ),
                                   ),
                                 ],
-                              ),
-                            ),
-                          ),
-
-                          const SizedBox(height: 24),
-                          const Text(
-                            'サブスクリプション請求履歴',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              color: Colors.black87,
-                              fontFamily: "LINEseed",
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-
-                          CardShell(
-                            child: Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Align(
-                                alignment: Alignment.centerRight,
-                                child: OutlinedButton.icon(
-                                  onPressed: _loadingInvoices
-                                      ? null
-                                      : () => _showInvoicesDialog(context),
-                                  icon: const Icon(Icons.receipt_long),
-                                  label: const Text('請求履歴を確認'),
-                                ),
                               ),
                             ),
                           ),
@@ -1591,49 +1585,48 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                       label: const Text('管理者を追加（メール招待）'),
                                     ),
                                   ),
-
-                                  Container(
-                                    margin: const EdgeInsets.symmetric(
-                                      vertical: 8,
-                                      horizontal: 16,
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Container(
+                            margin: const EdgeInsets.symmetric(
+                              vertical: 8,
+                              horizontal: 16,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              border: Border.all(color: Colors.black26),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(999),
+                              onTap: logout,
+                              child: const Padding(
+                                padding: EdgeInsets.symmetric(
+                                  vertical: 12,
+                                  horizontal: 20,
+                                ),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      Icons.logout,
+                                      color: Colors.black87,
+                                      size: 18,
                                     ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      border: Border.all(color: Colors.black26),
-                                      borderRadius: BorderRadius.circular(999),
-                                    ),
-                                    child: InkWell(
-                                      borderRadius: BorderRadius.circular(999),
-                                      onTap: logout,
-                                      child: const Padding(
-                                        padding: EdgeInsets.symmetric(
-                                          vertical: 12,
-                                          horizontal: 20,
-                                        ),
-                                        child: Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          children: [
-                                            Icon(
-                                              Icons.logout,
-                                              color: Colors.black87,
-                                              size: 18,
-                                            ),
-                                            SizedBox(width: 8),
-                                            Text(
-                                              'ログアウト',
-                                              style: TextStyle(
-                                                color: Colors.black87,
-                                                fontWeight: FontWeight.w700,
-                                                fontFamily: "LINEseed",
-                                              ),
-                                            ),
-                                          ],
-                                        ),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'ログアウト',
+                                      style: TextStyle(
+                                        color: Colors.black87,
+                                        fontWeight: FontWeight.w700,
+                                        fontFamily: "LINEseed",
                                       ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
                           ),
@@ -1651,6 +1644,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   const Text("新規登録を完了してください"),
+                  const SizedBox(height: 30),
                   Container(
                     margin: const EdgeInsets.symmetric(
                       vertical: 8,
@@ -1661,6 +1655,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                       border: Border.all(color: Colors.black26),
                       borderRadius: BorderRadius.circular(999),
                     ),
+
                     child: InkWell(
                       borderRadius: BorderRadius.circular(999),
                       onTap: logout,

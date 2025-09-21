@@ -2,10 +2,11 @@
     "app_title": "Tip App",
     "store0": "Store",
     "staff": {
-      "number": "Rank {rank}"
+      "number": "Rank {rank}",
+      "ranking" : "Ranking of confirmed tip receipt amount"
     },
     "section": {
-      "members": "Give a tip to the staff",
+      "members": "staff",
       "store": "Give a tip to the staff",
       "initiate1": "We appreciate your support",
       "initiate2": "Let's start using Tipri"

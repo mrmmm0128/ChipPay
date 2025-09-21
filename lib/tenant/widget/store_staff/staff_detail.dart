@@ -55,6 +55,7 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
       'u': widget.ownerId!,
       't': tenantId,
       'e': employeeId,
+
       if (initAmount != null) 'a': '$initAmount',
     };
     final query = Uri(queryParameters: qp).query;

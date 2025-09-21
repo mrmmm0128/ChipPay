@@ -1,8 +1,8 @@
 // ======= 店舗詳細 =======
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:yourpay/appadmin/admin_dashboard_screen.dart';
 import 'package:yourpay/appadmin/util.dart';
+import 'package:yourpay/tenant/store_detail/tabs/store_qr_tab.dart';
 
 class AdminTenantDetailPage extends StatelessWidget {
   final String ownerUid;
@@ -21,13 +21,26 @@ class AdminTenantDetailPage extends StatelessWidget {
       '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')} '
       '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
 
+  void _openQrPoster(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: const Text('QRポスター作成')),
+          // StoreQrTab は ownerId を必須利用しているので渡す
+          body: StoreQrTab(
+            tenantId: tenantId,
+            tenantName: tenantName,
+            ownerId: ownerUid,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final tenantRef = FirebaseFirestore.instance
         .collection(ownerUid)
-        .doc(tenantId);
-    final indexRef = FirebaseFirestore.instance
-        .collection('tenantIndex')
         .doc(tenantId);
 
     final pageTheme = Theme.of(context).copyWith(
@@ -128,7 +141,7 @@ class AdminTenantDetailPage extends StatelessWidget {
           children: [
             // 基本情報カード
             StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-              stream: indexRef.snapshots(),
+              stream: tenantRef.snapshots(),
               builder: (context, snap) {
                 final m = snap.data?.data();
                 final plan = (m?['subscription']?['plan'] ?? '').toString();
@@ -147,6 +160,14 @@ class AdminTenantDetailPage extends StatelessWidget {
                       _kv('Plan', plan.isEmpty ? '-' : plan),
                       _kv('Status', status),
                       _kv('Stripe', chargesEnabled ? 'charges_enabled' : '—'),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: FilledButton.icon(
+                          onPressed: () => _openQrPoster(context),
+                          icon: const Icon(Icons.qr_code_2),
+                          label: const Text('QRポスターを作成・ダウンロード'),
+                        ),
+                      ),
                     ],
                   ),
                 );

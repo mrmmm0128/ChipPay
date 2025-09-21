@@ -2,7 +2,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher_string.dart';
 
 class PublicStaffQrListPage extends StatefulWidget {
   const PublicStaffQrListPage({super.key});
@@ -212,7 +211,7 @@ class _PublicStaffQrListPageState extends State<PublicStaffQrListPage> {
                           photoUrl: photoUrl,
                           onMakeQr: () {
                             Navigator.of(context).pushNamed(
-                              'qr-all/qr-builder', // ← ルート名はこの後 MaterialApp に登録します
+                              '/qr-all/qr-builder', // ← ルート名はこの後 MaterialApp に登録します
                               arguments: {
                                 'tenantId':
                                     tenantId, // ← 外側 State の tenantId を渡す

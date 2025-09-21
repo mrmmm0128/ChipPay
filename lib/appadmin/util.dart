@@ -12,20 +12,25 @@ enum _ChipKind { good, warn, bad }
 
 class StatusCard extends StatelessWidget {
   final String tenantId;
-  const StatusCard({required this.tenantId});
+  const StatusCard({super.key, required this.tenantId});
 
   @override
   Widget build(BuildContext context) {
+    // ① tenantIndex から uid を解決するだけのストリーム
+    final indexRef = FirebaseFirestore.instance
+        .collection('tenantIndex')
+        .doc(tenantId);
+
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('tenantIndex')
-          .doc(tenantId)
-          .snapshots(),
-      builder: (context, snap) {
-        if (snap.hasError) {
-          return myCard(title: '登録状況', child: Text('読込エラー: ${snap.error}'));
+      stream: indexRef.snapshots(),
+      builder: (context, idxSnap) {
+        if (idxSnap.hasError) {
+          return myCard(
+            title: '登録状況',
+            child: Text('uid解決エラー: ${idxSnap.error}'),
+          );
         }
-        if (!snap.hasData) {
+        if (!idxSnap.hasData) {
           return const myCard(
             title: '登録状況',
             child: Center(
@@ -37,94 +42,144 @@ class StatusCard extends StatelessWidget {
           );
         }
 
-        final m = snap.data!.data() ?? {};
+        final idx = idxSnap.data!.data() ?? {};
+        final uid = (idx['uid'] as String?)?.trim();
 
-        // 初期費用
-        final initStatus = (m['billing']?['initialFee']?['status'] ?? 'none')
-            .toString();
-        final initChip = _statusChip(
-          label: switch (initStatus) {
-            'paid' => '初期費用: 支払い済み',
-            'checkout_open' => '初期費用: 決済中',
-            _ => '初期費用: 未払い',
-          },
-          kind: switch (initStatus) {
-            'paid' => _ChipKind.good,
-            'checkout_open' => _ChipKind.warn,
-            _ => _ChipKind.bad,
-          },
-        );
+        if (uid == null || uid.isEmpty) {
+          return const myCard(
+            title: '登録状況',
+            child: Text('この店舗の uid が未登録です（tenantIndex を確認してください）'),
+          );
+        }
 
-        // サブスク
-        final subPlan = (m['subscription']?['plan'] ?? "選択なし").toString();
-        final subStatus = (m['subscription']?['status'] ?? '').toString();
-        // 期限：nextPaymentAt 優先、なければ currentPeriodEnd をフォールバック
-        final _nextRaw =
-            m['subscription']?['nextPaymentAt'] ??
-            m['subscription']?['currentPeriodEnd'];
-        final nextAt = (_nextRaw is Timestamp) ? _nextRaw.toDate() : null;
-        final overdue =
-            m['subscription']?['overdue'] == true ||
-            subStatus == 'past_due' ||
-            subStatus == 'unpaid';
+        // ② オーナー配下 /{uid}/{tenantId} の実体を購読
+        final tenantRef = FirebaseFirestore.instance
+            .collection(uid)
+            .doc(tenantId);
 
-        final subChip = _statusChip(
-          label:
-              'サブスク: $subPlan ${subStatus.toUpperCase()}${nextAt != null ? '（次回: ${_ymd(nextAt)}）' : ''}${overdue ? '（未払い）' : ''}',
-          kind: overdue
-              ? _ChipKind.bad
-              : (subStatus == 'active' || subStatus == 'trialing')
-              ? _ChipKind.good
-              : _ChipKind.bad,
-        );
-
-        // Connect
-        final chargesEnabled = m['connect']?['charges_enabled'] == true;
-        final currentlyDue =
-            (m['connect']?['requirements']?['currently_due'] as List?)
-                ?.length ??
-            0;
-
-        final connectRows = <Widget>[
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _statusChip(
-                label: 'コネクトアカウント: ${chargesEnabled ? '登録済み' : '未登録'}',
-                kind: chargesEnabled ? _ChipKind.good : _ChipKind.bad,
-              ),
-
-              if (currentlyDue > 0)
-                _statusChip(
-                  label: '要提出: $currentlyDue 件',
-                  kind: _ChipKind.warn,
+        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: tenantRef.snapshots(),
+          builder: (context, tSnap) {
+            if (tSnap.hasError) {
+              return myCard(
+                title: '登録状況',
+                child: Text('読込エラー: ${tSnap.error}'),
+              );
+            }
+            if (!tSnap.hasData) {
+              return const myCard(
+                title: '登録状況',
+                child: Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(8.0),
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
                 ),
-            ],
-          ),
-        ];
+              );
+            }
+            if (!tSnap.data!.exists) {
+              return const myCard(
+                title: '登録状況',
+                child: Text('店舗ドキュメントが見つかりませんでした'),
+              );
+            }
 
-        return myCard(
-          title: '登録状況',
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 初期費用
-              const Text('初期費用'),
-              const SizedBox(height: 4),
-              Wrap(spacing: 8, runSpacing: 8, children: [initChip]),
-              const SizedBox(height: 12),
-              // サブスク
-              const Text('サブスクリプション'),
-              const SizedBox(height: 4),
-              Wrap(spacing: 8, runSpacing: 8, children: [subChip]),
-              const SizedBox(height: 12),
-              // Connect
-              const Text('Stripe Connect'),
-              const SizedBox(height: 4),
-              ...connectRows,
-            ],
-          ),
+            final m = tSnap.data!.data() ?? {};
+
+            // ---- 初期費用 ----
+            final initStatus =
+                (m['initialFee']?['status'] ??
+                        m['billing']?['initialFee']?['status'] ??
+                        'none')
+                    .toString();
+            final initChip = _statusChip(
+              label: switch (initStatus) {
+                'paid' => '初期費用: 支払い済み',
+                'checkout_open' => '初期費用: 決済中',
+                _ => '初期費用: 未払い',
+              },
+              kind: switch (initStatus) {
+                'paid' => _ChipKind.good,
+                'checkout_open' => _ChipKind.warn,
+                _ => _ChipKind.bad,
+              },
+            );
+
+            // ---- サブスク ----
+            final sub = (m['subscription'] as Map?) ?? const {};
+            final subPlan = (sub['plan'] ?? '選択なし').toString();
+            final subStatus = (sub['status'] ?? '').toString();
+
+            // 期限: nextPaymentAt 優先、なければ currentPeriodEnd
+            final rawNext = sub['nextPaymentAt'] ?? sub['currentPeriodEnd'];
+            final nextAt = (rawNext is Timestamp) ? rawNext.toDate() : null;
+
+            final overdue =
+                (sub['overdue'] == true) ||
+                subStatus == 'past_due' ||
+                subStatus == 'unpaid';
+
+            final subChip = _statusChip(
+              label:
+                  'サブスク: $subPlan ${subStatus.toUpperCase()}${nextAt != null ? '（次回: ${_ymd(nextAt)}）' : ''}${overdue ? '（未払い）' : ''}',
+              kind: overdue
+                  ? _ChipKind.bad
+                  : (subStatus == 'active' || subStatus == 'trialing')
+                  ? _ChipKind.good
+                  : _ChipKind.bad,
+            );
+
+            // ---- Connect ----
+            final connect = (m['connect'] as Map?) ?? const {};
+            final chargesEnabled = connect['charges_enabled'] == true;
+            final currentlyDueLen =
+                ((connect['requirements'] as Map?)?['currently_due'] as List?)
+                    ?.length ??
+                0;
+
+            final connectRows = <Widget>[
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _statusChip(
+                    label: 'コネクトアカウント: ${chargesEnabled ? '登録済み' : '未登録'}',
+                    kind: chargesEnabled ? _ChipKind.good : _ChipKind.bad,
+                  ),
+                  if (currentlyDueLen > 0)
+                    _statusChip(
+                      label: '要提出: $currentlyDueLen 件',
+                      kind: _ChipKind.warn,
+                    ),
+                ],
+              ),
+            ];
+
+            return myCard(
+              title: '登録状況',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 初期費用
+                  const Text('初期費用'),
+                  const SizedBox(height: 4),
+                  Wrap(spacing: 8, runSpacing: 8, children: [initChip]),
+                  const SizedBox(height: 12),
+
+                  // サブスク
+                  const Text('サブスクリプション'),
+                  const SizedBox(height: 4),
+                  Wrap(spacing: 8, runSpacing: 8, children: [subChip]),
+                  const SizedBox(height: 12),
+
+                  // Connect
+                  const Text('Stripe Connect'),
+                  const SizedBox(height: 4),
+                  ...connectRows,
+                ],
+              ),
+            );
+          },
         );
       },
     );

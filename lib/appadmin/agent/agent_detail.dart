@@ -1,14 +1,92 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:yourpay/appadmin/agent/contracts_list_for_agent.dart';
 
 class AgencyDetailPage extends StatelessWidget {
   final String agentId;
-  const AgencyDetailPage({super.key, required this.agentId});
+  final bool agent;
+  const AgencyDetailPage({
+    super.key,
+    required this.agentId,
+    required this.agent,
+  });
 
   String _ymdhm(DateTime d) =>
       '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')} '
       '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+
+  Future<void> _setAgentPassword(BuildContext context) async {
+    final pass1 = TextEditingController();
+    final pass2 = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('代理店パスワードを設定'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: pass1,
+              decoration: const InputDecoration(
+                labelText: '新しいパスワード（8文字以上）',
+                border: OutlineInputBorder(),
+              ),
+              obscureText: true,
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: pass2,
+              decoration: const InputDecoration(
+                labelText: '確認用パスワード',
+                border: OutlineInputBorder(),
+              ),
+              obscureText: true,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('設定'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    final p1 = pass1.text;
+    final p2 = pass2.text;
+    if (p1.length < 8 || p1 != p2) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('パスワード条件エラー：8文字以上＆一致必須')));
+      return;
+    }
+
+    try {
+      final fn = FirebaseFunctions.instanceFor(
+        region: 'us-central1',
+      ).httpsCallable('adminSetAgencyPassword');
+      await fn.call({'agentId': agentId, 'password': p1});
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('パスワードを設定しました')));
+    } on FirebaseFunctionsException catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('設定に失敗: ${e.message ?? e.code}')));
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('設定に失敗: $e')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -16,7 +94,10 @@ class AgencyDetailPage extends StatelessWidget {
     final searchCtrl = TextEditingController();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('代理店詳細')),
+      appBar: AppBar(
+        title: const Text('代理店詳細'),
+        automaticallyImplyLeading: agent ? false : true,
+      ),
       body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
         stream: ref.snapshots(),
         builder: (context, snap) {
@@ -190,6 +271,11 @@ class AgencyDetailPage extends StatelessWidget {
             ),
             onPressed: () => Navigator.pop(context, true),
             child: const Text('保存'),
+          ),
+          IconButton(
+            tooltip: 'パスワード設定',
+            icon: const Icon(Icons.key_outlined),
+            onPressed: () => _setAgentPassword(context),
           ),
         ],
       ),

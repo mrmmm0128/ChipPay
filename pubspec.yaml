@@ -52,6 +52,9 @@ dependencies:
   easy_localization: ^3.0.3
   video_player: ^2.8.6
   chewie: ^1.13.0
+  syncfusion_flutter_pdfviewer: ^30.2.7
+  flutter_markdown: ^0.7.3
+
   
 
 dev_dependencies:
@@ -81,6 +84,13 @@ flutter:
     - assets/translations/
     - assets/endUser/
     - assets/posters/play.jpg
+    - assets/policies/terms_ja.md
+    - assets/policies/privacy_ja.md
+    - assets/pdf/tipri_page-0001.jpg
+    - assets/pdf/tipri_page-0002.jpg
+    - assets/pdf/tipri_page-0003.jpg
+    - assets/pdf/tipri_page-0004.jpg
+    - assets/pdf/tipri_page-0005.jpg
     
 
   # An image asset can refer to one or more resolution-specific "variants", see

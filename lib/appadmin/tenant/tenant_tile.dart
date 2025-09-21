@@ -21,7 +21,11 @@ class TenantTile extends StatefulWidget {
   final bool subOverdue;
   final DateTime? subNextPaymentAt;
 
+  // ▼ 修正：nullable にする
+  final String? download;
+
   const TenantTile({
+    super.key,
     required this.tenantId,
     required this.ownerUid,
     required this.name,
@@ -33,12 +37,11 @@ class TenantTile extends StatefulWidget {
     required this.loadRevenue,
     required this.onTap,
     required this.yen,
-    // 追加分
     required this.subPlan,
     required this.subStatus,
     required this.subOverdue,
     required this.subNextPaymentAt,
-    super.key,
+    this.download, // ← nullable
   });
 
   @override
@@ -70,23 +73,26 @@ class _TenantTileState extends State<TenantTile> {
 
   @override
   Widget build(BuildContext context) {
+    final createdLabel = widget.createdAt != null
+        ? 'Created: ${_ymd(widget.createdAt!)}'
+        : null;
+
     final subtitleLines = <String>[
       'ID: ${widget.tenantId}',
-      if (widget.plan.isNotEmpty) 'Plan: ${widget.plan}',
-      'Status: ${widget.status}${widget.chargesEnabled ? ' / コネクトアカウント' : ''}',
-      // ▼ サブスク要約（プラン / ステータス）
-      'Sub: ${widget.subPlan}/${widget.subStatus.toUpperCase()}',
-      if (widget.createdAt != null) 'Created: ${widget.createdAt}',
+      if (widget.plan.isNotEmpty)
+        'Plan: ${widget.plan} / Status: ${widget.status}${widget.chargesEnabled ? '/ コネクトアカウント作成済' : ''}',
+
+      if (createdLabel != null) createdLabel,
     ];
 
-    final nextLabel = widget.subNextPaymentAt != null
-        ? '次回: ${_ymd(widget.subNextPaymentAt!)}'
-        : null;
+    final posterLabel = (widget.download ?? '') == 'done'
+        ? 'ポスターダウンロード済'
+        : 'ポスター未ダウンロード';
 
     return ListTile(
       onTap: widget.onTap,
       title: Text(
-        widget.name,
+        widget.name.isEmpty ? '設定なし' : widget.name,
         style: const TextStyle(fontWeight: FontWeight.w600),
       ),
       subtitle: Text(subtitleLines.join('  •  ')),
@@ -106,11 +112,6 @@ class _TenantTileState extends State<TenantTile> {
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
           const SizedBox(height: 2),
-          if (nextLabel != null)
-            Text(
-              nextLabel,
-              style: const TextStyle(fontSize: 11, color: Colors.black54),
-            ),
           if (widget.subOverdue) ...[
             const SizedBox(height: 2),
             Container(
@@ -132,11 +133,6 @@ class _TenantTileState extends State<TenantTile> {
               ),
             ),
           ],
-          const SizedBox(height: 2),
-          Text(
-            widget.rangeLabel,
-            style: const TextStyle(fontSize: 11, color: Colors.black54),
-          ),
         ],
       ),
     );

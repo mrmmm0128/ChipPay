@@ -2,10 +2,11 @@
     "app_title": "팁 앱",
     "store0": "매장",
     "staff": {
-      "number": "{rank}위"
+      "number": "{rank}위",
+      "ranking": "확정 칩 수령액 순위"
     },
     "section": {
-      "members": "직원에게 팁을 주자",
+      "members": "직원",
       "store": "가게에 칩을 주자",
       "initiate1": "협조 부탁드립니다",
       "initiate2": "Tipri 도입하기"

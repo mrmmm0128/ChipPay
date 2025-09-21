@@ -1,4 +1,6 @@
 // boot_gate.dart
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -19,14 +21,24 @@ class _BootGateState extends State<BootGate> {
   late final DateTime _splashUntil;
   bool get _isCurrentRoute => (ModalRoute.of(context)?.isCurrent ?? false);
 
+  // ▼ 未認証時の「メール認証を拾うための」ポーリング
+  Timer? _verifyTimer;
+  int _verifyTicks = 0;
+  static const int _verifyMaxTicks = 30; // 2秒 × 30 = 最大60秒
+
   @override
   void initState() {
     super.initState();
     _splashUntil = DateTime.now().add(_minSplash);
-    // 2秒後に再buildしてローディング解除できるように
     Future.delayed(_minSplash, () {
       if (mounted) setState(() {});
     });
+  }
+
+  @override
+  void dispose() {
+    _verifyTimer?.cancel();
+    super.dispose();
   }
 
   bool get _holdSplash => DateTime.now().isBefore(_splashUntil);
@@ -38,10 +50,40 @@ class _BootGateState extends State<BootGate> {
     }
   }
 
+  void _startVerifyWatcher() {
+    if (_verifyTimer != null) return; // 既に起動済みなら何もしない
+    _verifyTicks = 0;
+    _verifyTimer = Timer.periodic(const Duration(seconds: 2), (t) async {
+      _verifyTicks++;
+      if (_verifyTicks > _verifyMaxTicks) {
+        t.cancel();
+        _verifyTimer = null;
+        return;
+      }
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        t.cancel();
+        _verifyTimer = null;
+        return;
+      }
+      try {
+        await user.reload();
+        // userChanges() を使っているので reload 後はストリームが発火し、build が呼ばれる
+        if (!mounted) {
+          t.cancel();
+          _verifyTimer = null;
+        }
+      } catch (_) {
+        // 無視して継続
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
+      // ★ ここが肝：メール認証・displayName 更新・reload でも流れる
+      stream: FirebaseAuth.instance.userChanges(),
       builder: (context, snap) {
         // 起動直後の監視準備中 or 最低表示時間内はローディング固定
         if (snap.connectionState == ConnectionState.waiting || _holdSplash) {
@@ -50,17 +92,29 @@ class _BootGateState extends State<BootGate> {
 
         final user = snap.data;
 
-        // 未ログイン or 未認証 → 2秒経過後にログイン画面
-        if (user == null || !user.emailVerified) {
+        // 未ログイン
+        if (user == null) {
+          // 念のためポーリング停止
+          _verifyTimer?.cancel();
+          _verifyTimer = null;
+          _navigated = false;
           return const LoginScreen();
         }
 
-        // ログイン済み & 認証済み → 最初の店舗へ（最低2秒は表示してから）
-        // ログイン済み & 認証済み → 最初の店舗へ
+        // ログイン済みだが未認証 → ログイン画面を出しつつ、裏で emailVerified を監視
+        if (!user.emailVerified) {
+          _navigated = false; // 念のため
+          _startVerifyWatcher(); // 2秒間隔で user.reload() → userChanges() が発火して再評価される
+          return const LoginScreen();
+        }
+
+        // ここに来たら「認証済みのログイン状態」
+        _verifyTimer?.cancel();
+        _verifyTimer = null;
+
         if (!_navigated && _isCurrentRoute) {
           _navigated = true;
           WidgetsBinding.instance.addPostFrameCallback((_) async {
-            // 直前で別画面が前面に来ていないか再確認
             if (!mounted || !_isCurrentRoute) return;
             await _ensureMinSplash();
             if (!mounted || !_isCurrentRoute) return;

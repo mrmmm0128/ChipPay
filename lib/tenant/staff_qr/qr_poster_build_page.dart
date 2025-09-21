@@ -6,7 +6,13 @@ import 'package:flutter/material.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
-import 'package:qr_flutter/qr_flutter.dart'; // プレビュー用QR
+import 'package:qr_flutter/qr_flutter.dart';
+
+// ★ 追加：Firebase（匿名で読むだけ）
+import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+// ↓ FlutterFire CLI で生成済みなら使う（無ければ独自の Options を渡してください）
+import 'package:yourpay/firebase_options.dart'; // ← パスはプロジェクトに合わせて
 
 class QrPosterBuilderPage extends StatefulWidget {
   const QrPosterBuilderPage({super.key});
@@ -104,12 +110,16 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
   String? _photoName;
 
   double _qrSizeMm = 50; // QRサイズ（mm）
-  double _marginMm = 12; // 余白（mm）（PDF用に残しておく）
+  double _marginMm = 12; // 余白（mm） (PDF用に残す: いまはQR枠の白地に利用)
   bool _putWhiteBg = true; // QRの白背景
 
-  // 追加: 用紙と向き
+  // 用紙と向き
   _Paper _paper = _Paper.a4;
   bool _landscape = false; // 横向き
+
+  // ★ 追加：Cプラン判定
+  bool _isCPlan = false;
+  bool _loadingPlan = true; // 取得中インジケータ用（必要ならUIで利用可）
 
   // ローカル/本番自動切替のベースURL
   String get _publicBase {
@@ -130,6 +140,7 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
   void initState() {
     super.initState();
     _initFromUrl();
+    _ensureFirebaseAndMaybeFetchPlan(); // ★ 追加
   }
 
   @override
@@ -140,6 +151,7 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
       tenantId ??= (args['tenantId'] ?? args['t'])?.toString();
       employeeId ??= (args['employeeId'] ?? args['e'])?.toString();
       setState(() {});
+      _ensureFirebaseAndMaybeFetchPlan(); // ★ URL引数で入った場合も反映
     }
   }
 
@@ -156,6 +168,66 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
     setState(() {});
   }
 
+  // ★ 追加：Firebase 初期化（ログイン不要）→ Cプラン確認
+  Future<void> _ensureFirebaseAndMaybeFetchPlan() async {
+    if (tenantId == null || tenantId!.isEmpty) return;
+    try {
+      if (Firebase.apps.isEmpty) {
+        await Firebase.initializeApp(
+          options: DefaultFirebaseOptions.currentPlatform,
+        );
+      }
+      await _fetchIsCPlanPublic(tenantId!);
+    } catch (_) {
+      // 失敗時はアップロード不可のまま
+      if (mounted)
+        setState(() {
+          _isCPlan = false;
+          _loadingPlan = false;
+        });
+    }
+  }
+
+  // ★ 追加：public index から C プラン判定（例：tenantIndex/{tenantId}）
+  Future<void> _fetchIsCPlanPublic(String tid) async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('tenantIndex')
+          .doc(tid)
+          .get();
+      final data = doc.data() ?? {};
+      // subscription.plan または plan を見る
+      String? rawPlan;
+      final sub = (data['subscription'] as Map?)?.cast<String, dynamic>();
+      rawPlan = (sub?['plan'] ?? data['plan'])?.toString();
+      final plan = _canonicalizePlan(rawPlan ?? '');
+      final isC = plan == 'C';
+      if (!mounted) return;
+      setState(() {
+        _isCPlan = isC;
+        _loadingPlan = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isCPlan = false;
+        _loadingPlan = false;
+      });
+    }
+  }
+
+  String _canonicalizePlan(String raw) {
+    final n = raw.trim().toLowerCase().replaceAll(RegExp(r'[\s_-]'), '');
+    const cAliases = {'c', 'cplan', 'planc', 'premium'};
+    const aAliases = {'a', 'aplan', 'plana', 'free', 'basic'};
+    const bAliases = {'b', 'bplan', 'planb', 'pro', 'standard'};
+    if (cAliases.contains(n)) return 'C';
+    if (aAliases.contains(n)) return 'A';
+    if (bAliases.contains(n)) return 'B';
+    // それ以外は未知
+    return raw.trim().toUpperCase();
+  }
+
   String get _qrData {
     if (tenantId == null || employeeId == null) return '';
     final params = Uri(
@@ -165,6 +237,19 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
   }
 
   Future<void> _pickPhoto() async {
+    // ★ Cプランでなければ拒否（ボタンが無効でも直接呼ばれる可能性に備えて二重ガード）
+    if (!_isCPlan) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '写真アップロードは C プラン限定です',
+            style: TextStyle(fontFamily: 'LINEseed'),
+          ),
+        ),
+      );
+      return;
+    }
+
     final res = await FilePicker.platform.pickFiles(
       type: FileType.image,
       allowMultiple: false,
@@ -199,14 +284,11 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
 
     final pdf = pw.Document();
 
-    // mm → pt
     double mm(double v) => v * PdfPageFormat.mm;
 
-    // ページフォーマット（向き対応）
     final pdef = _paperDefs[_paper]!;
     final pageFormat = _landscape ? pdef.format.landscape : pdef.format;
 
-    // 背景
     pw.Widget background = pw.Container(color: PdfColors.white);
     if (_photoBytes != null) {
       final img = pw.MemoryImage(_photoBytes!);
@@ -215,7 +297,6 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
       );
     }
 
-    // QR（PDF用）
     final barcode = Barcode.qrCode();
     final qrWidget = pw.BarcodeWidget(
       barcode: barcode,
@@ -242,6 +323,7 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
     pdf.addPage(
       pw.Page(
         pageFormat: pageFormat,
+        margin: pw.EdgeInsets.all(mm(_marginMm)),
         build: (_) => pw.Stack(
           children: [
             background,
@@ -259,11 +341,12 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
   Widget build(BuildContext context) {
     final valid = tenantId != null && employeeId != null;
 
-    // プレビューのアスペクト比（向き対応）
     final pdef = _paperDefs[_paper]!;
     final previewAspect = _landscape
-        ? (pdef.heightMm / pdef.widthMm) /*= 297/210 等*/
-        : (pdef.widthMm / pdef.heightMm) /*= 210/297 等*/;
+        ? (pdef.heightMm / pdef.widthMm)
+        : (pdef.widthMm / pdef.heightMm);
+
+    final canUpload = _isCPlan; // ★ Cプランのみ可
 
     return Scaffold(
       backgroundColor: const Color(0xFFF7F7F7),
@@ -285,7 +368,6 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
-              // ▼ 用紙サイズ・向き
               Row(
                 children: [
                   Expanded(
@@ -309,7 +391,9 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
                                   value: e.key,
                                   child: Text(
                                     e.value.label,
-                                    style: TextStyle(fontFamily: 'LINEseed'),
+                                    style: const TextStyle(
+                                      fontFamily: 'LINEseed',
+                                    ),
                                   ),
                                 ),
                               )
@@ -368,7 +452,7 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
                 ),
 
               if (valid) ...[
-                // プレビュー（用紙・向きに追従）
+                // プレビュー
                 Container(
                   decoration: BoxDecoration(
                     color: Colors.white,
@@ -386,7 +470,6 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
                     aspectRatio: previewAspect,
                     child: LayoutBuilder(
                       builder: (context, c) {
-                        // mm→px 換算は「ページの幅mm」に合わせる
                         final widthMm = _landscape
                             ? pdef.heightMm
                             : pdef.widthMm;
@@ -461,11 +544,25 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
                     final narrow = c.maxWidth < 560;
                     final pickBtn = Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: _pickPhoto,
+                        onPressed: canUpload
+                            ? _pickPhoto
+                            : () {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      '写真アップロードは C プラン限定です',
+                                      style: TextStyle(fontFamily: 'LINEseed'),
+                                    ),
+                                  ),
+                                );
+                              },
                         icon: const Icon(Icons.photo_library),
                         label: Text(
-                          _photoName ?? '写真を選ぶ',
-                          style: TextStyle(fontFamily: 'LINEseed'),
+                          _loadingPlan
+                              ? 'プラン確認中...'
+                              : (_photoName ??
+                                    (canUpload ? '写真を選ぶ' : '写真アップロード（Cプランのみ）')),
+                          style: const TextStyle(fontFamily: 'LINEseed'),
                         ),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: Colors.black87,
@@ -506,6 +603,20 @@ class _QrPosterBuilderPageState extends State<QrPosterBuilderPage> {
                     }
                   },
                 ),
+
+                const SizedBox(height: 8),
+                if (!_loadingPlan && !canUpload)
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '※ 写真アップロードは C プラン限定機能です。',
+                      style: TextStyle(
+                        color: Colors.black54,
+                        fontSize: 12,
+                        fontFamily: 'LINEseed',
+                      ),
+                    ),
+                  ),
 
                 const SizedBox(height: 12),
                 _SliderTile(
@@ -565,14 +676,14 @@ class _SliderTile extends StatelessWidget {
       textColor: Colors.black87,
       title: Text(
         label,
-        style: TextStyle(color: Colors.black87, fontFamily: 'LINEseed'),
+        style: const TextStyle(color: Colors.black87, fontFamily: 'LINEseed'),
       ),
       subtitle: Slider(value: value, min: min, max: max, onChanged: onChanged),
       trailing: SizedBox(
         width: 56,
         child: Text(
           value.toStringAsFixed(0),
-          style: TextStyle(fontFamily: 'LINEseed'),
+          style: const TextStyle(fontFamily: 'LINEseed'),
         ),
       ),
     );

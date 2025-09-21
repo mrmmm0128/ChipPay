@@ -39,6 +39,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
   bool _savingDraft = false;
   bool _savingFinal = false;
   bool _registered = false;
+  String tenantName = "";
 
   // 下書き関連
   bool _hasDraft = false;
@@ -51,6 +52,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
 
   // ---- 追加：ドラフト監視（uid/{tenantId} の変化も即反映）----
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _draftSub;
+  bool _openingConnectPortal = false;
 
   late final String uid;
 
@@ -58,10 +60,11 @@ class OnboardingSheetState extends State<OnboardingSheet> {
   void initState() {
     super.initState();
     uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    _loadDraft(); // 既存下書きの反映
+
     _setupRealtimeBridges(); // ← 追加：決済完了通知＆フォーカス復帰で再取得
     _subscribeDraftChanges(); // ← 追加：ドラフトの変更も画面に反映
-    tenantNameEdit = TextEditingController(text: widget.tenantName);
+    tenantName = widget.tenantName;
+    _loadDraft(); // 既存下書きの反映
   }
 
   @override
@@ -71,6 +74,246 @@ class OnboardingSheetState extends State<OnboardingSheet> {
     _focusSub?.cancel();
     _draftSub?.cancel();
     super.dispose();
+  }
+
+  /// Stripe requirements のキーを日本語にざっくりマッピング
+  String _labelForRequirement(String key) {
+    // よく出るキーを人間語に
+    const map = {
+      'individual.verification.document': '本人確認書類（個人）',
+      'individual.verification.additional_document': '本人確認の追加書類（個人）',
+      'individual.id_number': '個人番号（マイナンバーではなく本人確認用ID）',
+      'individual.email': '個人のメールアドレス',
+      'individual.phone': '個人の電話番号',
+      'company.verification.document': '事業者の証明書類（登記/証明 等）',
+      'company.representative.verification.document': '代表者の本人確認書類',
+      'external_account': '入金用の銀行口座登録',
+      'business_profile.url': '事業のウェブサイトURL',
+      'business_profile.mcc': '事業カテゴリ（MCC）',
+      'tos_acceptance.ip': '利用規約（TOS）の同意',
+    };
+
+    if (map.containsKey(key)) return map[key]!;
+    // ドット区切りをそれっぽく整形
+    final parts = key.split('.');
+    final tail = parts.isNotEmpty ? parts.last : key;
+    return tail
+        .replaceAll('_', ' ')
+        .replaceAll('-', ' ')
+        .replaceFirstMapped(RegExp(r'^[a-z]'), (m) => m[0]!.toUpperCase());
+  }
+
+  Future<void> _showRequirementsDialog({
+    required List<String> currentlyDue,
+    required List<String> pastDue,
+    required List<String> pendingVerification,
+    required List errorsRaw,
+    required bool isPendingVerification,
+  }) async {
+    // エラー文字列を安全に抽出
+    List<Widget> _errorTiles() {
+      if (errorsRaw.isEmpty) return [];
+      return errorsRaw.map<Widget>((e) {
+        try {
+          final m = (e as Map).cast<String, dynamic>();
+          final reqKey = (m['requirement'] ?? '') as String;
+          final reason = (m['reason'] ?? m['code'] ?? m['message'] ?? '')
+              .toString();
+          final label = reqKey.isNotEmpty ? _labelForRequirement(reqKey) : '不明';
+          return _reqTile(
+            label,
+            reason: reason,
+            icon: Icons.error,
+            color: Colors.redAccent,
+          );
+        } catch (_) {
+          return _reqTile(
+            e.toString(),
+            icon: Icons.error,
+            color: Colors.redAccent,
+          );
+        }
+      }).toList();
+    }
+
+    await showDialog(
+      context: context,
+      builder: (_) {
+        return AlertDialog(
+          title: const Text('提出状況の確認'),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (currentlyDue.isNotEmpty) ...[
+                    _sectionHeader('提出が必要な項目'),
+                    ...currentlyDue.map(
+                      (k) => _reqTile(
+                        _labelForRequirement(k),
+                        icon: Icons.assignment_late,
+                        color: Colors.orange,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (pastDue.isNotEmpty) ...[
+                    _sectionHeader('期限切れ（再提出が必要）'),
+                    ...pastDue.map(
+                      (k) => _reqTile(
+                        _labelForRequirement(k),
+                        icon: Icons.report,
+                        color: Colors.redAccent,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (isPendingVerification) ...[
+                    _sectionHeader('審査中の項目'),
+                    if (pendingVerification.isNotEmpty)
+                      ...pendingVerification.map(
+                        (k) => _reqTile(
+                          _labelForRequirement(k),
+                          icon: Icons.hourglass_top,
+                          color: Colors.blueGrey,
+                        ),
+                      ),
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: Text('Stripe が提出済みの書類を確認しています。完了までお待ちください。'),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (errorsRaw.isNotEmpty) ...[
+                    _sectionHeader('エラー（再提出の必要あり）'),
+                    ..._errorTiles(),
+                  ],
+                  if (currentlyDue.isEmpty &&
+                      pastDue.isEmpty &&
+                      !isPendingVerification &&
+                      errorsRaw.isEmpty)
+                    const Text('現在、提出すべき不足や審査中の項目は見つかりませんでした。'),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('閉じる'),
+            ),
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.pop(context);
+                _openConnectPortal();
+              },
+              icon: const Icon(Icons.open_in_new),
+              label: const Text('コネクトポータルを開く'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // ダイアログ用の小パーツ
+  Widget _sectionHeader(String text) => Padding(
+    padding: const EdgeInsets.only(bottom: 6),
+    child: Text(text, style: const TextStyle(fontWeight: FontWeight.w700)),
+  );
+
+  Widget _reqTile(
+    String label, {
+    IconData? icon,
+    Color? color,
+    String? reason,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            icon ?? Icons.info_outline,
+            size: 18,
+            color: color ?? Colors.black54,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label),
+                if (reason != null && reason.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      reason,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.black54,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openConnectPortal() async {
+    if (_creatingConnect) return;
+    setState(() => _creatingConnect = true);
+    try {
+      final res = await widget.functions
+          .httpsCallable('createConnectAccountLink')
+          .call({'tenantId': widget.tenantId});
+      final data = (res.data as Map?) ?? {};
+      final url = data['url'] as String?;
+      if (url != null && url.isNotEmpty) {
+        await launchUrlString(
+          url,
+          mode: LaunchMode.platformDefault,
+          webOnlyWindowName: '_blank',
+        );
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('コネクトポータルのリンクを取得できませんでした')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('ポータル起動に失敗: $e')));
+    } finally {
+      if (mounted) setState(() => _creatingConnect = false);
+    }
+  }
+
+  String _humanizeRequirementKey(String key) {
+    // 代表例だけ人間語に。未知キーはそのまま返す
+    switch (key) {
+      case 'individual.verification.document':
+        return '本人確認書類の確認';
+      case 'external_account':
+        return '入金用銀行口座の登録/確認';
+      case 'company.verification.document':
+        return '法人の確認書類';
+      case 'business_profile.mcc':
+        return '業種の設定（MCC）';
+      case 'business_profile.product_description':
+        return '事業内容の説明';
+      case 'tos_acceptance.date':
+      case 'tos_acceptance.ip':
+        return '利用規約への同意';
+      default:
+        return key; // fallback
+    }
   }
 
   // ===== 下書きの読み込み =====
@@ -106,6 +349,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
       setState(() {
         _hasDraft = (status == 'nonactive');
         selectedPlan = plan;
+
         _initialFeePaidLocal = initialPaid;
         _subscribedLocal = (subStatus == 'active' || subStatus == 'trialing');
         _draftUpdatedAt = (snap.data()?['updatedAt'] is Timestamp)
@@ -210,7 +454,6 @@ class OnboardingSheetState extends State<OnboardingSheet> {
       setState(() {
         _initialFeePaidLocal = _initialFeePaidLocal || initialFeePaid;
         _subscribedLocal = _subscribedLocal || subscribed;
-        _registered = _registered || t.exists;
       });
     } catch (_) {
       // 無視（次のストリームで追いつく）
@@ -231,7 +474,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
           .call({
             'tenantId': widget.tenantId,
             'email': FirebaseAuth.instance.currentUser?.email,
-            'name': FirebaseAuth.instance.currentUser?.displayName,
+            'name': tenantName,
           });
       final data = res.data as Map;
       final url = data['url'] as String?;
@@ -288,7 +531,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
             'tenantId': widget.tenantId,
             'plan': selectedPlan,
             'email': FirebaseAuth.instance.currentUser?.email,
-            'name': FirebaseAuth.instance.currentUser?.displayName,
+            'name': widget.tenantName,
           });
       final data = res.data as Map;
       final portalUrl = data['portalUrl'] as String?;
@@ -495,7 +738,6 @@ class OnboardingSheetState extends State<OnboardingSheet> {
       final agency = (base['agency'] as Map?)?.cast<String, dynamic>() ?? {};
 
       final data = {
-        'name': tenantNameEdit.text,
         'members': [uid],
         'status': 'nonactive',
         'createdBy': {
@@ -566,7 +808,6 @@ class OnboardingSheetState extends State<OnboardingSheet> {
       final agency = (base['agency'] as Map?)?.cast<String, dynamic>() ?? {};
 
       final data = <String, dynamic>{
-        'name': tenantNameEdit.text,
         'members': [uid],
         'status': 'active',
         'createdAt': FieldValue.serverTimestamp(),
@@ -793,6 +1034,28 @@ class OnboardingSheetState extends State<OnboardingSheet> {
         final payoutsEnabled = connect['payouts_enabled'] == true;
         final connectOk = chargesEnabled && payoutsEnabled;
 
+        // requirements を読み出し
+        final req = (connect['requirements'] as Map?) ?? {};
+        final currentlyDue =
+            (req['currently_due'] as List?)?.cast<String>() ?? [];
+        final pastDue = (req['past_due'] as List?)?.cast<String>() ?? [];
+        final pendingVerification =
+            (req['pending_verification'] as List?)?.cast<String>() ?? [];
+        final disabledReason = (req['disabled_reason'] as String?) ?? '';
+        final errorsRaw = (req['errors'] as List?) ?? [];
+
+        final needsSubmission = currentlyDue.isNotEmpty || pastDue.isNotEmpty;
+        final isPendingVerification =
+            disabledReason == 'requirements.pending_verification' ||
+            pendingVerification.isNotEmpty;
+
+        // 「申請前（未開始）」かどうか：requirements などが全く無い段階
+        final hasConnectStarted =
+            req.isNotEmpty || (connect['details_submitted'] == true);
+
+        // 画面に出す不足キー（提出必要＆期限切れ）
+        final pendingKeys = <String>[...currentlyDue, ...pastDue];
+
         // 表示上の完了判定（Firestore or ローカルイベント or 下書き反映）
         final initialFeePaid = initialFeeFromFs || _initialFeePaidLocal;
         final subscribed = subscribedFromFs || _subscribedLocal;
@@ -834,18 +1097,13 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                     fontFamily: 'LINEseed',
                   ),
                 ),
-                const SizedBox(height: 4),
-                TextField(
-                  controller: tenantNameEdit,
-                  decoration: const InputDecoration(labelText: '店舗名'),
-                ),
 
                 const SizedBox(height: 12),
 
                 // ==== 3ボタンを同一モーダルで並べる ====
                 _actionCard(
                   title: '初期費用',
-                  description: 'まずは初期費用のお支払いをお願いします。',
+                  description: '初期費用のお支払いをお願いします',
                   trailing: _statusPill(initialFeePaid),
                   child: FilledButton.icon(
                     onPressed: (initialFeePaid || _creatingInitial)
@@ -868,7 +1126,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                 const SizedBox(height: 10),
                 _actionCard(
                   title: 'サブスク登録',
-                  description: 'プランを選択し、登録へ進んでください。',
+                  description: 'プランを選択し、登録へ進んでください',
                   trailing: _statusPill(subscribed),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -900,61 +1158,92 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                 const SizedBox(height: 10),
                 _actionCard(
                   title: 'Stripe Connect',
-                  description: '売上受け取り用のコネクトアカウントを作成します（本人確認・口座登録）。',
-                  trailing: _statusPill(chargesEnabled && payoutsEnabled),
-                  child: Row(
+                  description: '売上受け取り用のコネクトアカウントを作成します（本人確認・口座登録）',
+                  trailing: _statusPill(connectOk),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Tooltip(
-                          message: _registered
-                              ? ((chargesEnabled && payoutsEnabled)
-                                    ? '接続済み'
-                                    : '')
-                              : 'まず「本登録を保存」でアカウント作成を完了してください',
-                          child: FilledButton.icon(
-                            onPressed:
-                                (!_registered ||
-                                    (chargesEnabled && payoutsEnabled) ||
-                                    _creatingConnect)
-                                ? null
-                                : _openConnectOnboarding,
-                            icon: _creatingConnect
-                                ? const SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(Icons.login),
-                            label: Text(
-                              (chargesEnabled && payoutsEnabled)
-                                  ? '接続済み'
-                                  : 'Stripe接続に進む',
-                              style: TextStyle(fontFamily: 'LINEseed'),
-                            ),
+                      // --- ボタン出し分け（どちらか一方 or 完了で非表示） ---
+                      Row(
+                        children: [
+                          Expanded(
+                            child: () {
+                              // 0) 申請前（未開始）→ Hosted Onboarding
+                              if (!hasConnectStarted) {
+                                return _creatingConnect
+                                    ? const Center(
+                                        child: SizedBox(
+                                          width: 18,
+                                          height: 18,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        ),
+                                      )
+                                    : FilledButton.icon(
+                                        onPressed: _openConnectOnboarding,
+                                        icon: const Icon(Icons.login),
+                                        label: const Text('Stripe接続に進む'),
+                                      );
+                              }
+
+                              // 1) 申請後〜完了前 → コネクトポータル
+                              if (!connectOk) {
+                                return OutlinedButton.icon(
+                                  onPressed: _openingConnectPortal
+                                      ? null
+                                      : _openConnectPortal,
+                                  icon: _openingConnectPortal
+                                      ? const SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        )
+                                      : const Icon(Icons.open_in_new),
+                                  label: const Text('コネクトポータルを開く'),
+                                );
+                              }
+
+                              // 2) 完了 → ボタン無し
+                              return const SizedBox.shrink();
+                            }(),
                           ),
-                        ),
+
+                          if (hasConnectStarted && !connectOk)
+                            const SizedBox(width: 10),
+
+                          // 「不足項目を確認」：申請開始済みで未完了のときだけ出す
+                          if (hasConnectStarted && !connectOk)
+                            OutlinedButton(
+                              onPressed: () => _showRequirementsDialog(
+                                currentlyDue: currentlyDue,
+                                pastDue: pastDue,
+                                pendingVerification: pendingVerification,
+                                errorsRaw: errorsRaw,
+                                isPendingVerification: isPendingVerification,
+                              ),
+                              child: const Text('不足項目を確認'),
+                            ),
+                        ],
                       ),
-                      const SizedBox(width: 10),
-                      OutlinedButton.icon(
-                        onPressed: (!_registered || _checkingConnect)
-                            ? null
-                            : _checkConnectLatest,
-                        icon: _checkingConnect
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.sync),
-                        label: const Text(
-                          '接続状態を確認',
-                          style: TextStyle(fontFamily: 'LINEseed'),
+
+                      // 申請前は説明だけ、申請後は軽いヒントだけ（詳細はダイアログへ）
+                      if (!hasConnectStarted) ...[
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Stripe 接続を開始して、本人確認と入金口座の登録を進めてください。',
+                          style: TextStyle(color: Colors.black54, fontSize: 12),
                         ),
-                      ),
+                      ] else if (!connectOk) ...[
+                        const SizedBox(height: 8),
+                        const Text(
+                          '不足や審査状況は「不足項目を確認」から詳細をご確認ください。',
+                          style: TextStyle(color: Colors.black54, fontSize: 12),
+                        ),
+                      ],
+                      // 完了なら何も出さない
                     ],
                   ),
                 ),

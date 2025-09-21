@@ -3,14 +3,18 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher_string.dart';
+
+// あなたの既存ウィジェット
 import 'package:yourpay/endUser/public_store_page.dart';
 import 'package:yourpay/endUser/utils/design.dart';
 
-// ▼ 追加：アプリ内再生用
+// ▼ アプリ内動画再生
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
+import 'package:yourpay/tenant/method/fetchPlan.dart';
 
 class TipCompletePage extends StatefulWidget {
+  /// Navigator で最低限 tenantId は渡す想定（URL直叩きでも拾えるようにハイブリッド対応済）
   final String tenantId;
   final String? tenantName;
   final int? amount;
@@ -31,21 +35,133 @@ class TipCompletePage extends StatefulWidget {
 }
 
 class _TipCompletePageState extends State<TipCompletePage> {
+  // ---- 実際に使う値（URL／引数をマージして保持） ----
+  String? _tenantId;
+  String? _tenantName;
+  int? _amount;
+  String? _employeeName;
+  String? _uid;
+  bool isC = true;
+
   Future<_LinksGateResult>? _linksGateFuture;
 
   @override
   void initState() {
     super.initState();
-    _linksGateFuture = _loadLinksGate();
+    // 1) コンストラクタ引数で初期化
+    _tenantId = widget.tenantId;
+    _tenantName = widget.tenantName;
+    _amount = widget.amount;
+    _employeeName = widget.employeeName;
+    _uid = widget.uid;
+
+    // 2) URL から不足を補完
+    _mergeFromUrlIfNeeded();
+
+    // 3) 初回ロード
+    _reloadLinksGate();
+
+    initialize();
   }
 
-  Future<_LinksGateResult> _loadLinksGate() async {
-    final String tid = widget.tenantId;
-    final String? uid = widget.uid;
+  Future<void> initialize() async {
+    isC = await fetchIsCPlanById(_uid!, _tenantId!);
+  }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Navigator の arguments が後から差し込まれるケースにも追従
+    final args = ModalRoute.of(context)?.settings.arguments;
+    if (args is Map) {
+      _mergeFromArgs(args);
+    }
+  }
+
+  // ----------------- マージ系ヘルパー -----------------
+
+  void _mergeFromArgs(Map args) {
+    final beforeTid = _tenantId;
+
+    _tenantId ??= (args['tenantId'] ?? args['t'])?.toString();
+    _tenantName ??= (args['tenantName'] ?? args['store'] ?? args['s'])
+        ?.toString();
+    _employeeName ??= (args['employeeName'] ?? args['name'] ?? args['n'])
+        ?.toString();
+    _uid ??= (args['uid'] ?? args['u'] ?? args['user'])?.toString();
+
+    final a = (args['amount'] ?? args['a'])?.toString();
+    if (_amount == null && a != null) {
+      final v = int.tryParse(a);
+      if (v != null) _amount = v;
+    }
+
+    if (_tenantId != null && _tenantId != beforeTid) {
+      _reloadLinksGate();
+    }
+    setState(() {});
+  }
+
+  void _mergeFromUrlIfNeeded() {
+    final uri = Uri.base;
+
+    // 1) 通常の ?k=v
+    final qp = <String, String>{}..addAll(uri.queryParameters);
+
+    // 2) ハッシュルーター（/#/p?....）内のクエリも吸収
+    final frag = uri.fragment;
+    final qPos = frag.indexOf('?');
+    if (qPos >= 0 && qPos < frag.length - 1) {
+      try {
+        qp.addAll(Uri.splitQueryString(frag.substring(qPos + 1)));
+      } catch (_) {}
+    }
+
+    String? pick(List<String> keys) {
+      for (final k in keys) {
+        final v = qp[k];
+        if (v != null && v.isNotEmpty) return v;
+      }
+      return null;
+    }
+
+    final beforeTid = _tenantId;
+
+    _tenantId ??= pick(['t', 'tenantId']);
+    _tenantName ??= pick(['tenantName', 'store', 's']);
+    _employeeName ??= pick(['employeeName', 'name', 'n']);
+    _uid ??= pick(['u', 'uid', 'user']);
+
+    final a = pick(['amount', 'a']);
+    if (_amount == null && a != null) {
+      final v = int.tryParse(a);
+      if (v != null) _amount = v;
+    }
+
+    if (_tenantId != null && _tenantId != beforeTid) {
+      _reloadLinksGate();
+    }
+  }
+
+  void _reloadLinksGate() {
+    if (_tenantId == null || _tenantId!.isEmpty) return;
+    _linksGateFuture = _loadLinksGate(
+      tenantId: _tenantId!,
+      uid: _uid,
+      employeeName: _employeeName,
+    );
+    setState(() {});
+  }
+
+  // ----------------- Firestore 読み込み（あなたの既存ロジックを関数化） -----------------
+
+  Future<_LinksGateResult> _loadLinksGate({
+    required String tenantId,
+    String? uid,
+    String? employeeName,
+  }) async {
     final fs = FirebaseFirestore.instance;
 
-    // 1) 読みやすいヘルパー
     Future<Map<String, dynamic>?> _read(DocumentReference ref) async {
       try {
         final snap = await ref.get();
@@ -53,7 +169,6 @@ class _TipCompletePageState extends State<TipCompletePage> {
         final data = snap.data();
         return (data is Map<String, dynamic>) ? data : null;
       } on FirebaseException catch (_) {
-        // 読み取り権限がない/存在しないなどは黙って無視（公開ページ想定）
         return null;
       } catch (_) {
         return null;
@@ -81,13 +196,11 @@ class _TipCompletePageState extends State<TipCompletePage> {
     }
 
     String? _getThanksPhoto(Map<String, dynamic> m) {
-      // c_perks.thanksPhotoUrl or top-level thanksPhotoUrl
       final perks = m['c_perks'];
       final fromPerks = (perks is Map) ? perks['thanksPhotoUrl'] : null;
       return _pickStr([fromPerks, m['thanksPhotoUrl']]);
     }
 
-    // ★修正：あり得るキーを全部見る（downloadUrl/url/thanksVideoUrl/storagePath と c_perks.thanksVideoUrl）
     String? _getThanksVideo(Map<String, dynamic> m) {
       final candidates = <String?>[];
       if (m['c_perks'] is Map) {
@@ -112,53 +225,39 @@ class _TipCompletePageState extends State<TipCompletePage> {
       return (url is String && url.trim().isNotEmpty) ? url.trim() : null;
     }
 
-    // 2) 候補ドキュメントを全部読む（取れるものだけ）
     Map<String, dynamic> userTenant = const {};
     Map<String, dynamic> publicTenant = const {};
     Map<String, dynamic> publicThanks = const {};
     Map<String, dynamic> publicThanksStaff = const {};
 
     if (uid != null && uid.isNotEmpty) {
-      userTenant =
-          await _read(fs.collection(uid).doc(tid)) ?? const <String, dynamic>{};
+      userTenant = await _read(fs.collection(uid).doc(tenantId)) ?? const {};
     }
     publicTenant =
-        await _read(fs.collection('tenants').doc(tid)) ??
-        const <String, dynamic>{};
-
-    // アップローダが publicThanks にも保存しているのでここも見る
+        await _read(fs.collection('tenants').doc(tenantId)) ?? const {};
     publicThanks =
-        await _read(fs.collection('publicThanks').doc(tid)) ??
-        const <String, dynamic>{};
+        await _read(fs.collection('publicThanks').doc(tenantId)) ?? const {};
 
-    // ★修正：Query の結果から “最初の1件の data” を Map として取り出す
-    if (widget.employeeName != null && widget.employeeName!.isNotEmpty) {
+    if (employeeName != null && employeeName.isNotEmpty) {
       try {
         final qs = await fs
             .collection('publicThanks')
-            .doc(tid)
+            .doc(tenantId)
             .collection('staff')
-            .doc(widget.employeeName)
+            .doc(employeeName)
             .collection('videos')
             .limit(1)
             .get();
-
         if (qs.docs.isNotEmpty) {
           publicThanksStaff = Map<String, dynamic>.from(
             qs.docs.first.data() as Map,
           );
         }
-      } catch (_) {
-        // 取れなければ空Mapのまま
-      }
+      } catch (_) {}
     }
 
-    // 3) マージ方針
-    // - プランや extras は「userTenant → publicTenant」の優先で採用
-    // - 写真/動画は「userTenant → publicThanks → publicTenant → publicThanksStaff」の優先で採用
     final planRaw = _readPlan(userTenant) ?? _readPlan(publicTenant) ?? '';
-    final plan = planRaw.toUpperCase().trim();
-    final isSubC = plan == 'C';
+    final isSubC = planRaw.toUpperCase().trim() == 'C';
 
     final googleReviewUrl = _pickStr([
       _getGoogleReview(userTenant),
@@ -168,18 +267,16 @@ class _TipCompletePageState extends State<TipCompletePage> {
       _getLineOfficial(userTenant),
       _getLineOfficial(publicTenant),
     ]);
-
     final thanksPhotoUrl = _pickStr([
       _getThanksPhoto(userTenant),
       _getThanksPhoto(publicThanks),
       _getThanksPhoto(publicTenant),
     ]);
-
     final thanksVideoUrl = _pickStr([
       _getThanksVideo(userTenant),
       _getThanksVideo(publicThanks),
       _getThanksVideo(publicTenant),
-      _getThanksVideo(publicThanksStaff), // ← staff/videos の1件
+      _getThanksVideo(publicThanksStaff),
     ]);
 
     return _LinksGateResult(
@@ -191,6 +288,8 @@ class _TipCompletePageState extends State<TipCompletePage> {
     );
   }
 
+  // ----------------- 画面内遷移／外部リンク -----------------
+
   void _navigatePublicStorePage() {
     Navigator.push(
       context,
@@ -198,9 +297,9 @@ class _TipCompletePageState extends State<TipCompletePage> {
         builder: (_) => const PublicStorePage(),
         settings: RouteSettings(
           arguments: {
-            'tenantId': widget.tenantId,
-            'tenantName': widget.tenantName,
-            "uid": widget.uid,
+            'tenantId': _tenantId,
+            'tenantName': _tenantName,
+            'uid': _uid,
           },
         ),
       ),
@@ -217,8 +316,8 @@ class _TipCompletePageState extends State<TipCompletePage> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) => _StoreTipBottomSheet(
-        tenantId: widget.tenantId,
-        tenantName: widget.tenantName,
+        tenantId: _tenantId ?? '',
+        tenantName: _tenantName,
       ),
     );
   }
@@ -237,9 +336,20 @@ class _TipCompletePageState extends State<TipCompletePage> {
     );
   }
 
+  // ----------------- UI -----------------
+
   @override
   Widget build(BuildContext context) {
-    final storeLabel = widget.tenantName ?? tr('success_page.store');
+    // tenantId 必須
+    if ((_tenantId ?? '').isEmpty) {
+      return const Scaffold(
+        body: SafeArea(
+          child: Center(child: Text('店舗情報が取得できませんでした（t/tenantId が必要）')),
+        ),
+      );
+    }
+
+    final storeLabel = _tenantName ?? tr('success_page.store');
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -263,29 +373,24 @@ class _TipCompletePageState extends State<TipCompletePage> {
                           height: 80,
                         ),
                         const SizedBox(height: 12),
-
                         Text(
                           tr("success_page.success"),
                           style: AppTypography.label(),
                         ),
-
-                        if (widget.employeeName != null ||
-                            widget.amount != null) ...[
+                        if (_employeeName != null || _amount != null) ...[
                           const SizedBox(height: 8),
                           Text(
                             [
-                              if (widget.employeeName != null)
+                              if (_employeeName != null)
                                 tr(
                                   'success_page.for',
-                                  namedArgs: {
-                                    "Name": widget.employeeName ?? '',
-                                  },
+                                  namedArgs: {"Name": _employeeName ?? ''},
                                 ),
-                              if (widget.amount != null)
+                              if (_amount != null)
                                 tr(
-                                  "success_page.amount",
+                                  'success_page.amount',
                                   namedArgs: {
-                                    "Amount": widget.amount?.toString() ?? '',
+                                    "Amount": _amount?.toString() ?? '',
                                   },
                                 ),
                             ].join(' / '),
@@ -298,108 +403,110 @@ class _TipCompletePageState extends State<TipCompletePage> {
 
                   const SizedBox(height: 20),
 
-                  // ▼ 動画サムネ（play.png 黒枠）＋ タップで動画再生
-                  FutureBuilder<_LinksGateResult>(
-                    future: _linksGateFuture,
-                    builder: (context, snap) {
-                      if (snap.connectionState == ConnectionState.waiting) {
-                        return const SizedBox(
-                          height: 24,
-                          width: 24,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        );
-                      }
-                      if (!snap.hasData) return const SizedBox.shrink();
-
-                      final r = snap.data!;
-                      final videoUrl = (r.thanksVideoUrl ?? '').trim();
-                      final hasVideo = videoUrl.isNotEmpty;
-
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(
-                            tr('success_page.thanks_from_store'),
-                            style: AppTypography.body(),
-                            textAlign: TextAlign.left,
-                          ),
-                          const SizedBox(height: 8),
-
-                          // 置き換え：GestureDetector(...) 全体
-                          Material(
-                            color: Colors.transparent,
-                            child: InkWell(
-                              borderRadius: BorderRadius.circular(12),
-                              onTap: () {
-                                if (hasVideo) {
-                                  _openThanksVideo(videoUrl); // ← ここで再生ダイアログを開く
-                                } else {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('動画がまだ用意されていません'),
-                                    ),
-                                  );
-                                }
-                              },
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: AppPalette.black,
-                                    width: AppDims.border,
-                                  ),
+                  isC
+                      ? FutureBuilder<_LinksGateResult>(
+                          future: _linksGateFuture,
+                          builder: (context, snap) {
+                            if (snap.connectionState ==
+                                ConnectionState.waiting) {
+                              return const SizedBox(
+                                height: 24,
+                                width: 24,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
                                 ),
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(12),
-                                  child: AspectRatio(
-                                    aspectRatio: 16 / 9,
-                                    child: Stack(
-                                      fit: StackFit.expand,
-                                      alignment: Alignment.center,
-                                      children: [
-                                        // 再生サムネイル（アセット）
-                                        Image.asset(
-                                          'assets/posters/play.jpg', // ← 実ファイル名に合わせて
-                                          width:
-                                              MediaQuery.of(
-                                                context,
-                                              ).size.width /
-                                              4,
+                              );
+                            }
+                            if (!snap.hasData) return const SizedBox.shrink();
+
+                            final r = snap.data!;
+                            final videoUrl = (r.thanksVideoUrl ?? '').trim();
+                            final hasVideo = videoUrl.isNotEmpty;
+
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Text(
+                                  tr('success_page.thanks_from_store'),
+                                  style: AppTypography.body(),
+                                ),
+                                const SizedBox(height: 8),
+
+                                Material(
+                                  color: Colors.transparent,
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(12),
+                                    onTap: () {
+                                      if (hasVideo) {
+                                        _openThanksVideo(videoUrl);
+                                      } else {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          const SnackBar(
+                                            content: Text('動画がまだ用意されていません'),
+                                          ),
+                                        );
+                                      }
+                                    },
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: AppPalette.black,
+                                          width: AppDims.border,
                                         ),
-                                      ],
+                                      ),
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(12),
+                                        child: AspectRatio(
+                                          aspectRatio: 16 / 9,
+                                          child: Stack(
+                                            fit: StackFit.expand,
+                                            children: [
+                                              Image.asset(
+                                                'assets/posters/play.jpg',
+                                                fit: BoxFit.cover,
+                                              ),
+                                              const Center(
+                                                child: Icon(
+                                                  Icons.play_circle_fill,
+                                                  size: 56,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
                                     ),
                                   ),
                                 ),
-                              ),
-                            ),
-                          ),
-
-                          const SizedBox(height: 12),
-                          const Divider(),
-                        ],
-                      );
-                    },
-                  ),
-
+                                const SizedBox(height: 12),
+                                const Divider(),
+                              ],
+                            );
+                          },
+                        )
+                      : const SizedBox(height: 1),
                   const SizedBox(height: 12),
-
-                  // ① お店にチップを送る（ボトムシート）
+                  // ① お店にチップを送る
                   _YellowActionButton(
-                    label: "店舗にもチップを贈る",
+                    label: "stripe.tip_for_store",
                     onPressed: _openStoreTipBottomSheet,
                   ),
                   const SizedBox(height: 8),
 
-                  // ② 他のスタッフにチップを送る（店舗ページへ）
+                  // ② 他のスタッフへ
                   _YellowActionButton(
-                    label: tr('他スタッフへチップを贈る'),
+                    label: tr('success_page.initiate1'),
                     onPressed: _navigatePublicStorePage,
                   ),
 
                   const SizedBox(height: 24),
                   const Divider(),
 
-                  // ▼ サブスクC限定：Googleレビュー / 公式LINE
+                  // ▼ Cプラン限定リンク（Googleレビュー/LINE）
                   FutureBuilder<_LinksGateResult>(
                     future: _linksGateFuture,
                     builder: (context, snap) {
@@ -413,19 +520,14 @@ class _TipCompletePageState extends State<TipCompletePage> {
                           ),
                         );
                       }
-                      if (snap.hasError || !snap.hasData) {
+                      if (snap.hasError || !snap.hasData)
                         return const SizedBox.shrink();
-                      }
 
                       final r = snap.data!;
                       if (!r.isSubC) return const SizedBox.shrink();
 
-                      final hasReview =
-                          (r.googleReviewUrl != null &&
-                          r.googleReviewUrl!.isNotEmpty);
-                      final hasLine =
-                          (r.lineOfficialUrl != null &&
-                          r.lineOfficialUrl!.isNotEmpty);
+                      final hasReview = (r.googleReviewUrl ?? '').isNotEmpty;
+                      final hasLine = (r.lineOfficialUrl ?? '').isNotEmpty;
                       if (!hasReview && !hasLine)
                         return const SizedBox.shrink();
 
@@ -436,7 +538,6 @@ class _TipCompletePageState extends State<TipCompletePage> {
                           Text(
                             tr("レビューと公式ラインはこちらから"),
                             style: Theme.of(context).textTheme.titleMedium,
-                            textAlign: TextAlign.left,
                           ),
                           const SizedBox(height: 8),
 
@@ -475,13 +576,16 @@ class _TipCompletePageState extends State<TipCompletePage> {
   }
 }
 
-/// ここで “Cプラン判定 + 特典リンク + 感謝の写真/動画” をまとめて返す
+// =================== サポートクラス/ウィジェット ===================
+
+/// “Cプラン判定 + 特典リンク + 感謝の写真/動画” をまとめて返す
 class _LinksGateResult {
   final bool isSubC;
   final String? googleReviewUrl;
   final String? lineOfficialUrl;
   final String? thanksPhotoUrl;
   final String? thanksVideoUrl;
+
   _LinksGateResult({
     required this.isSubC,
     this.googleReviewUrl,
@@ -502,29 +606,22 @@ class _StoreTipBottomSheet extends StatefulWidget {
 }
 
 class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
-  int _amount = 500; // デフォルト金額
+  int _amount = 500;
   bool _loading = false;
 
-  static const int _maxStoreTip = 1000000; // 最大金額（100万円）
+  static const int _maxStoreTip = 1000000;
   final _presets = const [1000, 3000, 5000, 10000];
 
-  void _setAmount(int value) {
-    setState(() => _amount = value.clamp(0, _maxStoreTip));
-  }
-
-  void _appendDigit(int digit) {
-    setState(() => _amount = (_amount * 10 + digit).clamp(0, _maxStoreTip));
-  }
-
+  void _setAmount(int value) =>
+      setState(() => _amount = value.clamp(0, _maxStoreTip));
+  void _appendDigit(int d) =>
+      setState(() => _amount = (_amount * 10 + d).clamp(0, _maxStoreTip));
   void _appendDoubleZero() {
-    if (_amount > 0) {
+    if (_amount > 0)
       setState(() => _amount = (_amount * 100).clamp(0, _maxStoreTip));
-    }
   }
 
-  void _backspace() {
-    setState(() => _amount = _amount ~/ 10);
-  }
+  void _backspace() => setState(() => _amount = _amount ~/ 10);
 
   Future<void> _goStripe() async {
     if (_amount <= 0 || _amount > _maxStoreTip) {
@@ -533,21 +630,20 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
       ).showSnackBar(SnackBar(content: Text(tr('stripe.attention'))));
       return;
     }
-
     setState(() => _loading = true);
     try {
       final callable = FirebaseFunctions.instance.httpsCallable(
         'createStoreTipSessionPublic',
       );
-      final response = await callable.call({
+      final res = await callable.call({
         'tenantId': widget.tenantId,
         'amount': _amount,
         'memo': 'Tip to store ${widget.tenantName ?? ''}',
       });
-      final data = Map<String, dynamic>.from(response.data as Map);
+      final data = Map<String, dynamic>.from(res.data as Map);
       final checkoutUrl = data['checkoutUrl'] as String?;
       if (checkoutUrl != null && checkoutUrl.isNotEmpty) {
-        Navigator.of(context).pop(); // ボトムシートを閉じる
+        if (mounted) Navigator.of(context).pop();
         await launchUrlString(
           checkoutUrl,
           mode: LaunchMode.externalApplication,
@@ -562,7 +658,7 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
         SnackBar(content: Text(tr("stripe.error", args: [e.toString()]))),
       );
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -584,7 +680,7 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
                       ? tr("stripe.tip_for_store")
                       : tr(
                           "stripe.tip_for_store1",
-                          namedArgs: {"tenantName": ?widget.tenantName},
+                          namedArgs: {"tenantName": widget.tenantName!},
                         ),
                   style: const TextStyle(
                     fontSize: 18,
@@ -600,6 +696,7 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
             ],
           ),
           const SizedBox(height: 12),
+
           // 金額表示
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
@@ -638,6 +735,7 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
             ),
           ),
           const SizedBox(height: 12),
+
           // プリセット
           Wrap(
             spacing: 8,
@@ -662,14 +760,18 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
               );
             }).toList(),
           ),
+
           const SizedBox(height: 12),
+
           // キーパッド
           _Keypad(
             onTapDigit: _appendDigit,
             onTapDoubleZero: _appendDoubleZero,
             onBackspace: _backspace,
           ),
+
           const SizedBox(height: 12),
+
           // フッター
           Row(
             children: [
@@ -698,11 +800,11 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
   }
 }
 
-/// テンキー
 class _Keypad extends StatelessWidget {
   final void Function(int d) onTapDigit;
   final VoidCallback onTapDoubleZero;
   final VoidCallback onBackspace;
+
   const _Keypad({
     required this.onTapDigit,
     required this.onTapDoubleZero,
@@ -792,14 +894,11 @@ class _Keypad extends StatelessWidget {
   }
 }
 
-/// 黄色×黒の大ボタン（色は任意で上書き可）
-/// テキストがオーバーフローしそうな場合は自動で縮小して収めます。
+/// 黄色×黒の大ボタン（テキストは長ければ自動縮小）
 class _YellowActionButton extends StatelessWidget {
   final String label;
   final IconData? icon;
   final VoidCallback? onPressed;
-
-  /// 背景色。未指定(null)なら AppPalette.yellow を使用
   final Color? color;
 
   const _YellowActionButton({
@@ -812,11 +911,10 @@ class _YellowActionButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bg = color ?? AppPalette.yellow;
-
     return Material(
       color: bg,
       borderRadius: BorderRadius.circular(AppDims.radius),
-      clipBehavior: Clip.antiAlias, // 角丸内にリップルをクリップ
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onPressed,
         borderRadius: BorderRadius.circular(AppDims.radius),
@@ -834,15 +932,13 @@ class _YellowActionButton extends StatelessWidget {
                 Icon(icon, color: AppPalette.black),
                 const SizedBox(width: 8),
               ],
-              // ★ ここがポイント：Flexible + FittedBox(scaleDown)
               Flexible(
                 child: FittedBox(
-                  fit: BoxFit.scaleDown, // 収まらない時だけ縮小
+                  fit: BoxFit.scaleDown,
                   alignment: Alignment.center,
                   child: Text(
                     label,
                     maxLines: 1,
-                    // overflow は不要（縮小で収めるため）。保険で付けたいなら TextOverflow.ellipsis を。
                     style: AppTypography.label(color: AppPalette.black),
                   ),
                 ),
@@ -855,14 +951,10 @@ class _YellowActionButton extends StatelessWidget {
   }
 }
 
-/// 黄色×黒の大ボタン（色は任意で上書き可）
-/// テキストがオーバーフローしそうな場合は自動で縮小して収めます。
 class _YellowActionButton2 extends StatelessWidget {
   final String label;
   final IconData? icon;
   final VoidCallback? onPressed;
-
-  /// 背景色。未指定(null)なら AppPalette.yellow を使用
   final Color? color;
 
   const _YellowActionButton2({
@@ -875,11 +967,10 @@ class _YellowActionButton2 extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bg = color ?? AppPalette.yellow;
-
     return Material(
       color: bg,
       borderRadius: BorderRadius.circular(AppDims.radius),
-      clipBehavior: Clip.antiAlias, // 角丸内にリップルをクリップ
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onPressed,
         borderRadius: BorderRadius.circular(AppDims.radius),
@@ -897,15 +988,13 @@ class _YellowActionButton2 extends StatelessWidget {
                 Icon(icon, color: AppPalette.black),
                 const SizedBox(width: 8),
               ],
-              // ★ ここがポイント：Flexible + FittedBox(scaleDown)
               Flexible(
                 child: FittedBox(
-                  fit: BoxFit.scaleDown, // 収まらない時だけ縮小
+                  fit: BoxFit.scaleDown,
                   alignment: Alignment.center,
                   child: Text(
                     label,
                     maxLines: 1,
-                    // overflow は不要（縮小で収めるため）。保険で付けたいなら TextOverflow.ellipsis を。
                     style: AppTypography.label2(color: AppPalette.black),
                   ),
                 ),
@@ -918,6 +1007,7 @@ class _YellowActionButton2 extends StatelessWidget {
   }
 }
 
+/// 動画再生ダイアログ（URL再生）
 class _VideoPlayerDialog extends StatefulWidget {
   const _VideoPlayerDialog({required this.url});
   final String url;
@@ -941,7 +1031,7 @@ class _VideoPlayerDialogState extends State<_VideoPlayerDialog> {
   Future<void> _init() async {
     try {
       _videoCtrl = VideoPlayerController.networkUrl(Uri.parse(widget.url));
-      await _videoCtrl.initialize(); // ← 初期化を待つ
+      await _videoCtrl.initialize();
       _chewieCtrl = ChewieController(
         videoPlayerController: _videoCtrl,
         autoPlay: true,
@@ -965,22 +1055,18 @@ class _VideoPlayerDialogState extends State<_VideoPlayerDialog> {
 
   @override
   Widget build(BuildContext context) {
-    // 画面内に収まるよう最大サイズを決定
     final screen = MediaQuery.of(context).size;
     final maxW = screen.width * 0.95;
     final maxH = screen.height * 0.90;
 
-    // 初期値（読み込み中は16:9で仮表示）
     double aspect = 16 / 9;
     if (_ready && _videoCtrl.value.isInitialized) {
-      aspect = _videoCtrl.value.aspectRatio; // = width / height
+      aspect = _videoCtrl.value.aspectRatio;
     }
 
-    // 縦長: aspect < 1、横長: aspect >= 1
     double w, h;
     if (_ready) {
       if (aspect >= 1) {
-        // 横長 → まず最大幅に合わせる
         w = maxW;
         h = w / aspect;
         if (h > maxH) {
@@ -988,7 +1074,6 @@ class _VideoPlayerDialogState extends State<_VideoPlayerDialog> {
           w = h * aspect;
         }
       } else {
-        // 縦長 → まず最大高さに合わせる
         h = maxH;
         w = h * aspect;
         if (w > maxW) {
@@ -997,7 +1082,6 @@ class _VideoPlayerDialogState extends State<_VideoPlayerDialog> {
         }
       }
     } else {
-      // ローディング中は控えめサイズ
       w = (maxW * 0.8).clamp(280.0, maxW);
       h = w / aspect;
       if (h > maxH) {

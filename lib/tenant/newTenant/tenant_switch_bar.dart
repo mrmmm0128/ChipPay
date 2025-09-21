@@ -392,12 +392,18 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
     final newRef = tenantsCol.doc(); // 自動ID
     final tenantId = newRef.id;
 
+    final tenantIdDoc = FirebaseFirestore.instance
+        .collection("tenantIndex")
+        .doc(tenantId);
+
+    await tenantIdDoc.set({"uid": uid});
+
     await newRef.set({
       'name': name,
       'status': 'draft', // 下書き保存
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
-      // 代理店情報（コードだけは必ず保持、リンクは後で試行）
+
       'agency': {'code': agentCode, 'linked': false},
     }, SetOptions(merge: true));
 
@@ -782,7 +788,7 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                     },
                     icon: const Icon(Icons.play_arrow, size: 18),
                     label: const Text(
-                      '続きから',
+                      '再開',
                       style: TextStyle(fontFamily: 'LINEseed'),
                     ),
                     style: _outlineSmall,
@@ -805,7 +811,7 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                   onPressed: createTenantDialog,
                   icon: const Icon(Icons.add, size: 18),
                   label: const Text(
-                    '新規作成',
+                    '新規',
                     style: TextStyle(fontFamily: 'LINEseed'),
                   ),
                   style: _outlineSmall,

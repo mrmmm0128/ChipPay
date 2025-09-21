@@ -56,13 +56,16 @@ class ContractsListForAgent extends StatelessWidget {
 
             return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance
-                  .collection('tenantIndex')
+                  .collection(ownerUidFromContract)
                   .doc(tenantId)
                   .snapshots(),
               builder: (context, st) {
                 final tm = st.data?.data() ?? {};
-                final init = (tm['billing']?['initialFee']?['status'] ?? 'none')
-                    .toString();
+                final init =
+                    (tm['initialFee']?['status'] ??
+                            tm['billing']?['initialFee']?['status'] ??
+                            'none')
+                        .toString();
                 final subSt = (tm['subscription']?['status'] ?? '').toString();
                 final subPl = (tm['subscription']?['plan'] ?? '選択なし')
                     .toString();

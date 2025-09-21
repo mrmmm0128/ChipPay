@@ -2,10 +2,11 @@
     "app_title": "チップアプリ",
     "store0": "店舗", 
     "staff" : {
-        "number" : "第{rank}位"
+        "number" : "第{rank}位",
+        "ranking" : "累計チップ受取額ランキング"
     },
     "section": {
-        "members": "スタッフにチップを贈ろう",
+        "members": "スタッフ",
         "store": "お店にチップを贈ろう",
         "initiate1" : "ご協力お願いします",
         "initiate2" : "チップリを導入しよう"

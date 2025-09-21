@@ -127,10 +127,16 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
 
     String name = qp['name'] ?? '';
     final tid = qp['tenant'];
+    final ownerIdDoc = await FirebaseFirestore.instance
+        .collection("tenantIndex")
+        .doc(tid)
+        .get();
+    final ownerId = ownerIdDoc["uid"];
+    print(ownerId);
     if (name.isEmpty && tid != null && tid.isNotEmpty) {
       try {
         final doc = await FirebaseFirestore.instance
-            .collection(widget.ownerId!)
+            .collection(ownerId!)
             .doc(tid)
             .get();
         name = (doc.data()?['name'] as String?) ?? '';

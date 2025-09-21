@@ -6,14 +6,16 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:yourpay/appadmin/admin_dashboard_screen.dart';
+import 'package:yourpay/appadmin/agent/agent_login.dart';
 import 'package:yourpay/tenant/bootGate.dart';
 import 'package:yourpay/endUser/tip_complete_page.dart';
-import 'package:yourpay/tenant/widget/store_setting/account_detail_screen.dart';
 import 'package:yourpay/endUser/public_store_page.dart';
 import 'package:yourpay/endUser/staff_detail_page.dart';
 import 'package:yourpay/tenant/staff_qr/public_staff_qr_list_page.dart';
 import 'package:yourpay/tenant/staff_qr/qr_poster_build_page.dart';
 import 'package:yourpay/tenant/store_admin_add/accept_invite_screen.dart';
+import 'package:yourpay/tenant/widget/store_setting/account_detail_page.dart';
+import 'package:yourpay/tenant/widget/store_setting/tenant_detail_screen.dart';
 import 'tenant/login_screens.dart';
 import 'tenant/store_detail/store_detail_screen.dart';
 import 'endUser/payer_landing_screen.dart';
@@ -132,13 +134,15 @@ class MyApp extends StatelessWidget {
       '/login': (_) => const BootGate(),
       '/store': (_) => const StoreDetailScreen(),
       '/staff': (_) => const StaffDetailPage(),
-      '/account': (_) => const AccountDetailScreen(),
       '/admin': (_) => const AdminDashboardHome(),
+      '/tenant': (_) => const tenantDetailScreen(),
+      '/account': (_) => const AccountDetailScreen(),
       '/admin-invite': (_) => const AcceptInviteScreen(),
       '/qr-all': (_) => const PublicStaffQrListPage(),
       '/qr-all/qr-builder': (_) => const QrPosterBuilderPage(),
       '/chechout-end': (_) => const LoginScreen(),
       '/p': (_) => const PublicStorePage(),
+      '/agent-login': (_) => const AgentLoginPage(),
     };
 
     final builder = staticRoutes[uri.path];
@@ -198,14 +202,14 @@ class Root extends StatelessWidget {
         }
 
         final path = currentPath();
-        const publicPaths = {'/qr-all', '/qr-builder', '/staff', '/p'};
+        const publicPaths = {'/qr-all', '/qr-all/qr-builder', '/staff', '/p'};
 
         // ❶ パブリックパスはログインに関係なくパブリック画面をそのまま表示
         if (publicPaths.contains(path)) {
           switch (path) {
             case '/qr-all':
               return const PublicStaffQrListPage();
-            case '/qr-builder':
+            case '/qr-all/qr-builder':
               return const QrPosterBuilderPage();
             case '/staff':
               return const StaffDetailPage();
