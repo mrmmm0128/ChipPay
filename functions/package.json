@@ -1,21 +1,26 @@
 {
-  "engines": {
-    "node": "20"
-  },
+  "name": "functions",
+  "private": true,
   "main": "lib/index.js",
+  "engines": { "node": "20" },
   "scripts": {
     "build": "tsc",
+    "clean": "rimraf lib",
+    "emulate": "npm run build && firebase emulators:start --only functions",
     "deploy": "npm run build && firebase deploy --only functions"
   },
   "dependencies": {
-    "@sendgrid/mail": "^8.1.5",
-    "dotenv": "^16",
     "firebase-admin": "^12",
     "firebase-functions": "^5",
     "stripe": "^14",
-    "resend": "^6.0.1"
+    "resend": "^6.0.1",
+    "bcryptjs": "^2.4.3",
+    "pdf-lib": "^1.17.1"
   },
   "devDependencies": {
-    "typescript": "^5.4"
+    "typescript": "^5.4",
+    "@types/bcryptjs": "^2.4.6",
+    "rimraf": "^5.0.5",
+    "dotenv": "^16"
   }
 }
