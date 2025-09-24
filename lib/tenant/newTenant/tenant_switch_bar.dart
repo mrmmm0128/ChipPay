@@ -323,7 +323,7 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                   style: const TextStyle(color: Colors.black87),
                   decoration: const InputDecoration(
                     labelText: '代理店コード（任意）',
-                    hintText: '例）AGT-XXXXX',
+                    hintText: '代理店の方からお聞きください',
                     labelStyle: TextStyle(color: Colors.black87),
                     hintStyle: TextStyle(color: Colors.black54),
                     filled: true,
@@ -809,7 +809,7 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
 
                 OutlinedButton.icon(
                   onPressed: createTenantDialog,
-                  icon: const Icon(Icons.add, size: 18),
+
                   label: const Text(
                     '新規',
                     style: TextStyle(fontFamily: 'LINEseed'),

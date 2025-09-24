@@ -541,7 +541,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
         await launchUrlString(
           open,
           mode: LaunchMode.platformDefault,
-          webOnlyWindowName: '_blank',
+          webOnlyWindowName: '_self',
         );
       } else {
         if (mounted) {
@@ -576,10 +576,10 @@ class OnboardingSheetState extends State<OnboardingSheet> {
           'tosAccepted': true,
         },
         "payoutSchedule": {
-          "monthly": 'weekly', // 'manual' | 'daily' | 'weekly' | 'monthly'
-          //weeklyAnchor: 'friday',    // weekly のとき
-          "monthlyAnchor": 1, // monthly のとき
-          "delayDays": 'minimum', // or number（国により制限あり）
+          "monthly": 'weekly',
+
+          "monthlyAnchor": 1,
+          "delayDays": 'minimum',
         },
       };
       final res = await caller.call(payload);
@@ -589,7 +589,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
         await launchUrlString(
           onboardingUrl,
           mode: LaunchMode.platformDefault,
-          webOnlyWindowName: '_blank',
+          webOnlyWindowName: '_self',
         );
       } else {
         if (mounted) {
@@ -1055,10 +1055,18 @@ class OnboardingSheetState extends State<OnboardingSheet> {
 
         // 画面に出す不足キー（提出必要＆期限切れ）
         final pendingKeys = <String>[...currentlyDue, ...pastDue];
+        final bool disabled = _creatingConnect || !_registered;
 
         // 表示上の完了判定（Firestore or ローカルイベント or 下書き反映）
         final initialFeePaid = initialFeeFromFs || _initialFeePaidLocal;
         final subscribed = subscribedFromFs || _subscribedLocal;
+        final trial = (sub["trial"] as Map?) ?? {};
+        final trialStatus;
+        if (trial.isNotEmpty) {
+          trialStatus = trial["status"] as String ?? "";
+        } else {
+          trialStatus = "";
+        }
 
         // ステップ誘導
         int desiredStep = step;
@@ -1089,7 +1097,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                 ),
                 const SizedBox(height: 12),
                 const Text(
-                  '新規店舗作成',
+                  '新規店舗作成\nサポート費用、サブスクリプションの登録、コネクトアカウントの登録を完了し、チップを受け取る準備を完了しましょう。',
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
@@ -1102,8 +1110,8 @@ class OnboardingSheetState extends State<OnboardingSheet> {
 
                 // ==== 3ボタンを同一モーダルで並べる ====
                 _actionCard(
-                  title: '初期費用',
-                  description: '初期費用のお支払いをお願いします',
+                  title: 'サポート料金(初回のみ)',
+                  description: 'ポスターの手配等、1か月間のサポートを行います。',
                   trailing: _statusPill(initialFeePaid),
                   child: FilledButton.icon(
                     onPressed: (initialFeePaid || _creatingInitial)
@@ -1117,21 +1125,41 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                           )
                         : const Icon(Icons.open_in_new),
                     label: Text(
-                      initialFeePaid ? '支払い済み' : '初期費用を支払う',
+                      initialFeePaid ? '支払い済み' : 'サポート料金を支払う',
                       style: TextStyle(fontFamily: 'LINEseed'),
                     ),
                   ),
                 ),
 
                 const SizedBox(height: 10),
+
                 _actionCard(
-                  title: 'サブスク登録',
+                  title: 'サブスクリプション登録',
                   description: 'プランを選択し、登録へ進んでください',
                   trailing: _statusPill(subscribed),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _planChips(),
+                      trialStatus == "none"
+                          ? Text("")
+                          : Text.rich(
+                              TextSpan(
+                                style: const TextStyle(fontFamily: 'LINEseed'),
+                                children: const [
+                                  TextSpan(text: '始めの3ヶ月はトライアル期間により、'),
+                                  TextSpan(
+                                    text: '無料',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.red,
+                                    ),
+                                  ),
+                                  TextSpan(text: 'で使用することができます。'),
+                                ],
+                              ),
+                            ),
+
+                      _planChips(trialStatus),
                       const SizedBox(height: 8),
                       FilledButton.icon(
                         onPressed: (subscribed || _creatingSub)
@@ -1150,6 +1178,16 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                           subscribed ? '登録済み' : 'サブスク登録へ進む',
                           style: TextStyle(fontFamily: 'LINEseed'),
                         ),
+                      ),
+                      const SizedBox(height: 5),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          Text(
+                            "※stripeの振込手数料＋決済手数料（元金の3.6%）が差し引かれます。",
+                            style: TextStyle(fontSize: 10),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -1181,9 +1219,40 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                                         ),
                                       )
                                     : FilledButton.icon(
-                                        onPressed: _openConnectOnboarding,
-                                        icon: const Icon(Icons.login),
-                                        label: const Text('Stripe接続に進む'),
+                                        onPressed: disabled
+                                            ? null
+                                            : _openConnectOnboarding,
+                                        icon: _creatingConnect
+                                            ? const SizedBox(
+                                                width: 18,
+                                                height: 18,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                      strokeWidth: 2,
+                                                    ),
+                                              )
+                                            : const Icon(Icons.login),
+                                        label: Text(
+                                          _creatingConnect
+                                              ? '処理中…'
+                                              : 'Stripe接続に進む',
+                                        ),
+                                        style: FilledButton.styleFrom(
+                                          // 無効時の見た目（必要に応じて調整）
+                                          disabledBackgroundColor:
+                                              Colors.black12,
+                                          disabledForegroundColor:
+                                              Colors.black45,
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 12,
+                                            vertical: 12,
+                                          ),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                          ),
+                                        ),
                                       );
                               }
 
@@ -1224,9 +1293,25 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                                 errorsRaw: errorsRaw,
                                 isPendingVerification: isPendingVerification,
                               ),
-                              child: const Text('不足項目を確認'),
+                              child: const Text('不足項目を再提出'),
                             ),
                         ],
+                      ),
+                      Text.rich(
+                        TextSpan(
+                          style: const TextStyle(fontFamily: 'LINEseed'),
+                          children: const [
+                            TextSpan(text: 'こちらに登録いただいた口座へ'),
+                            TextSpan(
+                              text: '毎月1日',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.red,
+                              ),
+                            ),
+                            TextSpan(text: 'にチップが振り込まれます。'),
+                          ],
+                        ),
                       ),
 
                       // 申請前は説明だけ、申請後は軽いヒントだけ（詳細はダイアログへ）
@@ -1405,28 +1490,34 @@ class OnboardingSheetState extends State<OnboardingSheet> {
     );
   }
 
-  Widget _planChips() {
+  Widget _planChips(String trialStatus) {
     const plans = <_Plan>[
       _Plan(
         code: 'A',
         title: 'Aプラン',
-        monthly: 0,
-        feePct: 20,
-        features: ['月額無料で今すぐ開始', '決済手数料は20%', 'まずはお試しに最適'],
+        monthly: 1980,
+        feePct: 35,
+        features: ['月額1980円で今すぐ開始', '決済手数料は35%'],
       ),
       _Plan(
         code: 'B',
         title: 'Bプラン',
-        monthly: 1980,
-        feePct: 15,
-        features: ['月額1,980円で手数料15%', 'コストと手数料のバランス◎', '小規模〜標準的な店舗向け'],
+        monthly: 7960,
+        feePct: 25,
+        features: ["Aの内容", '月額7960円で手数料25%', '公式ライン案内', "チップとともにコメントの送信"],
       ),
       _Plan(
         code: 'C',
         title: 'Cプラン',
-        monthly: 9800,
-        feePct: 10,
-        features: ['月額9,800円で手数料10%', 'Googleレビュー導線の設置', '公式LINEの友だち追加導線'],
+        monthly: 19600,
+        feePct: 15,
+        features: [
+          '月額19600円で手数料15%',
+          "ABの内容",
+          'Googleレビュー導線の設置',
+          "オリジナルポスター作成",
+          "お客様への感謝動画",
+        ],
       ),
     ];
 
@@ -1486,19 +1577,61 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      Text(
-                        p.monthly == 0 ? '無料' : '¥${p.monthly}/月',
-                        style: TextStyle(
-                          color: fg,
-                          fontWeight: FontWeight.w700,
-                          fontFamily: 'LINEseed',
-                        ),
-                      ),
+                      // B/C は「定価に取り消し線 + 無料」、それ以外（A）は従来どおり
+                      ((p.code == "A" || p.code == 'B' || p.code == 'C') &&
+                              trialStatus != "none")
+                          ? Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                // 定価（取り消し線）
+                                Text(
+                                  '¥${p.monthly}/月',
+                                  style: TextStyle(
+                                    color: fg.withOpacity(.9),
+                                    fontWeight: FontWeight.w700,
+                                    fontFamily: 'LINEseed',
+                                    decoration: TextDecoration.lineThrough,
+                                    decorationThickness: 2,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                // 「無料」バッジ風
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: sel ? Colors.black : Colors.white,
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(color: fg, width: 1),
+                                  ),
+                                  child: Text(
+                                    '無料',
+                                    style: TextStyle(
+                                      color: sel
+                                          ? Colors.white
+                                          : Colors.black87,
+                                      fontWeight: FontWeight.w800,
+                                      fontFamily: 'LINEseed',
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            )
+                          : Text(
+                              p.monthly == 0 ? '無料' : '¥${p.monthly}/月',
+                              style: TextStyle(
+                                color: fg,
+                                fontWeight: FontWeight.w700,
+                                fontFamily: 'LINEseed',
+                              ),
+                            ),
                     ],
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    '手数料 ${p.feePct}%',
+                    'チップ手数料 ${p.feePct}%',
                     style: TextStyle(
                       color: fg.withOpacity(.8),
                       fontFamily: 'LINEseed',

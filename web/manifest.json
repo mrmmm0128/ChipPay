@@ -1,32 +1,32 @@
 {
-    "name": "yourpay",
-    "short_name": "yourpay",
+    "name": "TIPRI チップリ",
+    "short_name": "チップリ",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "チップで“接客”を可視化・還元する Web アプリ。スタッフごとのQRでスマートに投げ銭、管理画面で明細・集計もらくらく。",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
         {
-            "src": "icons/Icon-192.png",
+            "src": "icons/opg.png",
             "sizes": "192x192",
             "type": "image/png"
         },
         {
-            "src": "icons/Icon-512.png",
+            "src": "icons/opg.png",
             "sizes": "512x512",
             "type": "image/png"
         },
         {
-            "src": "icons/Icon-maskable-192.png",
+            "src": "icons/opg.png",
             "sizes": "192x192",
             "type": "image/png",
             "purpose": "maskable"
         },
         {
-            "src": "icons/Icon-maskable-512.png",
+            "src": "icons/opg.png",
             "sizes": "512x512",
             "type": "image/png",
             "purpose": "maskable"

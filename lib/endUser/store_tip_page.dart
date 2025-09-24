@@ -1,7 +1,6 @@
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher_string.dart';
-import 'package:yourpay/endUser/tip_waiting_page.dart';
 
 class StoreTipPage extends StatefulWidget {
   final String tenantId;
@@ -68,21 +67,6 @@ class _StoreTipPageState extends State<StoreTipPage> {
         );
         return;
       }
-
-      // ★ 先ほど作った待ち画面へ。Webhook が paid/failed に更新 → 自動で完了/失敗へ遷移
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => TipWaitingPage(
-            sessionId: sessionId!,
-            tenantId: widget.tenantId,
-            tenantName: widget.tenantName,
-            amount: amount,
-            employeeName: null, // 店舗向けなので null
-            checkoutUrl: checkoutUrl,
-          ),
-        ),
-      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(

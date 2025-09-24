@@ -13,6 +13,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
 import 'package:barcode/barcode.dart';
+import 'package:url_launcher/url_launcher_string.dart';
 import 'package:yourpay/tenant/method/fetchPlan.dart';
 import 'package:yourpay/tenant/newTenant/onboardingSheet.dart';
 
@@ -278,7 +279,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
 
   String _buildStoreUrl() {
     final origin = Uri.base.origin;
-    return '$origin/#/p?t=${widget.tenantId}&u=${widget.ownerId}';
+    return '$origin/#/p?t=${widget.tenantId}';
     // 必要ならここでサイズやパラメータを追加
   }
 
@@ -806,17 +807,35 @@ class _StoreQrTabState extends State<StoreQrTab> {
           ],
         );
 
-        Widget urlText() => (_publicStoreUrl == null)
-            ? const SizedBox.shrink()
-            : SelectableText(
-                _publicStoreUrl!,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: black78,
-                  fontFamily: 'LINEseed',
-                ),
-                textAlign: TextAlign.left,
+        Widget urlButton(BuildContext context) {
+          final url = _publicStoreUrl;
+          if (url == null || url.isEmpty) return const SizedBox.shrink();
+
+          return FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.black,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () async {
+              final ok = await launchUrlString(
+                url,
+                mode: LaunchMode.externalApplication,
+                webOnlyWindowName: '_self',
               );
+              if (!ok && context.mounted) {
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('リンクを開けませんでした')));
+              }
+            },
+            icon: const Icon(Icons.open_in_new),
+            label: const Text('ページ確認'),
+          );
+        }
 
         Widget qrControls() => DefaultTextStyle.merge(
           style: TextStyle(color: black78),
@@ -898,20 +917,13 @@ class _StoreQrTabState extends State<StoreQrTab> {
                     foregroundColor: Colors.black,
                     child: Icon(Icons.info_outline),
                   ),
-                  title: const Text(
-                    '発行不可',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontFamily: 'LINEseed',
-                    ),
-                  ),
 
                   trailing: FilledButton(
                     style: primary,
                     onPressed: () =>
                         startOnboarding(widget.tenantId, widget.tenantName!),
                     child: const Text(
-                      'コネクトアカウント作成を完了する',
+                      'コネクトアカウント作成未完了',
                       style: TextStyle(fontFamily: 'LINEseed'),
                     ),
                   ),
@@ -1073,7 +1085,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
                         const SizedBox(height: 16),
                         qrControls(),
                         const SizedBox(height: 12),
-                        urlText(),
+                        urlButton(context),
                       ],
                     ),
                   ),
@@ -1120,7 +1132,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
                 const SizedBox(height: 16),
                 previewPane(),
                 const SizedBox(height: 12),
-                urlText(),
+                urlButton(context),
                 const SizedBox(height: 16),
                 qrControls(),
               ],

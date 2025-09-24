@@ -497,15 +497,15 @@ class _StoreHomeTabState extends State<StoreHomeTab> {
                 '店舗: $tenant    対象期間: $periodLabel',
                 style: const pw.TextStyle(fontSize: 10),
               ),
-              pw.Text(
-                '支払予定日: $payoutDatesLabel（翌月１日）',
-                style: const pw.TextStyle(fontSize: 10),
-              ),
+              // pw.Text(
+              //   '支払予定日: $payoutDatesLabel（翌月１日）',
+              //   style: const pw.TextStyle(fontSize: 10),
+              // ),
               if (anyStripeEstimated)
                 pw.Padding(
                   padding: const pw.EdgeInsets.only(top: 4),
                   child: pw.Text(
-                    '※ 一部のStripe手数料は3.4%で推定しています（保存がない決済）。',
+                    '※ 一部のStripe手数料は3.6%で推定しています（保存がない決済）。',
                     style: const pw.TextStyle(fontSize: 9),
                   ),
                 ),

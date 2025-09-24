@@ -433,6 +433,7 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
                               onPressed: () => launchUrlString(
                                 tipUrl,
                                 mode: LaunchMode.externalApplication,
+                                webOnlyWindowName: '_self', // Webは新しいタブで開く
                               ),
                               icon: const Icon(Icons.open_in_new),
                               label: const Text(

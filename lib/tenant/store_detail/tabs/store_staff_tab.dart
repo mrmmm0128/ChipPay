@@ -246,17 +246,17 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Center(
-              child: Text(
-                'スタッフのQRコードの一覧をURLから閲覧、ダウンロードできます',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                  fontFamily: "LINEseed",
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
+            // const Center(
+            //   child: Text(
+            //     'スタッフごとのQRコードをURLから閲覧、ダウンロード',
+            //     style: TextStyle(
+            //       fontWeight: FontWeight.w600,
+            //       color: Colors.black87,
+            //       fontFamily: "LINEseed",
+            //     ),
+            //   ),
+            // ),
+            // const SizedBox(height: 8),
             Wrap(
               spacing: 8,
               children: [
@@ -272,7 +272,8 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
                       }
                     },
                     icon: const Icon(Icons.copy),
-                    label: const Text('URLを共有しスタッフにQRコードを共有しましょう。'),
+                    //label: const Text('スタッフごとのQRコードをURLで共有'),
+                    label: const Text('全スタッフQRコード'),
                   ),
                 ),
               ],
@@ -292,8 +293,7 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
     final mq = MediaQuery.of(context);
     const fabHeight = 44.0;
     const fabBottomMargin = 16.0;
-    final safeBottom = mq.padding.bottom;
-    final gridBottomPadding = fabHeight + fabBottomMargin + safeBottom + 8.0;
+
     _loadConnectedOnce();
 
     final primaryBtnStyle = FilledButton.styleFrom(
@@ -313,7 +313,21 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     children: [
-                      _qrAllLinkCard(_allStaffUrl()),
+                      Center(
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            _qrAllLinkCard(_allStaffUrl()),
+                            const SizedBox(width: 5),
+                            FilledButton.icon(
+                              style: primaryBtnStyle,
+                              onPressed: _openAddEmployeeDialog,
+                              icon: const Icon(Icons.person_add_alt_1),
+                              label: const Text('スタッフ追加'),
+                            ),
+                          ],
+                        ),
+                      ),
                       const SizedBox(height: 12),
                       Expanded(
                         child: StreamBuilder<QuerySnapshot>(
@@ -397,9 +411,7 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
                             });
 
                             return Padding(
-                              padding: EdgeInsets.only(
-                                bottom: gridBottomPadding,
-                              ),
+                              padding: EdgeInsets.only(bottom: 0),
                               child: StaffGalleryGrid(entries: entries),
                             );
                           },
@@ -408,19 +420,17 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
                     ],
                   ),
                 ),
-                Positioned(
-                  right: 16,
-                  bottom: fabBottomMargin + safeBottom,
-                  child: SizedBox(
-                    height: fabHeight,
-                    child: FilledButton.icon(
-                      style: primaryBtnStyle,
-                      onPressed: _openAddEmployeeDialog,
-                      icon: const Icon(Icons.person_add_alt_1),
-                      label: const Text('スタッフ追加'),
-                    ),
-                  ),
-                ),
+
+                // Positioned(
+                //   right: 16,
+                //   bottom: fabBottomMargin + safeBottom,
+                //   child: FilledButton.icon(
+                //     style: primaryBtnStyle,
+                //     onPressed: _openAddEmployeeDialog,
+                //     icon: const Icon(Icons.person_add_alt_1),
+                //     label: const Text('スタッフ追加'),
+                //   ),
+                // ),
               ],
             ),
           )

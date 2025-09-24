@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:yourpay/appadmin/agent/contracts_list_for_agent.dart';
 
 class AgencyDetailPage extends StatelessWidget {
@@ -15,6 +16,58 @@ class AgencyDetailPage extends StatelessWidget {
   String _ymdhm(DateTime d) =>
       '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')} '
       '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+
+  Future<void> _upsertConnectAndOnboardForAgency(BuildContext context) async {
+    try {
+      final fn = FirebaseFunctions.instanceFor(
+        region: 'us-central1',
+      ).httpsCallable('upsertAgencyConnectedAccount');
+
+      final res = await fn.call({
+        'agentId': agentId,
+        'account': {
+          'country': 'JP',
+          // 必要なら事前埋め:
+          // 'email': 'agency@example.com',
+          // 'businessType': 'company', // or 'individual'
+          'tosAccepted': true,
+        },
+      });
+
+      final data = (res.data as Map).cast<String, dynamic>();
+      final accountId = (data['accountId'] ?? '').toString();
+      final charges = data['chargesEnabled'] == true;
+      final payouts = data['payoutsEnabled'] == true;
+      final url = data['onboardingUrl'] as String?;
+      final anchor = (data['payoutSchedule'] as Map?)?['monthly_anchor'] ?? 1;
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Connect更新完了: $accountId / 入金:${payouts ? "可" : "不可"}／回収:${charges ? "可" : "不可"}／毎月$anchor日',
+            ),
+          ),
+        );
+      }
+
+      if (url != null && url.isNotEmpty) {
+        await launchUrl(Uri.parse(url));
+      }
+    } on FirebaseFunctionsException catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('失敗: ${e.code} ${e.message ?? ""}')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('失敗: $e')));
+      }
+    }
+  }
 
   Future<void> _setAgentPassword(BuildContext context) async {
     final pass1 = TextEditingController();
@@ -144,6 +197,48 @@ class AgencyDetailPage extends StatelessWidget {
               if (updatedAt != null) _kv('更新', _ymdhm(updatedAt)),
               const SizedBox(height: 12),
               const Divider(height: 1),
+              // ===== Connect / 入金口座 =====
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: Text(
+                  '入金口座（Stripe Connect）',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              Builder(
+                builder: (ctx) {
+                  final m = snap.data!.data() ?? {};
+                  final acctId = (m['stripeAccountId'] ?? '').toString();
+                  final connect =
+                      (m['connect'] as Map?)?.cast<String, dynamic>() ?? {};
+                  final charges = connect['charges_enabled'] == true;
+                  final payouts = connect['payouts_enabled'] == true;
+                  final schedule =
+                      (m['payoutSchedule'] as Map?)?.cast<String, dynamic>() ??
+                      {};
+                  final anchor = schedule['monthly_anchor'] ?? 1;
+
+                  return Column(
+                    children: [
+                      ListTile(
+                        leading: const Icon(
+                          Icons.account_balance_wallet_outlined,
+                        ),
+                        title: Text(acctId.isEmpty ? '未作成' : 'アカウント: $acctId'),
+                        subtitle: Text(
+                          '入金: ${payouts ? "可" : "不可"} ／ 料金回収: ${charges ? "可" : "不可"} ／ 毎月${anchor}日入金',
+                        ),
+                        trailing: FilledButton(
+                          onPressed: () =>
+                              _upsertConnectAndOnboardForAgency(ctx),
+                          child: const Text('設定 / 続行'),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                    ],
+                  );
+                },
+              ),
 
               // ===== 登録店舗（contracts） =====
               const Padding(

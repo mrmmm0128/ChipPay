@@ -11,6 +11,7 @@ import 'package:yourpay/endUser/utils/design.dart';
 // ▼ アプリ内動画再生
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
+import 'package:yourpay/endUser/utils/fetchUidByTenantId.dart';
 import 'package:yourpay/tenant/method/fetchPlan.dart';
 
 class TipCompletePage extends StatefulWidget {
@@ -42,6 +43,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
   String? _employeeName;
   String? _uid;
   bool isC = true;
+  bool isB = true;
 
   Future<_LinksGateResult>? _linksGateFuture;
 
@@ -53,19 +55,23 @@ class _TipCompletePageState extends State<TipCompletePage> {
     _tenantName = widget.tenantName;
     _amount = widget.amount;
     _employeeName = widget.employeeName;
-    _uid = widget.uid;
+    _uid = widget.uid; // ← 受け取っても後で tenantIndex で上書きする
 
-    // 2) URL から不足を補完
+    // 2) URL から不足を補完（※ uid は拾わないよう 変更済）
     _mergeFromUrlIfNeeded();
 
-    // 3) 初回ロード
-    _reloadLinksGate();
-
-    initialize();
+    // ★ ここで uid を tenantIndex から必ず解決
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _resolveUidFromTenantIndexIfPossible();
+      // uid が解決してからリンクなどを再読込
+      _reloadLinksGate();
+      await initialize(); // isC 判定も uid 必須なのでここで
+    });
   }
 
   Future<void> initialize() async {
     isC = await fetchIsCPlanById(_uid!, _tenantId!);
+    isB = await fetchIsBPlanById(_uid!, _tenantId!);
   }
 
   @override
@@ -75,6 +81,17 @@ class _TipCompletePageState extends State<TipCompletePage> {
     final args = ModalRoute.of(context)?.settings.arguments;
     if (args is Map) {
       _mergeFromArgs(args);
+    }
+  }
+
+  Future<void> _resolveUidFromTenantIndexIfPossible() async {
+    final tid = _tenantId;
+    if (tid == null || tid.isEmpty) return;
+    // すでに uid がある場合でも、tenantIndex を正とする（上書き）
+    final fetched = await fetchUidByTenantIndex(tid);
+    if (!mounted) return;
+    if (fetched != null && fetched.isNotEmpty) {
+      setState(() => _uid = fetched);
     }
   }
 
@@ -97,6 +114,11 @@ class _TipCompletePageState extends State<TipCompletePage> {
     }
 
     if (_tenantId != null && _tenantId != beforeTid) {
+      // ★ tenantId が変わったら、uid を tenantIndex から取り直す
+      _resolveUidFromTenantIndexIfPossible().then((_) {
+        _reloadLinksGate();
+      });
+    } else {
       _reloadLinksGate();
     }
     setState(() {});
@@ -130,7 +152,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
     _tenantId ??= pick(['t', 'tenantId']);
     _tenantName ??= pick(['tenantName', 'store', 's']);
     _employeeName ??= pick(['employeeName', 'name', 'n']);
-    _uid ??= pick(['u', 'uid', 'user']);
+    // _uid ??= pick(['u', 'uid', 'user']);
 
     final a = pick(['amount', 'a']);
     if (_amount == null && a != null) {
@@ -139,8 +161,14 @@ class _TipCompletePageState extends State<TipCompletePage> {
     }
 
     if (_tenantId != null && _tenantId != beforeTid) {
+      // ★ tenantId が変わったら、uid を tenantIndex から取り直す
+      _resolveUidFromTenantIndexIfPossible().then((_) {
+        _reloadLinksGate();
+      });
+    } else {
       _reloadLinksGate();
     }
+    setState(() {});
   }
 
   void _reloadLinksGate() {
@@ -296,11 +324,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
       MaterialPageRoute(
         builder: (_) => const PublicStorePage(),
         settings: RouteSettings(
-          arguments: {
-            'tenantId': _tenantId,
-            'tenantName': _tenantName,
-            'uid': _uid,
-          },
+          arguments: {'tenantId': _tenantId, 'tenantName': _tenantName},
         ),
       ),
     );
@@ -492,7 +516,7 @@ class _TipCompletePageState extends State<TipCompletePage> {
                   const SizedBox(height: 12),
                   // ① お店にチップを送る
                   _YellowActionButton(
-                    label: "stripe.tip_for_store",
+                    label: tr("stripe.tip_for_store"),
                     onPressed: _openStoreTipBottomSheet,
                   ),
                   const SizedBox(height: 8),
@@ -506,66 +530,122 @@ class _TipCompletePageState extends State<TipCompletePage> {
                   const SizedBox(height: 24),
                   const Divider(),
 
-                  // ▼ Cプラン限定リンク（Googleレビュー/LINE）
-                  FutureBuilder<_LinksGateResult>(
-                    future: _linksGateFuture,
-                    builder: (context, snap) {
-                      if (snap.connectionState == ConnectionState.waiting) {
-                        return const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 16),
-                          child: SizedBox(
-                            height: 24,
-                            width: 24,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
+                  if (isB) ...[
+                    FutureBuilder<_LinksGateResult>(
+                      future: _linksGateFuture,
+                      builder: (context, snap) {
+                        if (snap.connectionState == ConnectionState.waiting) {
+                          return const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 16),
+                            child: SizedBox(
+                              height: 24,
+                              width: 24,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          );
+                        }
+                        if (snap.hasError || !snap.hasData)
+                          return const SizedBox.shrink();
+
+                        final r = snap.data!;
+                        if (!r.isSubC) return const SizedBox.shrink();
+
+                        final hasReview = (r.googleReviewUrl ?? '').isNotEmpty;
+                        final hasLine = (r.lineOfficialUrl ?? '').isNotEmpty;
+                        if (!hasReview && !hasLine)
+                          return const SizedBox.shrink();
+
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const SizedBox(height: 16),
+                            Text(
+                              tr("公式ラインはこちらから"),
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 8),
+
+                            if (hasReview && hasLine)
+                              const SizedBox(height: 12),
+
+                            if (hasLine)
+                              SizedBox(
+                                height: 80,
+                                child: _YellowActionButton(
+                                  label: tr("公式LINE"),
+                                  icon: Icons.chat_bubble_outline,
+                                  onPressed: () => _openUrl(r.lineOfficialUrl!),
+                                ),
+                              ),
+                          ],
                         );
-                      }
-                      if (snap.hasError || !snap.hasData)
-                        return const SizedBox.shrink();
+                      },
+                    ),
+                  ],
 
-                      final r = snap.data!;
-                      if (!r.isSubC) return const SizedBox.shrink();
-
-                      final hasReview = (r.googleReviewUrl ?? '').isNotEmpty;
-                      final hasLine = (r.lineOfficialUrl ?? '').isNotEmpty;
-                      if (!hasReview && !hasLine)
-                        return const SizedBox.shrink();
-
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          const SizedBox(height: 16),
-                          Text(
-                            tr("レビューと公式ラインはこちらから"),
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(height: 8),
-
-                          if (hasReview)
-                            SizedBox(
-                              height: 80,
-                              child: _YellowActionButton(
-                                label: tr('Googleレビュー'),
-                                icon: Icons.reviews_outlined,
-                                onPressed: () => _openUrl(r.googleReviewUrl!),
-                              ),
+                  // ▼ Cプラン限定リンク（Googleレビュー/LINE）
+                  if (isC) ...[
+                    FutureBuilder<_LinksGateResult>(
+                      future: _linksGateFuture,
+                      builder: (context, snap) {
+                        if (snap.connectionState == ConnectionState.waiting) {
+                          return const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 16),
+                            child: SizedBox(
+                              height: 24,
+                              width: 24,
+                              child: CircularProgressIndicator(strokeWidth: 2),
                             ),
+                          );
+                        }
+                        if (snap.hasError || !snap.hasData)
+                          return const SizedBox.shrink();
 
-                          if (hasReview && hasLine) const SizedBox(height: 12),
+                        final r = snap.data!;
+                        if (!r.isSubC) return const SizedBox.shrink();
 
-                          if (hasLine)
-                            SizedBox(
-                              height: 80,
-                              child: _YellowActionButton(
-                                label: tr("公式LINE"),
-                                icon: Icons.chat_bubble_outline,
-                                onPressed: () => _openUrl(r.lineOfficialUrl!),
-                              ),
+                        final hasReview = (r.googleReviewUrl ?? '').isNotEmpty;
+                        final hasLine = (r.lineOfficialUrl ?? '').isNotEmpty;
+                        if (!hasReview && !hasLine)
+                          return const SizedBox.shrink();
+
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const SizedBox(height: 16),
+                            Text(
+                              tr("レビューと公式ラインはこちらから"),
+                              style: Theme.of(context).textTheme.titleMedium,
                             ),
-                        ],
-                      );
-                    },
-                  ),
+                            const SizedBox(height: 8),
+
+                            if (hasReview)
+                              SizedBox(
+                                height: 80,
+                                child: _YellowActionButton(
+                                  label: tr('Googleレビュー'),
+                                  icon: Icons.reviews_outlined,
+                                  onPressed: () => _openUrl(r.googleReviewUrl!),
+                                ),
+                              ),
+
+                            if (hasReview && hasLine)
+                              const SizedBox(height: 12),
+
+                            if (hasLine)
+                              SizedBox(
+                                height: 80,
+                                child: _YellowActionButton(
+                                  label: tr("公式LINE"),
+                                  icon: Icons.chat_bubble_outline,
+                                  onPressed: () => _openUrl(r.lineOfficialUrl!),
+                                ),
+                              ),
+                          ],
+                        );
+                      },
+                    ),
+                  ],
                 ],
               ),
             ),

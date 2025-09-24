@@ -72,10 +72,11 @@ class _VideoPreviewDialogState extends State<_VideoPreviewDialog> {
                   onPressed: () => launchUrlString(
                     widget.url,
                     mode: LaunchMode.externalApplication,
+                    webOnlyWindowName: '_self', // Webは新しいタブで開く
                   ),
                   icon: const Icon(Icons.open_in_new, color: Colors.white),
                   label: const Text(
-                    '外部で開く',
+                    '開く',
                     style: TextStyle(color: Colors.white),
                   ),
                 ),

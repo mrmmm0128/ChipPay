@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:easy_localization/easy_localization.dart';
@@ -7,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:yourpay/endUser/utils/design.dart';
-import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
+import 'package:yourpay/endUser/utils/fetchUidByTenantId.dart';
 import 'package:yourpay/endUser/utils/image_scrol.dart';
 
 /// 黒フチ × 黄色の“縁取りテキスト”
@@ -193,24 +191,14 @@ class PublicStorePageState extends State<PublicStorePage> {
       email = args['email'] as String? ?? email;
       photoUrl = args['photoUrl'] as String? ?? photoUrl;
       tenantName = args['tenantName'] as String? ?? tenantName;
-      uid = args['uid'] as String? ?? uid;
     }
 
     // 2) URL（? と # の両方を見る）
     tenantId ??= _getParam('t');
-    uid ??= _getParam('u');
 
-    // 3) uid がまだ無い → tenantIndex から逆引き（公開可の前提）
-    if (uid == null && tenantId != null) {
-      try {
-        final idx = await FirebaseFirestore.instance
-            .collection('tenantIndex')
-            .doc(tenantId!)
-            .get();
-        uid = idx.data()?['uid'] as String?;
-      } catch (_) {
-        /* 無視 */
-      }
+    // 3) tenantId が判明したら tenantIndex から uid を“必ず”解決
+    if (tenantId != null) {
+      uid = await fetchUidByTenantIndex(tenantId!);
     }
 
     // 4) 店舗名の解決（両方そろってから）
@@ -279,14 +267,87 @@ class PublicStorePageState extends State<PublicStorePage> {
         .doc(tenantId)
         .snapshots();
 
+    // 1) 直近90日の tips を購読して合計額マップを作る
+    final since = DateTime.now().subtract(const Duration(days: 90));
+    final tipsStream = FirebaseFirestore.instance
+        .collection(uid!)
+        .doc(tenantId)
+        .collection('tips')
+        .where('status', isEqualTo: 'succeeded')
+        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(since))
+        .snapshots();
+
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: tenantDocStream,
       builder: (context, tSnap) {
+        // ★ 追加: ローディング/エラーの早期return（任意）
+        if (tSnap.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
         final tData = tSnap.data?.data();
+        final status = (tData?['status'] as String?)?.toLowerCase();
+        if (status == 'nonactive') {
+          return Scaffold(
+            backgroundColor: AppPalette.pageBg,
+            appBar: AppBar(
+              backgroundColor: AppPalette.pageBg,
+              foregroundColor: AppPalette.black,
+              elevation: 0,
+              automaticallyImplyLeading: false,
+              scrolledUnderElevation: 0,
+              actions: const [
+                Padding(
+                  padding: EdgeInsets.only(right: 12),
+                  child: LanguageSelector(),
+                ),
+              ],
+            ),
+            body: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.info_outline,
+                      size: 40,
+                      color: AppPalette.black,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '店舗側の登録が完了していません',
+                      style: AppTypography.label2(color: AppPalette.black),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '現在この店舗はご利用準備中です。しばらく待ってから再度アクセスしてください。',
+                      style: AppTypography.small(
+                        color: AppPalette.textSecondary,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 16),
+                    OutlinedButton.icon(
+                      onPressed: () => setState(() {}), // 再読込（Streamなので即反映）
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('再読み込み'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+
         final subType = (tData?['subscription']?['plan'] as String?)
             ?.toUpperCase();
         final isTypeC =
             subType == 'C' || ((tenantPlan ?? '').toUpperCase() == 'C');
+        final isTypeB =
+            subType == 'B' || ((tenantPlan ?? '').toUpperCase() == 'B');
 
         final lineUrl = (tData?['c_perks.lineUrl'] as String?) ?? '';
         final googleReviewUrl = (tData?['c_perk.reviewUrl'] as String?) ?? '';
@@ -317,39 +378,6 @@ class PublicStorePageState extends State<PublicStorePage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // ── HERO：チップを贈ろう ─────────────────────
-                // Center(
-                //   child: RichText(
-                //     textAlign: TextAlign.center,
-                //     text: TextSpan(
-                //       children: [
-                //         WidgetSpan(
-                //           alignment: PlaceholderAlignment.baseline, // ← 基準線に揃える
-                //           baseline: TextBaseline.ideographic, // ← 日本語に適した基準線
-                //           child: StrokeText(
-                //             'チップ',
-                //             style: AppTypography.headlineHuge0(),
-                //             strokeWidth: 12,
-                //           ),
-                //         ),
-                //         TextSpan(
-                //           text: 'を\n',
-                //           style: AppTypography.headlineLarge(),
-                //         ),
-                //         // ← 改行を独立させて高さを盛る
-                //         const WidgetSpan(child: SizedBox(height: 15)),
-                //         TextSpan(
-                //           text: '\n',
-                //           style: AppTypography.headlineLarge(),
-                //         ),
-                //         TextSpan(
-                //           text: '贈ろう',
-                //           style: AppTypography.headlineHuge(),
-                //         ),
-                //       ],
-                //     ),
-                //   ),
-                // ),
                 Center(
                   child: LayoutBuilder(
                     builder: (context, c) {
@@ -415,114 +443,175 @@ class PublicStorePageState extends State<PublicStorePage> {
                 const SizedBox(height: 10),
                 Center(child: Text(tr('staff.ranking'))),
                 const SizedBox(height: 10),
+
+                // （この位置は今の「スタッフ一覧」の StreamBuilder を丸ごと入れ替え）
                 StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection(uid!)
-                      .doc(tenantId)
-                      .collection('employees')
-                      .orderBy('createdAt', descending: true)
-                      .snapshots(),
-                  builder: (context, snap) {
-                    if (snap.hasError) {
-                      return Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Text(
-                          tr("stripe.error", args: [snap.toString()]),
-                        ),
-                      );
-                    }
-                    if (!snap.hasData) {
-                      return const Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Center(child: CircularProgressIndicator()),
-                      );
-                    }
-
-                    final all = snap.data!.docs.toList();
-                    final filtered = all.where((doc) {
-                      final d = doc.data() as Map<String, dynamic>;
-                      final nm = (d['name'] ?? '').toString().toLowerCase();
-                      return _query.isEmpty || nm.contains(_query);
-                    }).toList();
-
-                    if (filtered.isEmpty) {
-                      return Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Center(child: Text(tr('status.no_staff'))),
-                      );
+                  stream: tipsStream,
+                  builder: (context, tipSnap) {
+                    // 合計額マップを作成：employeeId -> total amount
+                    final Map<String, int> totals = {};
+                    if (tipSnap.hasData) {
+                      for (final d in tipSnap.data!.docs) {
+                        final data = d.data() as Map<String, dynamic>;
+                        final rec = (data['recipient'] as Map?)
+                            ?.cast<String, dynamic>();
+                        final employeeId =
+                            (data['employeeId'] as String?) ??
+                            rec?['employeeId'] as String?;
+                        final cur =
+                            (data['currency'] as String?)?.toUpperCase() ??
+                            'JPY';
+                        if (employeeId == null || employeeId.isEmpty) continue;
+                        if (cur != 'JPY') continue; // 必要なら通貨フィルタ
+                        final amount = (data['amount'] as num?)?.toInt() ?? 0;
+                        totals[employeeId] = (totals[employeeId] ?? 0) + amount;
+                      }
                     }
 
-                    final displayList = _showAllMembers
-                        ? filtered
-                        : filtered.take(6).toList();
+                    // 2) スタッフ一覧を読み、totals に基づいて並び替える
+                    return StreamBuilder<QuerySnapshot>(
+                      stream: FirebaseFirestore.instance
+                          .collection(uid!)
+                          .doc(tenantId)
+                          .collection('employees')
+                          .orderBy('createdAt', descending: true)
+                          .snapshots(),
+                      builder: (context, snap) {
+                        if (snap.hasError) {
+                          return Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Text(
+                              tr("stripe.error", args: [snap.toString()]),
+                            ),
+                          );
+                        }
+                        if (!snap.hasData) {
+                          return const Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Center(child: CircularProgressIndicator()),
+                          );
+                        }
 
-                    return Padding(
-                      padding: const EdgeInsets.fromLTRB(
-                        AppDims.pad,
-                        8,
-                        AppDims.pad,
-                        0,
-                      ),
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
-                          final w = constraints.maxWidth;
-                          int cross = 2; // モバイル想定
-                          if (w >= 1100) {
-                            cross = 5;
-                          } else if (w >= 900) {
-                            cross = 4;
-                          } else if (w >= 680) {
-                            cross = 3;
-                          }
-                          return GridView.builder(
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            gridDelegate:
-                                SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: cross,
-                                  mainAxisSpacing: 14,
-                                  crossAxisSpacing: 14,
-                                  mainAxisExtent: 200,
-                                ),
-                            itemCount: displayList.length,
-                            itemBuilder: (_, i) {
-                              final doc = displayList[i];
-                              final data = doc.data() as Map<String, dynamic>;
-                              final id = doc.id;
-                              final name = (data['name'] ?? '') as String;
-                              final email = (data['email'] ?? '') as String;
-                              final photoUrl =
-                                  (data['photoUrl'] ?? '') as String;
+                        // 検索フィルタ
+                        final all = snap.data!.docs.toList();
+                        final filtered = all.where((doc) {
+                          final d = doc.data() as Map<String, dynamic>;
+                          final nm = (d['name'] ?? '').toString().toLowerCase();
+                          return _query.isEmpty || nm.contains(_query);
+                        }).toList();
 
-                              return _RankedMemberCard(
-                                rankLabel: i < 4
-                                    ? tr(
-                                        'staff.number',
-                                        namedArgs: {'rank': '${i + 1}'},
-                                      )
-                                    : tr('section.members'),
-                                name: name,
-                                photoUrl: photoUrl,
-                                onTap: () {
-                                  Navigator.pushNamed(
-                                    context,
-                                    '/staff',
-                                    arguments: {
-                                      'tenantId': tenantId,
-                                      'tenantName': tenantName,
-                                      'employeeId': id,
-                                      'name': name,
-                                      'email': email,
-                                      'photoUrl': photoUrl,
-                                      'uid': uid,
+                        if (filtered.isEmpty) {
+                          return const Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Center(child: Text('スタッフが見つかりません')),
+                          );
+                        }
+
+                        // ★ ここでランキング順にソート（合計が大きい順、同額なら作成新しい順）
+                        filtered.sort((a, b) {
+                          final ta = totals[a.id] ?? 0;
+                          final tb = totals[b.id] ?? 0;
+                          if (tb != ta) return tb.compareTo(ta);
+                          final ca =
+                              (a.data() as Map<String, dynamic>)['createdAt'];
+                          final cb =
+                              (b.data() as Map<String, dynamic>)['createdAt'];
+                          final da = (ca is Timestamp)
+                              ? ca.toDate()
+                              : DateTime.fromMillisecondsSinceEpoch(0);
+                          final db = (cb is Timestamp)
+                              ? cb.toDate()
+                              : DateTime.fromMillisecondsSinceEpoch(0);
+                          return db.compareTo(da);
+                        });
+
+                        // 表示件数（従来の “もっと見る/閉じる” を踏襲）
+                        final displayList = _showAllMembers
+                            ? filtered
+                            : filtered.take(6).toList();
+
+                        // 事前に「何位か」を引けるようランキングインデックスを作る
+                        final rankedIds = filtered
+                            .map((d) => d.id)
+                            .toList(); // 並び替え後の全ID
+                        int rankOf(String id) =>
+                            rankedIds.indexOf(id) + 1; // 1-origin
+
+                        return Padding(
+                          padding: const EdgeInsets.fromLTRB(
+                            AppDims.pad,
+                            8,
+                            AppDims.pad,
+                            0,
+                          ),
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final w = constraints.maxWidth;
+                              int cross = 2;
+                              if (w >= 1100) {
+                                cross = 5;
+                              } else if (w >= 900) {
+                                cross = 4;
+                              } else if (w >= 680) {
+                                cross = 3;
+                              }
+
+                              return GridView.builder(
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                gridDelegate:
+                                    SliverGridDelegateWithFixedCrossAxisCount(
+                                      crossAxisCount: cross,
+                                      mainAxisSpacing: 14,
+                                      crossAxisSpacing: 14,
+                                      mainAxisExtent: 200,
+                                    ),
+                                itemCount: displayList.length,
+                                itemBuilder: (_, i) {
+                                  final doc = displayList[i];
+                                  final data =
+                                      doc.data() as Map<String, dynamic>;
+                                  final id = doc.id;
+                                  final name = (data['name'] ?? '') as String;
+                                  final email = (data['email'] ?? '') as String;
+                                  final photoUrl =
+                                      (data['photoUrl'] ?? '') as String;
+
+                                  // ★ 1〜4位だけ順位ラベル、それ以外は従来の「メンバー」相当
+                                  final r = rankOf(id);
+                                  final rankLabel = (r >= 1 && r <= 4)
+                                      ? tr(
+                                          'staff.number',
+                                          namedArgs: {'rank': '$r'},
+                                        )
+                                      : tr('section.members');
+
+                                  return _RankedMemberCard(
+                                    rankLabel: rankLabel,
+                                    name: name,
+                                    photoUrl: photoUrl,
+                                    onTap: () {
+                                      Navigator.pushNamed(
+                                        context,
+                                        '/staff',
+                                        arguments: {
+                                          'tenantId': tenantId,
+                                          'tenantName': tenantName,
+                                          'employeeId': id,
+                                          'name': name,
+                                          'email': email,
+                                          'photoUrl': photoUrl,
+                                          'uid': uid,
+                                        },
+                                      );
                                     },
                                   );
                                 },
                               );
                             },
-                          );
-                        },
-                      ),
+                          ),
+                        );
+                      },
                     );
                   },
                 ),
@@ -557,6 +646,32 @@ class PublicStorePageState extends State<PublicStorePage> {
                   ),
                 ),
                 const SizedBox(height: 10),
+
+                if (isTypeB) ...[
+                  _Sectionbar(title: tr('section.initiate1')),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppDims.pad,
+                    ),
+                    child: Column(
+                      children: [
+                        SizedBox(
+                          height: 100,
+                          child: _YellowActionButton(
+                            label: tr('button.LINE'),
+                            onPressed: lineUrl.isEmpty
+                                ? null
+                                : () => launchUrlString(
+                                    lineUrl,
+                                    mode: LaunchMode.externalApplication,
+                                  ),
+                          ),
+                        ),
+                        const SizedBox(height: 7),
+                      ],
+                    ),
+                  ),
+                ],
 
                 // ── ご協力お願いします（Cタイプのみ表示） ───────────
                 if (isTypeC) ...[
@@ -948,7 +1063,11 @@ class _StoreTipBottomSheetState extends State<_StoreTipBottomSheet> {
         return;
       }
       if (mounted) Navigator.pop(context);
-      await launchUrlString(checkoutUrl, mode: LaunchMode.externalApplication);
+      await launchUrlString(
+        checkoutUrl,
+        mode: LaunchMode.platformDefault,
+        webOnlyWindowName: '_self',
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

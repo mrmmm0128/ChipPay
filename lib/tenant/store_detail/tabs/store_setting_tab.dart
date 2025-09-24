@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:yourpay/tenant/widget/store_setting/b_perk.dart';
 import 'package:yourpay/tenant/widget/store_setting/subscription_card.dart';
 import 'package:yourpay/tenant/widget/store_staff/show_video_preview.dart';
 import 'package:yourpay/tenant/widget/store_setting/c_perk.dart';
@@ -23,10 +24,6 @@ class StoreSettingsTab extends StatefulWidget {
 
 class _StoreSettingsTabState extends State<StoreSettingsTab> {
   final _functions = FirebaseFunctions.instanceFor(region: 'us-central1');
-
-  // -------- State --------
-  List<Map<String, dynamic>> _invoices = [];
-  bool _loadingInvoices = false;
 
   DateTime? _effectiveFromLocal; // 予約の適用開始（未指定なら翌月1日 0:00）
 
@@ -330,145 +327,6 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
     }
   }
 
-  Future<void> _showInvoicesDialog(BuildContext context) async {
-    if (_invoices.isEmpty && !_loadingInvoices) {
-      await _loadInvoices(widget.tenantId);
-    }
-
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, sbSet) {
-          String _fmtYMD(DateTime d) =>
-              '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')}';
-
-          Widget _list() {
-            if (_loadingInvoices) {
-              return const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(24),
-                  child: CircularProgressIndicator(),
-                ),
-              );
-            }
-            if (_invoices.isEmpty) {
-              return const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text(
-                    '請求履歴はまだありません',
-                    style: TextStyle(color: Colors.black87),
-                  ),
-                ),
-              );
-            }
-
-            return ListView.separated(
-              itemCount: _invoices.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
-              itemBuilder: (_, i) {
-                final inv = _invoices[i];
-                final amount =
-                    (inv['amount_paid'] ?? inv['amount_due'] ?? 0) as num;
-                final cur = (inv['currency'] ?? 'JPY').toString().toUpperCase();
-                final number = (inv['number'] ?? inv['id'] ?? '').toString();
-                final url = inv['hosted_invoice_url'] as String?;
-                final pdf = inv['invoice_pdf'] as String?;
-
-                int createdMs = 0;
-                final createdRaw = inv['created'];
-                if (createdRaw is int) {
-                  createdMs = createdRaw * 1000;
-                } else if (createdRaw is double) {
-                  createdMs = (createdRaw * 1000).round();
-                } else if (createdRaw is Timestamp) {
-                  createdMs = createdRaw.millisecondsSinceEpoch;
-                }
-                final created = DateTime.fromMillisecondsSinceEpoch(createdMs);
-                final ymd = _fmtYMD(created);
-
-                return ListTile(
-                  dense: true,
-                  title: Text(
-                    '請求 #$number（$ymd）',
-                    style: const TextStyle(color: Colors.black87),
-                  ),
-                  subtitle: Text(
-                    '支払額: ${(amount / 100).toStringAsFixed(2)} $cur  •  状態: ${inv['status']}',
-                    style: const TextStyle(color: Colors.black54),
-                  ),
-                  trailing: Wrap(
-                    spacing: 8,
-                    children: [
-                      if (pdf != null)
-                        IconButton(
-                          tooltip: 'PDFを開く',
-                          icon: const Icon(Icons.picture_as_pdf),
-                          onPressed: () => launchUrlString(
-                            pdf,
-                            mode: LaunchMode.externalApplication,
-                          ),
-                        ),
-                      if (url != null)
-                        IconButton(
-                          tooltip: '請求書ページを開く',
-                          icon: const Icon(Icons.open_in_new),
-                          onPressed: () => launchUrlString(
-                            url,
-                            mode: LaunchMode.externalApplication,
-                          ),
-                        ),
-                    ],
-                  ),
-                );
-              },
-            );
-          }
-
-          return AlertDialog(
-            backgroundColor: Colors.white,
-            surfaceTintColor: Colors.transparent,
-            title: Row(
-              children: [
-                const Text(
-                  'サブスクリプション請求履歴',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-                const Spacer(),
-                OutlinedButton.icon(
-                  onPressed: _loadingInvoices
-                      ? null
-                      : () async {
-                          await _loadInvoices(widget.tenantId);
-                          sbSet(() {});
-                        },
-                  icon: _loadingInvoices
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.refresh),
-                  label: const Text('更新'),
-                ),
-              ],
-            ),
-            content: SizedBox(width: 640, height: 460, child: _list()),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text(
-                  '閉じる',
-                  style: TextStyle(color: Colors.black87),
-                ),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
   Future<void> logout() async {
     if (_loggingOut) return;
     setState(() => _loggingOut = true);
@@ -485,26 +343,6 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
       ).showSnackBar(SnackBar(content: Text('ログアウトに失敗: $e')));
     } finally {
       if (mounted) setState(() => _loggingOut = false);
-    }
-  }
-
-  Future<void> _loadInvoices(String tenantId) async {
-    setState(() => _loadingInvoices = true);
-    try {
-      final fn = FirebaseFunctions.instanceFor(
-        region: 'us-central1',
-      ).httpsCallable('listInvoices');
-      final res = await fn.call({'tenantId': tenantId, 'limit': 24});
-      final data = (res.data as Map)['invoices'] as List<dynamic>? ?? [];
-      _invoices = data.cast<Map<String, dynamic>>();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('請求履歴の読込に失敗: $e')));
-      }
-    } finally {
-      if (mounted) setState(() => _loadingInvoices = false);
     }
   }
 
@@ -557,57 +395,61 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
     }
   }
 
-  // Future<void> _showStripeFeeNoticeAndProceed(
-  //   DocumentReference<Map<String, dynamic>> tenantRef,
-  // ) async {
-  //   if (_updatingPlan) return;
-  //   final ok = await showDialog<bool>(
-  //     context: context,
-  //     builder: (_) => AlertDialog(
-  //       backgroundColor: Colors.white,
-  //       surfaceTintColor: Colors.transparent,
-  //       title: const Text('ご確認ください', style: TextStyle(color: Colors.black87)),
-  //       content: const Column(
-  //         mainAxisSize: MainAxisSize.min,
-  //         crossAxisAlignment: CrossAxisAlignment.start,
-  //         children: [
-  //           Text(
-  //             'Stripeを通じてチップを受け取る場合、Stripeの決済手数料として元金の2.4%が差し引かれます。（2.4%は標準の値であり、前後する可能性がございます。）',
-  //             style: TextStyle(color: Colors.black87),
-  //           ),
-  //           SizedBox(height: 8),
-  //           Text(
-  //             'この手数料は運営手数料とは別に発生します。',
-  //             style: TextStyle(color: Colors.black54),
-  //           ),
-  //         ],
-  //       ),
-  //       actionsPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-  //       actions: [
-  //         TextButton(
-  //           onPressed: () => Navigator.pop(context, false),
-  //           child: const Text('キャンセル', style: TextStyle(color: Colors.black87)),
-  //         ),
-  //         FilledButton(
-  //           style: FilledButton.styleFrom(
-  //             backgroundColor: Colors.black,
-  //             foregroundColor: Colors.white,
-  //           ),
-  //           onPressed: () => Navigator.pop(context, true),
-  //           child: const Text('次へ'),
-  //         ),
-  //       ],
-  //     ),
-  //   );
-  //   if (ok == true) {
-  //     await _changePlan(tenantRef, _selectedPlan!);
-  //   }
-  // }
+  Future<bool?> _confirmImmediateCharge(
+    BuildContext context,
+    String newPlan,
+  ) async {
+    bool agreed = false;
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('プラン変更の確認'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'プランを今すぐ変更し、既存の支払方法を用いて本日から1か月分の料金を即時にお支払いします。\n'
+                '現在のプランの未経過分の返金は行われません。',
+              ),
+              const SizedBox(height: 12),
+              StatefulBuilder(
+                builder: (ctx, setState) {
+                  return CheckboxListTile(
+                    dense: true,
+                    title: const Text('上記に同意します（既存の支払方法を使用して今すぐ課金されます）'),
+                    value: agreed,
+                    onChanged: (v) => setState(() => agreed = v ?? false),
+                    controlAffinity: ListTileControlAffinity.leading,
+                  );
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('キャンセル'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, agreed),
+              child: Text('変更'),
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   Future<void> _changePlan(
     DocumentReference<Map<String, dynamic>> tenantRef,
     String newPlan,
   ) async {
+    // まず同意を取得
+    final ok = await _confirmImmediateCharge(context, newPlan);
+    if (ok != true) return;
+
     setState(() => _updatingPlan = true);
     try {
       final tSnap = await tenantRef.get();
@@ -617,6 +459,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
       final subId = sub['stripeSubscriptionId'] as String?;
       final status = (sub['status'] as String?) ?? '';
 
+      // サブスク未契約 → Checkout へ
       if (subId == null || subId.isEmpty) {
         final res = await _functions
             .httpsCallable('createSubscriptionCheckout')
@@ -626,34 +469,52 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
             });
         final data = res.data as Map;
         final url = data['url'] as String?;
-        if (url == null) {
-          throw 'Checkout URLが取得できませんでした。';
-        }
+        if (url == null) throw 'Checkout URLが取得できませんでした。';
         await launchUrlString(url, webOnlyWindowName: '_self');
         return;
       }
 
-      final applyWhen = (status == 'trialing')
-          ? 'trial_now'
-          : 'immediate_no_proration';
-
+      // ここから既存サブスクの即日切替
+      // ※ trial中かどうかはサーバ側で trial_end/behavior を適切に処理するためフラグ渡しは不要
       final res = await _functions.httpsCallable('changeSubscriptionPlan').call(
         <String, dynamic>{
           'subscriptionId': subId,
           'newPlan': newPlan,
-          'applyWhen': applyWhen,
+          'tenantId': widget.tenantId, // 突き合わせ安全性UP（サーバ側コード対応済み）
         },
       );
 
-      final data = res.data as Map;
-      if (data['ok'] == true) {
+      final Map data = res.data as Map;
+
+      // 正常完了（自動課金も成功）
+      if (data['ok'] == true && data['requiresAction'] != true) {
         if (!mounted) return;
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('プランを $newPlan に変更しました。')));
-      } else {
-        throw '変更APIの応答が不正です。';
+        return;
       }
+
+      // SCA（要追加認証）や未決済 → 案内を出して Hosted Invoice Page へ
+      if (data['requiresAction'] == true) {
+        final hosted = data['hostedInvoiceUrl'] as String?;
+        final payUrl = data['paymentIntentNextActionUrl'] as String?;
+        final msg = '追加認証またはお支払いの完了が必要です。表示されるページで手続きを行ってください。';
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(msg)));
+
+        // Hosted Invoice Page があれば優先して開く
+        final jump = hosted ?? payUrl;
+        if (jump != null) {
+          await launchUrlString(jump, webOnlyWindowName: '_self');
+          return;
+        }
+      }
+
+      // ここに来るのは想定外
+      throw 'サーバ応答が不正または支払いが完了していません。';
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -729,6 +590,141 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
     } finally {
       if (mounted) setState(() => _savingExtras = false);
     }
+  }
+
+  Future<void> _openAlertsPanel() async {
+    final tid = widget.tenantId;
+
+    // 1) ownerUid を tenantIndex から取得（招待テナント対応）
+    String? ownerUid;
+    try {
+      final idx = await FirebaseFirestore.instance
+          .collection('tenantIndex')
+          .doc(tid)
+          .get();
+      ownerUid = idx.data()?['uid'] as String?;
+    } catch (_) {}
+    // 自分オーナーのケースのフォールバック
+    ownerUid ??= FirebaseAuth.instance.currentUser?.uid;
+
+    if (ownerUid == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('通知の取得に失敗しました（ownerUid 不明）')),
+      );
+      return;
+    }
+
+    // 2) alerts を新しい順で取得
+    final col = FirebaseFirestore.instance
+        .collection(ownerUid)
+        .doc(tid)
+        .collection('alerts');
+
+    final qs = await col.orderBy('createdAt', descending: true).limit(50).get();
+
+    final alerts = qs.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+
+    // 3) 未読を既読に（表示するタイミングで一括マーク）
+    if (alerts.isNotEmpty) {
+      final batch = FirebaseFirestore.instance.batch();
+      for (final d in qs.docs) {
+        final read = (d.data()['read'] as bool?) ?? false;
+        if (!read) {
+          batch.set(d.reference, {
+            'read': true,
+            'readAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+      }
+      await batch.commit();
+    }
+
+    if (!mounted) return;
+
+    // 4) 一覧を BottomSheet で表示（message, createdAt を軽く表示）
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: false,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  height: 4,
+                  width: 40,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.black12,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'お知らせ',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'LINEseed',
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                if (alerts.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Text('新しいお知らせはありません'),
+                  )
+                else
+                  Flexible(
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: alerts.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (ctx, i) {
+                        final a = alerts[i];
+                        final msg = (a['message'] as String?)?.trim();
+                        final createdAt = a['createdAt'];
+                        String when = '';
+                        if (createdAt is Timestamp) {
+                          final dt = createdAt.toDate().toLocal();
+                          // シンプルな表示（intl なしで）
+                          when =
+                              '${dt.year}/${dt.month.toString().padLeft(2, '0')}/${dt.day.toString().padLeft(2, '0')} '
+                              '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+                        }
+
+                        return ListTile(
+                          leading: const Icon(Icons.notifications),
+                          title: Text(
+                            (msg == null || msg.isEmpty) ? 'お知らせ' : msg,
+                            style: const TextStyle(fontFamily: 'LINEseed'),
+                          ),
+                          subtitle: when.isEmpty ? null : Text(when),
+                          dense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 0,
+                            vertical: 4,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   // -------- Build --------
@@ -885,16 +881,23 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                           ?.cast<String, dynamic>();
                       DateTime? trialStart;
                       DateTime? trialEnd;
+                      String? trialStatus;
                       if (trialMap != null) {
                         final tsStart = trialMap['trialStart'];
                         final tsEnd = trialMap['trialEnd'];
+                        final tsStatus = trialMap["status"];
                         if (tsStart is Timestamp) {
                           trialStart = tsStart.toDate();
                         }
                         if (tsEnd is Timestamp) {
                           trialEnd = tsEnd.toDate();
                         }
+                        if (tsEnd is Timestamp) {
+                          trialStatus = tsStatus;
+                        }
                       }
+                      final size = MediaQuery.of(context).size;
+                      final isNarrow = size.width < 480;
 
                       return ListView(
                         children: [
@@ -902,51 +905,121 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                           ownerIsMe
                               ? Column(
                                   children: [
-                                    FilledButton.icon(
-                                      style: FilledButton.styleFrom(
-                                        backgroundColor: Colors.black,
-                                        foregroundColor: Colors.white,
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(
-                                            12,
+                                    SizedBox(
+                                      width: double.infinity,
+                                      child: FilledButton.icon(
+                                        style: FilledButton.styleFrom(
+                                          backgroundColor: Colors.black,
+                                          foregroundColor: Colors.white,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                          ),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 16,
+                                            vertical: 14,
                                           ),
                                         ),
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 16,
-                                          vertical: 14,
+                                        onPressed: () => Navigator.pushNamed(
+                                          context,
+                                          '/account',
+                                          arguments: {
+                                            "tenantId": widget.tenantId,
+                                          },
                                         ),
+                                        icon: const Icon(Icons.manage_accounts),
+                                        label: const Text('アカウント情報を確認'),
                                       ),
-                                      onPressed: () => Navigator.pushNamed(
-                                        context,
-                                        '/account',
-                                      ),
-                                      icon: const Icon(Icons.manage_accounts),
-                                      label: const Text('アカウント情報を確認'),
                                     ),
                                     const SizedBox(height: 10),
-                                    FilledButton.icon(
-                                      style: FilledButton.styleFrom(
-                                        backgroundColor: Colors.black,
-                                        foregroundColor: Colors.white,
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(
-                                            12,
+                                    isNarrow
+                                        ? Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.end,
+                                            children: [
+                                              Expanded(
+                                                child: FilledButton.icon(
+                                                  style: FilledButton.styleFrom(
+                                                    backgroundColor:
+                                                        Colors.black,
+                                                    foregroundColor:
+                                                        Colors.white,
+                                                    shape: RoundedRectangleBorder(
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            12,
+                                                          ),
+                                                    ),
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 16,
+                                                          vertical: 14,
+                                                        ),
+                                                  ),
+                                                  onPressed: () =>
+                                                      Navigator.pushNamed(
+                                                        context,
+                                                        '/tenant',
+                                                        arguments: {
+                                                          "tenantId":
+                                                              widget.tenantId,
+                                                        },
+                                                      ),
+                                                  icon: const Icon(
+                                                    Icons
+                                                        .store_mall_directory_outlined,
+                                                  ),
+                                                  label: const Text(
+                                                    'テナント情報を確認',
+                                                  ),
+                                                ),
+                                              ),
+
+                                              const SizedBox(width: 5),
+                                              IconButton(
+                                                onPressed:
+                                                    widget.tenantId == null
+                                                    ? null
+                                                    : _openAlertsPanel,
+                                                icon: const Icon(
+                                                  Icons.notifications_outlined,
+                                                ),
+                                              ),
+                                            ],
+                                          )
+                                        : SizedBox(
+                                            width: double.infinity,
+                                            child: FilledButton.icon(
+                                              style: FilledButton.styleFrom(
+                                                backgroundColor: Colors.black,
+                                                foregroundColor: Colors.white,
+                                                shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(12),
+                                                ),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 16,
+                                                      vertical: 14,
+                                                    ),
+                                              ),
+                                              onPressed: () =>
+                                                  Navigator.pushNamed(
+                                                    context,
+                                                    '/tenant',
+                                                    arguments: {
+                                                      "tenantId":
+                                                          widget.tenantId,
+                                                    },
+                                                  ),
+                                              icon: const Icon(
+                                                Icons
+                                                    .store_mall_directory_outlined,
+                                              ),
+                                              label: const Text('テナント情報を確認'),
+                                            ),
                                           ),
-                                        ),
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 16,
-                                          vertical: 14,
-                                        ),
-                                      ),
-                                      onPressed: () => Navigator.pushNamed(
-                                        context,
-                                        '/tenant',
-                                      ),
-                                      icon: const Icon(
-                                        Icons.store_mall_directory_outlined,
-                                      ),
-                                      label: const Text('テナント情報を確認'),
-                                    ),
                                   ],
                                 )
                               : const SizedBox(height: 4),
@@ -981,7 +1054,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                       const Spacer(),
                                       if (periodEnd != null)
                                         Text(
-                                          '次回: ${periodEnd.year}/${periodEnd.month.toString().padLeft(2, '0')}/${periodEnd.day.toString().padLeft(2, '0')}',
+                                          '次回の請求: ${periodEnd.year}/${periodEnd.month.toString().padLeft(2, '0')}/${periodEnd.day.toString().padLeft(2, '0')}',
                                           style: const TextStyle(
                                             color: Colors.black54,
                                           ),
@@ -991,13 +1064,15 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
 
                                   const SizedBox(height: 16),
 
-                                  if (trialEnd != null)
+                                  if (trialStatus == "trialing")
                                     TrialProgressBar(
                                       trialStart: trialStart,
                                       trialEnd: trialEnd!,
                                       totalDays: 90,
                                       onTap: () {},
                                     ),
+                                  if (trialStatus == "none")
+                                    Text("トライアル期間は終了しました"),
 
                                   const SizedBox(height: 12),
 
@@ -1026,6 +1101,27 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                   ),
 
                                   const SizedBox(height: 16),
+
+                                  if (currentPlan == "B") ...[
+                                    buildBPerksSection(
+                                      tenantRef: FirebaseFirestore.instance
+                                          .collection(uid)
+                                          .doc(widget.tenantId),
+                                      thanksRef: FirebaseFirestore.instance
+                                          .collection('publicThanks')
+                                          .doc(widget.tenantId),
+                                      lineUrlCtrl: _lineUrlCtrl,
+                                      primaryBtnStyle: FilledButton.styleFrom(
+                                        backgroundColor: Colors.black,
+                                        foregroundColor: Colors.white,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
 
                                   if (currentPlan == 'C') ...[
                                     buildCPerksSection(
@@ -1067,7 +1163,9 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                                 ? null
                                                 : _enterChangeMode,
                                             icon: const Icon(Icons.tune),
-                                            label: const Text('サブスクのプランを変更'),
+                                            label: currentPlan == ""
+                                                ? const Text('サブスクのプランを追加')
+                                                : const Text('サブスクのプランを変更'),
                                           ),
                                         ),
                                       ],
@@ -1260,50 +1358,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                               ),
                                             ],
                                           ),
-                                          const SizedBox(height: 6),
-                                          // Row(
-                                          //   children: [
-                                          //     const Icon(
-                                          //       Icons.schedule,
-                                          //       size: 18,
-                                          //     ),
-                                          //     const SizedBox(width: 6),
-                                          //     Expanded(
-                                          //       child: Text(
-                                          //         (pending.isEmpty)
-                                          //             ? '予約中の変更はありません'
-                                          //             : '予約中：$pendingPercent%（${_fmtDate(pendingStart!)} から）',
-                                          //         style: const TextStyle(
-                                          //           fontFamily: "LINEseed",
-                                          //         ),
-                                          //       ),
-                                          //     ),
-                                          //     if (pending.isNotEmpty)
-                                          //       TextButton.icon(
-                                          //         onPressed: () async {
-                                          //           await tenantRef.update({
-                                          //             'storeDeductionPending':
-                                          //                 FieldValue.delete(),
-                                          //           });
-                                          //           if (!context.mounted) {
-                                          //             return;
-                                          //           }
-                                          //           ScaffoldMessenger.of(
-                                          //             context,
-                                          //           ).showSnackBar(
-                                          //             const SnackBar(
-                                          //               content: Text(
-                                          //                 '変更予約を取り消しました',
-                                          //               ),
-                                          //             ),
-                                          //           );
-                                          //         },
-                                          //         icon: const Icon(Icons.clear),
-                                          //         label: const Text('変更予約を取消'),
-                                          //       ),
-                                          //   ],
-                                          // ),
-                                          const SizedBox(height: 8),
+
                                           const SizedBox(height: 12),
                                         ],
                                       );

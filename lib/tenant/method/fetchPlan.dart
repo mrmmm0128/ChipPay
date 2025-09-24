@@ -119,3 +119,33 @@ Future<bool> fetchIsCPlanById(String uid, String tenantId) {
   final ref = FirebaseFirestore.instance.collection(uid).doc(tenantId);
   return fetchIsCPlan(ref);
 }
+
+/// （既存互換）Bプラン判定
+bool _isB(Object? plan) {
+  final n = _norm(plan);
+  if (n.isEmpty) return false;
+  const aliases = {'b', 'bplan', 'planb', 'pro', 'standard'};
+  return aliases.contains(n);
+}
+
+bool isBPlanFromData(Map<String, dynamic>? data) {
+  final plan = data?['subscription']?['plan'] ?? data?['plan'];
+  return _isB(plan);
+}
+
+Future<bool> fetchIsBPlan(
+  DocumentReference<Map<String, dynamic>> tenantRef,
+) async {
+  final snap = await tenantRef.get();
+  if (!snap.exists) return false;
+  return isBPlanFromData(snap.data());
+}
+
+Stream<bool> watchIsBPlan(DocumentReference<Map<String, dynamic>> tenantRef) {
+  return tenantRef.snapshots().map((snap) => isBPlanFromData(snap.data()));
+}
+
+Future<bool> fetchIsBPlanById(String uid, String tenantId) {
+  final ref = FirebaseFirestore.instance.collection(uid).doc(tenantId);
+  return fetchIsBPlan(ref);
+}

@@ -6,8 +6,6 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:yourpay/tenant/newTenant/onboardingSheet.dart';
-import 'package:yourpay/tenant/newTenant/tenant_switch_drawer.dart';
-import 'package:yourpay/tenant/widget/store_home/drawer.dart';
 import 'package:yourpay/tenant/store_detail/tabs/srore_home_tab.dart';
 import 'package:yourpay/tenant/store_detail/tabs/store_qr_tab.dart';
 import 'package:yourpay/tenant/store_detail/tabs/store_setting_tab.dart';
@@ -267,7 +265,7 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
     user = FirebaseAuth.instance.currentUser!;
     print(user);
 
-    if (user != null && !_tenantInitialized) {
+    if (!_tenantInitialized) {
       _initialTenantFuture = _resolveInitialTenant(user);
     }
     ownerUid = user.uid;
@@ -294,8 +292,6 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
 
   // ★ 初期化完了前は setState しないで代入のみ。完了後に変化があれば setState。
   Future<void> _checkAdmin() async {
-    if (user == null) return;
-
     final token = await user.getIdTokenResult(); // 強制リフレッシュしない
     final email = (user.email ?? '').toLowerCase();
 
@@ -581,59 +577,6 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
     }
   }
 
-  // ---- テナント切替 ----
-  Future<void> _handleChangeTenant(String userUid, String id) async {
-    try {
-      final doc = await FirebaseFirestore.instance
-          .collection(userUid)
-          .doc(id)
-          .get();
-      final name = (doc.data()?['name'] as String?) ?? '店舗';
-      if (!mounted) return;
-      setState(() {
-        tenantId = id;
-        tenantName = name;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('切替に失敗: $e')));
-    }
-  }
-
-  // ---- Drawer フォールバック ----
-  Future<List<TenantOption>> _loadTenantOptionsFallback(String userUid) async {
-    final col = FirebaseFirestore.instance.collection(userUid);
-    final seen = <String>{};
-    final out = <TenantOption>[];
-
-    Future<void> addFrom(Query<Map<String, dynamic>> q) async {
-      final qs = await q.get();
-      for (final d in qs.docs) {
-        if (seen.add(d.id)) {
-          final data = d.data();
-          final name = (data['name'] as String?)?.trim();
-          out.add(
-            TenantOption(
-              id: d.id,
-              name: (name?.isNotEmpty ?? false) ? name! : '店舗',
-            ),
-          );
-        }
-      }
-    }
-
-    await addFrom(col.where('memberUids', arrayContains: userUid));
-    await addFrom(col.where('createdBy.uid', isEqualTo: userUid));
-
-    if (tenantId != null && !out.any((e) => e.id == tenantId)) {
-      out.add(TenantOption(id: tenantId!, name: (tenantName ?? '店舗')));
-    }
-    out.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-    return out;
-  }
-
   @override
   void dispose() {
     amountCtrl.dispose();
@@ -687,97 +630,6 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
     // 初期化済みなら通常描画（FutureBuilderを通さない）
     return Theme(data: _bwTheme(context), child: _buildScaffold(context, user));
   }
-
-  // Future<void> _openTenantSwitcherSheet() async {
-  //   await showModalBottomSheet(
-  //     context: context,
-  //     isScrollControlled: false,
-  //     backgroundColor: Colors.white,
-  //     shape: const RoundedRectangleBorder(
-  //       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-  //     ),
-  //     builder: (sheetCtx) {
-  //       final maxW = (MediaQuery.of(sheetCtx).size.width * 0.9).clamp(
-  //         320.0,
-  //         560.0,
-  //       );
-  //       return Theme(
-  //         data: _bwTheme(context),
-  //         child: SafeArea(
-  //           top: false,
-  //           child: Padding(
-  //             padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-  //             child: Center(
-  //               child: ConstrainedBox(
-  //                 constraints: BoxConstraints(maxWidth: maxW.toDouble()),
-  //                 child: Column(
-  //                   mainAxisSize: MainAxisSize.min,
-  //                   children: [
-  //                     Container(
-  //                       height: 4,
-  //                       width: 40,
-  //                       margin: const EdgeInsets.only(bottom: 12),
-  //                       decoration: BoxDecoration(
-  //                         color: Colors.black12,
-  //                         borderRadius: BorderRadius.circular(2),
-  //                       ),
-  //                     ),
-  //                     const Align(
-  //                       alignment: Alignment.centerLeft,
-  //                       child: Text(
-  //                         '店舗を選択',
-  //                         style: TextStyle(
-  //                           fontSize: 16,
-  //                           fontWeight: FontWeight.w700,
-  //                           fontFamily: 'LINEseed',
-  //                         ),
-  //                       ),
-  //                     ),
-  //                     const SizedBox(height: 8),
-
-  //                     // ここに TenantSwitcherBar をそのまま入れる
-  //                     TenantSwitcherBar(
-  //                       currentTenantId: tenantId,
-  //                       currentTenantName: tenantName,
-  //                       onChanged: (id, name) {
-  //                         // 従来（後方互換）
-  //                         if (id == tenantId) return;
-  //                         setState(() {
-  //                           tenantId = id;
-  //                           tenantName = name;
-  //                           ownerUid = FirebaseAuth
-  //                               .instance
-  //                               .currentUser
-  //                               ?.uid; // 自テナント扱い
-  //                           invited = false;
-  //                         });
-  //                         Navigator.of(sheetCtx).pop();
-  //                       },
-  //                       onChangedEx: (id, name, oUid, isInvited) {
-  //                         if (id == tenantId && oUid == ownerUid) {
-  //                           Navigator.of(sheetCtx).pop();
-  //                           return;
-  //                         }
-  //                         setState(() {
-  //                           tenantId = id;
-  //                           tenantName = name;
-  //                           ownerUid = oUid; // 実オーナーを保持
-  //                           invited = isInvited;
-  //                         });
-  //                         Navigator.of(sheetCtx).pop();
-  //                       },
-  //                       padding: const EdgeInsets.fromLTRB(0, 8, 0, 0),
-  //                     ),
-  //                   ],
-  //                 ),
-  //               ),
-  //             ),
-  //           ),
-  //         ),
-  //       );
-  //     },
-  //   );
-  // }
 
   // ---- Scaffoldの本体（安定化のため分離）----
   Widget _buildScaffold(BuildContext context, User user) {
@@ -865,10 +717,12 @@ class _StoreDetailSScreenState extends State<StoreDetailScreen> {
               ),
             ),
           ),
-          IconButton(
-            onPressed: tenantId == null ? null : _openAlertsPanel,
-            icon: const Icon(Icons.notifications_outlined),
-          ),
+          isNarrow
+              ? const SizedBox(width: 0)
+              : IconButton(
+                  onPressed: tenantId == null ? null : _openAlertsPanel,
+                  icon: const Icon(Icons.notifications_outlined),
+                ),
         ],
         bottom: const PreferredSize(
           preferredSize: Size.fromHeight(1),
