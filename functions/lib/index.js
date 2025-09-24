@@ -1185,41 +1185,64 @@ exports.stripeWebhook = functions
                         const totalMinor = (session.amount_total ?? 0); // JPY最小単位
                         const pct = Math.max(0, Math.min(100, commissionPercent));
                         const transferAmount = Math.floor(totalMinor * pct / 100);
-                        if (agencyAccountId && transferAmount > 0) {
-                            // PI を取って transfer_group を拾う（createInitialFeeCheckout で設定済み）
+                        // 既に代理店送金済みならスキップ（再実行防止）
+                        const already = (await tRef.get()).data()?.billing?.initialFee?.agencyTransfer?.id;
+                        if (!already && agencyAccountId && transferAmount > 0) {
+                            // 1) PaymentIntent から latest_charge を取得（charge.id が必要）
                             const piId = session.payment_intent;
-                            let transferGroup = undefined;
-                            if (piId) {
-                                const pi = await stripe.paymentIntents.retrieve(piId);
-                                transferGroup = pi.transfer_group ?? undefined;
+                            if (!piId) {
+                                console.warn('No payment_intent on session for initial_fee; skip transfer.');
                             }
-                            // 4) 代理店へ Transfer を作成
-                            const tr = await stripe.transfers.create({
-                                amount: transferAmount,
-                                currency: (session.currency ?? 'jpy'),
-                                destination: agencyAccountId,
-                                ...(transferGroup ? { transfer_group: transferGroup } : {}),
-                                metadata: {
-                                    purpose: 'initial_fee_agency_commission',
-                                    tenantId: tenantId,
-                                    agentId: agentId,
-                                    checkoutSessionId: session.id,
-                                },
-                            });
-                            // 5) Firestore へ記録（再実行防止のフラグにも使う）
-                            await tRef.set({
-                                billing: {
-                                    initialFee: {
-                                        agencyTransfer: {
-                                            id: tr.id,
-                                            amount: transferAmount,
-                                            currency: (session.currency ?? 'jpy').toUpperCase(),
-                                            destination: agencyAccountId,
-                                            created: admin.firestore.FieldValue.serverTimestamp(),
+                            else {
+                                const pi = await stripe.paymentIntents.retrieve(piId, { expand: ['latest_charge'] });
+                                const latest = pi.latest_charge;
+                                const chargeId = typeof latest === 'string'
+                                    ? latest
+                                    : latest && typeof latest === 'object'
+                                        ? latest.id
+                                        : undefined;
+                                if (!chargeId) {
+                                    console.warn(`No latest_charge on PI ${piId}; transfer skipped for now`);
+                                }
+                                else {
+                                    // 2) transfer_group（あれば引き継ぎ）
+                                    const transferGroup = pi.transfer_group ?? undefined;
+                                    // 3) 代理店へ Transfer を“予約”（資金が available になったら自動で成立）
+                                    //    - currency はチャージと同一
+                                    //    - idempotency で二重送金を防止
+                                    const idempotencyKey = `initialfee_transfer_${session.id}_${tenantId}_${agentId}`;
+                                    const tr = await stripe.transfers.create({
+                                        amount: transferAmount,
+                                        currency: (session.currency ?? 'jpy'),
+                                        destination: agencyAccountId,
+                                        ...(transferGroup ? { transfer_group: transferGroup } : {}),
+                                        source_transaction: chargeId, // ★ これで available 待ちの“予約”になる
+                                        metadata: {
+                                            purpose: 'initial_fee_agency_commission',
+                                            tenantId: tenantId,
+                                            agentId: agentId ?? '',
+                                            checkoutSessionId: session.id,
+                                            paymentIntentId: piId,
                                         },
-                                    },
-                                },
-                            }, { merge: true });
+                                    }, { idempotencyKey });
+                                    // 4) Firestore へ記録（送金済みフラグ）
+                                    await tRef.set({
+                                        billing: {
+                                            initialFee: {
+                                                agencyTransfer: {
+                                                    id: tr.id,
+                                                    amount: transferAmount,
+                                                    currency: (session.currency ?? 'jpy').toUpperCase(),
+                                                    destination: agencyAccountId,
+                                                    sourceCharge: chargeId,
+                                                    transferGroup: transferGroup ?? null,
+                                                    created: admin.firestore.FieldValue.serverTimestamp(),
+                                                },
+                                            },
+                                        },
+                                    }, { merge: true });
+                                }
+                            }
                         }
                     }
                     catch (e) {
@@ -1491,9 +1514,7 @@ exports.stripeWebhook = functions
                     inv.subscription) {
                     const sub = await stripe.subscriptions.retrieve(inv.subscription);
                     if (typeof sub.trial_end === "number" && sub.trial_end * 1000 <= Date.now()) {
-                        await stripe.customers.update(customerId, {
-                            metadata: { zotman_trial_used: "true" },
-                        });
+                        await stripe.customers.update(customerId, { metadata: { zotman_trial_used: "true" } });
                     }
                 }
             }
@@ -1502,6 +1523,9 @@ exports.stripeWebhook = functions
             }
             // 既存のテナント検索・invoices 保存
             const idxSnap = await db.collection("tenantIndex").get();
+            // この後の通知で使うために、処理対象の uid/tenantId を保持
+            let foundUid = null;
+            let foundTenantId = null;
             for (const d of idxSnap.docs) {
                 const data = d.data();
                 const uid = data.uid;
@@ -1559,15 +1583,100 @@ exports.stripeWebhook = functions
                             },
                         };
                     await writeIndexAndOwner(uid, tenantId, subPatch);
+                    // ================= ここから追記：支払成功時に代理店へ30%送金 =================
+                    try {
+                        if (type === "invoice.payment_succeeded" && inv.paid === true) {
+                            const amountPaid = (inv.amount_paid ?? 0);
+                            const chargeId = inv.charge ?? undefined;
+                            const subscriptionId = inv.subscription;
+                            if (amountPaid > 0 && chargeId) {
+                                // subscription から tenantId / uid / transfer_group を取得（メタが入っていれば使う）
+                                let useTenantId = tenantId;
+                                let useUid = uid;
+                                let transferGroup = undefined;
+                                if (subscriptionId) {
+                                    const subForTransfer = await stripe.subscriptions.retrieve(subscriptionId);
+                                    useTenantId = subForTransfer.metadata?.tenantId ?? useTenantId;
+                                    useUid = subForTransfer.metadata?.uid ?? useUid;
+                                    transferGroup = subForTransfer.metadata?.transfer_group;
+                                }
+                                // 念のため uid が未確定なら index で補完
+                                if (!useUid) {
+                                    const tRefIdx2 = await tenantRefByIndex(useTenantId);
+                                    useUid = tRefIdx2.parent.id;
+                                }
+                                // 代理店の Connect アカウントID 取得（tenants/{uid}/{tenantId}.agency → agencies/{agentId}.stripeAccountId）
+                                const tRef2 = db.collection(useUid).doc(useTenantId);
+                                const tSnap2 = await tRef2.get();
+                                const agency = (tSnap2.data()?.agency ?? {});
+                                const linked = agency?.linked === true;
+                                const agentId = agency?.agentId ?? undefined;
+                                let agencyAccountId;
+                                if (linked && agentId) {
+                                    const agentDoc = await db.collection("agencies").doc(agentId).get();
+                                    agencyAccountId = (agentDoc.exists ? agentDoc.data()?.stripeAccountId : undefined);
+                                }
+                                // 30%に固定
+                                const transferAmount = Math.floor(amountPaid * 0.30);
+                                // 二重送金防止（invoice.id をキーにして既存確認）
+                                const already = (tSnap2.data()?.subscriptionTransfers ?? {})[inv.id]?.id;
+                                if (agencyAccountId && transferAmount > 0 && !already) {
+                                    const currency = (inv.currency ?? "jpy").toLowerCase();
+                                    const idempotencyKey = `sub_transfer_${inv.id}_${useTenantId}_${agentId}`;
+                                    const tr = await stripe.transfers.create({
+                                        amount: transferAmount,
+                                        currency,
+                                        destination: agencyAccountId,
+                                        ...(transferGroup ? { transfer_group: transferGroup } : {}),
+                                        // 残高 available まで Stripe 側で自動待機
+                                        source_transaction: chargeId,
+                                        metadata: {
+                                            purpose: "subscription_agency_commission",
+                                            tenantId: useTenantId,
+                                            agentId: agentId ?? "",
+                                            invoiceId: inv.id,
+                                            subscriptionId: subscriptionId ?? "",
+                                            chargeId,
+                                        },
+                                    }, { idempotencyKey });
+                                    // Firestore に記録（再実行防止 & 監査用）
+                                    await tRef2.set({
+                                        subscriptionTransfers: {
+                                            [inv.id]: {
+                                                id: tr.id,
+                                                amount: transferAmount,
+                                                currency: currency.toUpperCase(),
+                                                destination: agencyAccountId,
+                                                transferGroup: transferGroup ?? null,
+                                                sourceCharge: chargeId,
+                                                created: admin.firestore.FieldValue.serverTimestamp(),
+                                            },
+                                        },
+                                    }, { merge: true });
+                                }
+                            }
+                        }
+                    }
+                    catch (e) {
+                        console.error("Failed to transfer subscription commission to agency:", e);
+                    }
+                    // ================= 追記ここまで =================
+                    // このテナントで見つかったのでループ終了
+                    foundUid = uid;
+                    foundTenantId = tenantId;
                     break;
                 }
             }
+            // 請求書メール通知（既存）
             try {
                 await sendInvoiceNotificationByCustomerId(customerId, inv, exports.RESEND_API_KEY.value());
             }
             catch (e) {
                 console.warn("[invoice mail] failed to send:", e);
             }
+            await docRef.set({ handled: true }, { merge: true });
+            res.sendStatus(200);
+            return;
         }
         /* ========== 5) Connect: アカウント状態 ========== */
         if (type === "account.updated") {
@@ -1925,6 +2034,7 @@ exports.cancelTenantAdminInvite = functions.https.onCall(async (data, context) =
     return { ok: true };
 });
 /* ===================== サブスク Checkout ===================== */
+/* ===================== サブスク Checkout ===================== */
 exports.createSubscriptionCheckout = functions
     .region("us-central1")
     .runWith({ secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL"] })
@@ -1954,20 +2064,20 @@ exports.createSubscriptionCheckout = functions
         });
         return { alreadySubscribed: true, portalUrl: portal.url };
     }
-    // ③ このテナントがトライアル可かどうか判定（"none" なら無効化）
+    // ③ トライアル可否
     const tRef = tenantRefByUid(uid, tenantId);
     const tSnap = await tRef.get();
     const tData = tSnap.data();
     const trialStatus = tData?.trial?.status ??
-        tData?.trialStatus ??
-        ""; // 未設定はトライアル可として扱う
+        tData?.trialStatus ?? "";
     const allowTrial = trialStatus !== "none";
     const successUrl = `${APP_BASE}#/store?tenantId=${tenantId}&event=initial_fee_paid`;
     const cancelUrl = `${APP_BASE}#/store?tenantId=${tenantId}&event=initial_fee_canceled`;
-    // ④ subscription_data を組み立て（allowTrial のときだけ trial_period_days を付与）
+    // ★ transfer_group のヒント（実送金は webhook 側）
+    const transferGroup = `subtg_${tenantId}_${Date.now()}`;
+    // ④ subscription_data
     const subscriptionData = {
-        metadata: { tenantId, plan, uid },
-        // trial_period_days は条件付きで付与
+        metadata: { tenantId, plan, uid, transfer_group: transferGroup },
         ...(allowTrial ? { trial_period_days: TRIAL_DAYS } : {}),
     };
     const session = await stripe.checkout.sessions.create({
@@ -1977,7 +2087,7 @@ exports.createSubscriptionCheckout = functions
         payment_method_collection: "always",
         allow_promotion_codes: true,
         // セッション自体にもメタデータ
-        metadata: { tenantId, plan, uid, trial_allowed: String(allowTrial) },
+        metadata: { tenantId, plan, uid, trial_allowed: String(allowTrial), transfer_group: transferGroup },
         subscription_data: subscriptionData,
         success_url: successUrl,
         cancel_url: cancelUrl,

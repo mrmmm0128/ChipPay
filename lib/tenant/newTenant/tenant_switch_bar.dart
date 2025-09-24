@@ -383,19 +383,47 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
     final agentCode = agentCtrl.text.trim();
     if (name.isEmpty) return;
 
+    // ❶ 代理店コードの事前チェック＆確認ダイアログ
+    bool shouldTryLinkAgency = false;
+    if (agentCode.isEmpty) {
+      final proceed = await _confirmProceedWithoutAgency(
+        context,
+        title: '代理店コードが未入力です',
+        message: '代理店と未連携のまま店舗を作成してよろしいですか？\n代理店の方から連携されている場合は、必ず入力ください',
+        proceedLabel: '未連携で作成',
+      );
+      if (!proceed) return;
+      shouldTryLinkAgency = false;
+    } else {
+      final exists = await _agencyCodeExists(agentCode);
+      if (!exists) {
+        final proceed = await _confirmProceedWithoutAgency(
+          context,
+          title: '代理店コードが見つかりません',
+          message:
+              '入力されたコード「$agentCode」は有効ではない可能性があります。\n'
+              '代理店と未連携のまま店舗を作成してよろしいですか？',
+          proceedLabel: '未連携で作成',
+        );
+        if (!proceed) return;
+        shouldTryLinkAgency = false;
+      } else {
+        shouldTryLinkAgency = true;
+      }
+    }
+
     final uid = _uid; // 既存のログイン中ユーザーUID
     if (uid == null) return;
 
     final tenantsCol = FirebaseFirestore.instance.collection(uid);
 
-    // ❶ 最初に「draft」で本体ドキュメントを作成（このIDを最後まで使う）
+    // ❷ 最初に「draft」で本体ドキュメントを作成（このIDを最後まで使う）
     final newRef = tenantsCol.doc(); // 自動ID
     final tenantId = newRef.id;
 
     final tenantIdDoc = FirebaseFirestore.instance
         .collection("tenantIndex")
         .doc(tenantId);
-
     await tenantIdDoc.set({"uid": uid});
 
     await newRef.set({
@@ -403,12 +431,11 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
       'status': 'draft', // 下書き保存
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
-
       'agency': {'code': agentCode, 'linked': false},
     }, SetOptions(merge: true));
 
-    // ❷ 代理店コードが入っていれば、agencies を検索してひも付け & contracts 生成
-    if (agentCode.isNotEmpty) {
+    // ❸ 代理店リンク（見つかった場合のみ実施）
+    if (shouldTryLinkAgency) {
       await _tryLinkAgencyByCode(
         code: agentCode,
         ownerUid: uid,
@@ -418,24 +445,23 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
       );
     }
 
-    // ❸ UI更新 & 親へ通知（★キーも更新）
+    // ❹ UI更新 & 親へ通知（★キーも更新）
     if (!mounted) return;
     setState(() {
       _selectedId = tenantId; // 旧互換
       _selectedKey = _keyOf(uid, tenantId); // 新
     });
 
-    // 親通知（拡張→従来の順）
     if (widget.onChangedEx != null) {
       widget.onChangedEx!(tenantId, name, uid, false);
     } else {
       widget.onChanged(tenantId, name);
     }
 
-    // ❹ オンボーディング開始（同じ tenantId を渡す）
+    // ❺ オンボーディング開始（同じ tenantId を渡す）
     await startOnboarding(tenantId, name);
 
-    // ❺ オンボーディング後の状態確認（draftのままでも下書きは残る）
+    // ❻ オンボーディング後の状態確認（draftのままでも下書きは残る）
     final snap = await newRef.get();
     if (!mounted) return;
 
@@ -451,6 +477,46 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
       );
       return;
     }
+  }
+
+  /// 代理店コードが存在するかを事前チェック（status=active のみ有効）
+  Future<bool> _agencyCodeExists(String code) async {
+    final qs = await FirebaseFirestore.instance
+        .collection('agencies')
+        .where('code', isEqualTo: code)
+        .where('status', isEqualTo: 'active')
+        .limit(1)
+        .get();
+    return qs.docs.isNotEmpty;
+  }
+
+  /// 「代理店未連携で続行しますか？」の確認ダイアログ
+  Future<bool> _confirmProceedWithoutAgency(
+    BuildContext context, {
+    required String title,
+    required String message,
+    String proceedLabel = '続行',
+  }) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.transparent,
+            title: Text(title),
+            content: Text(message),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('戻る'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: Text(proceedLabel),
+              ),
+            ],
+          ),
+        ) ??
+        false;
   }
 
   /// 代理店コードから agencies を逆引きし、見つかれば tenant にリンク & contracts を作成

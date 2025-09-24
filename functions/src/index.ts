@@ -1861,106 +1861,213 @@ await writeIndexAndOwner(uid!, tenantId, patch);
       }
 
       /* ========== 4) 請求書（支払成功/失敗） ========== */
-      if (type === "invoice.payment_succeeded" || type === "invoice.payment_failed") {
-        const inv = event.data.object as Stripe.Invoice;
-        const customerId = inv.customer as string;
+if (type === "invoice.payment_succeeded" || type === "invoice.payment_failed") {
+  const inv = event.data.object as Stripe.Invoice;
+  const customerId = inv.customer as string;
 
-        // トライアル明け最初の課金を検出 → Customerにフラグ
-        try {
-          if (
-            type === "invoice.payment_succeeded" &&
-            inv.paid &&
-            inv.billing_reason === "subscription_cycle" &&
-            inv.subscription
-          ) {
-            const sub = await stripe.subscriptions.retrieve(inv.subscription as string);
-            if (typeof sub.trial_end === "number" && sub.trial_end * 1000 <= Date.now()) {
-              await stripe.customers.update(customerId, {
-                metadata: { zotman_trial_used: "true" },
-              });
-            }
-          }
-        } catch (e) {
-          console.warn("Failed to mark zotman_trial_used on invoice.payment_succeeded:", e);
-        }
+  // トライアル明け最初の課金を検出 → Customerにフラグ
+  try {
+    if (
+      type === "invoice.payment_succeeded" &&
+      inv.paid &&
+      inv.billing_reason === "subscription_cycle" &&
+      inv.subscription
+    ) {
+      const sub = await stripe.subscriptions.retrieve(inv.subscription as string);
+      if (typeof sub.trial_end === "number" && sub.trial_end * 1000 <= Date.now()) {
+        await stripe.customers.update(customerId, { metadata: { zotman_trial_used: "true" } });
+      }
+    }
+  } catch (e) {
+    console.warn("Failed to mark zotman_trial_used on invoice.payment_succeeded:", e);
+  }
 
-        // 既存のテナント検索・invoices 保存
-        const idxSnap = await db.collection("tenantIndex").get();
-        for (const d of idxSnap.docs) {
-          const data: any = d.data();
-          const uid = data.uid as string;
-          const tenantId = data.tenantId as string;
+  // 既存のテナント検索・invoices 保存
+  const idxSnap = await db.collection("tenantIndex").get();
 
-          const t = await db.collection(uid).doc(tenantId).get();
-          if (t.exists && t.get("subscription.stripeCustomerId") === customerId) {
-            const createdTs = tsFromSec(inv.created) ?? nowTs();
-            const line0 = inv.lines?.data?.[0]?.period;
-            const psTs = tsFromSec((line0?.start as any) ?? inv.created) ?? createdTs;
-            const peTs = tsFromSec((line0?.end as any) ?? inv.created) ?? createdTs;
+  // この後の通知で使うために、処理対象の uid/tenantId を保持
+  let foundUid: string | null = null;
+  let foundTenantId: string | null = null;
 
-            // invoices コレクションは従来どおり保存
-            await db
-              .collection(uid)
-              .doc(tenantId)
-              .collection("invoices")
-              .doc(inv.id)
-              .set(
-                {
-                  amount_due: inv.amount_due,
-                  amount_paid: inv.amount_paid,
-                  currency: (inv.currency ?? "jpy").toUpperCase(),
+  for (const d of idxSnap.docs) {
+    const data: any = d.data();
+    const uid = data.uid as string;
+    const tenantId = data.tenantId as string;
+
+    const t = await db.collection(uid).doc(tenantId).get();
+    if (t.exists && t.get("subscription.stripeCustomerId") === customerId) {
+      const createdTs = tsFromSec(inv.created) ?? nowTs();
+      const line0 = inv.lines?.data?.[0]?.period;
+      const psTs = tsFromSec((line0?.start as any) ?? inv.created) ?? createdTs;
+      const peTs = tsFromSec((line0?.end as any) ?? inv.created) ?? createdTs;
+
+      // invoices コレクションは従来どおり保存
+      await db
+        .collection(uid)
+        .doc(tenantId)
+        .collection("invoices")
+        .doc(inv.id)
+        .set(
+          {
+            amount_due: inv.amount_due,
+            amount_paid: inv.amount_paid,
+            currency: (inv.currency ?? "jpy").toUpperCase(),
+            status: inv.status,
+            hosted_invoice_url: inv.hosted_invoice_url,
+            invoice_pdf: inv.invoice_pdf,
+            created: createdTs,
+            period_start: psTs,
+            period_end: peTs,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+      // ★ 未払い/解消 と 次回再試行（失敗時）・直近請求サマリを保存（owner & index）
+      const nextAttemptTs = tsFromSec(inv.next_payment_attempt);
+      const subPatch =
+        type === "invoice.payment_failed"
+          ? {
+              subscription: {
+                overdue: true,
+                latestInvoice: {
+                  id: inv.id,
                   status: inv.status,
-                  hosted_invoice_url: inv.hosted_invoice_url,
-                  invoice_pdf: inv.invoice_pdf,
-                  created: createdTs,
-                  period_start: psTs,
-                  period_end: peTs,
-                  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                  amountDue: inv.amount_due ?? null,
+                  hostedInvoiceUrl: inv.hosted_invoice_url ?? null,
+                },
+                ...putIf(nextAttemptTs, { nextPaymentAttemptAt: nextAttemptTs! }),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              },
+            }
+          : {
+              subscription: {
+                overdue: false,
+                latestInvoice: {
+                  id: inv.id,
+                  status: inv.status,
+                  amountPaid: inv.amount_paid ?? null,
+                  hostedInvoiceUrl: inv.hosted_invoice_url ?? null,
+                },
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              },
+            };
+
+      await writeIndexAndOwner(uid, tenantId, subPatch);
+
+      // ================= ここから追記：支払成功時に代理店へ30%送金 =================
+      try {
+        if (type === "invoice.payment_succeeded" && inv.paid === true) {
+          const amountPaid = (inv.amount_paid ?? 0) as number;
+          const chargeId = (inv.charge as string | undefined) ?? undefined;
+          const subscriptionId = inv.subscription as (string | undefined);
+
+          if (amountPaid > 0 && chargeId) {
+            // subscription から tenantId / uid / transfer_group を取得（メタが入っていれば使う）
+            let useTenantId: string | undefined = tenantId;
+            let useUid: string | undefined = uid;
+            let transferGroup: string | undefined = undefined;
+
+            if (subscriptionId) {
+              const subForTransfer = await stripe.subscriptions.retrieve(subscriptionId);
+              useTenantId = (subForTransfer.metadata?.tenantId as string | undefined) ?? useTenantId;
+              useUid = (subForTransfer.metadata?.uid as string | undefined) ?? useUid;
+              transferGroup = subForTransfer.metadata?.transfer_group as (string | undefined);
+            }
+
+            // 念のため uid が未確定なら index で補完
+            if (!useUid) {
+              const tRefIdx2 = await tenantRefByIndex(useTenantId!);
+              useUid = tRefIdx2.parent!.id;
+            }
+
+            // 代理店の Connect アカウントID 取得（tenants/{uid}/{tenantId}.agency → agencies/{agentId}.stripeAccountId）
+            const tRef2 = db.collection(useUid!).doc(useTenantId!);
+            const tSnap2 = await tRef2.get();
+            const agency = (tSnap2.data()?.agency ?? {}) as any;
+            const linked = agency?.linked === true;
+            const agentId = (agency?.agentId as string | undefined) ?? undefined;
+
+            let agencyAccountId: string | undefined;
+            if (linked && agentId) {
+              const agentDoc = await db.collection("agencies").doc(agentId).get();
+              agencyAccountId = (agentDoc.exists ? agentDoc.data()?.stripeAccountId : undefined) as (string | undefined);
+            }
+
+            // 30%に固定
+            const transferAmount = Math.floor(amountPaid * 0.30);
+
+            // 二重送金防止（invoice.id をキーにして既存確認）
+            const already = (tSnap2.data()?.subscriptionTransfers ?? {})[inv.id]?.id as (string | undefined);
+
+            if (agencyAccountId && transferAmount > 0 && !already) {
+              const currency = (inv.currency ?? "jpy").toLowerCase();
+              const idempotencyKey = `sub_transfer_${inv.id}_${useTenantId}_${agentId}`;
+
+              const tr = await stripe.transfers.create(
+                {
+                  amount: transferAmount,
+                  currency,
+                  destination: agencyAccountId,
+                  ...(transferGroup ? { transfer_group: transferGroup } : {}),
+                  // 残高 available まで Stripe 側で自動待機
+                  source_transaction: chargeId,
+                  metadata: {
+                    purpose: "subscription_agency_commission",
+                    tenantId: useTenantId!,
+                    agentId: agentId ?? "",
+                    invoiceId: inv.id,
+                    subscriptionId: subscriptionId ?? "",
+                    chargeId,
+                  },
+                },
+                { idempotencyKey }
+              );
+
+              // Firestore に記録（再実行防止 & 監査用）
+              await tRef2.set(
+                {
+                  subscriptionTransfers: {
+                    [inv.id]: {
+                      id: tr.id,
+                      amount: transferAmount,
+                      currency: currency.toUpperCase(),
+                      destination: agencyAccountId,
+                      transferGroup: transferGroup ?? null,
+                      sourceCharge: chargeId,
+                      created: admin.firestore.FieldValue.serverTimestamp(),
+                    },
+                  },
                 },
                 { merge: true }
               );
-
-            // ★ 未払い/解消 と 次回再試行（失敗時）・直近請求サマリを保存（owner & index）
-            const nextAttemptTs = tsFromSec(inv.next_payment_attempt);
-            const subPatch =
-              type === "invoice.payment_failed"
-                ? {
-                    subscription: {
-                      overdue: true,
-                      latestInvoice: {
-                        id: inv.id,
-                        status: inv.status,
-                        amountDue: inv.amount_due ?? null,
-                        hostedInvoiceUrl: inv.hosted_invoice_url ?? null,
-                      },
-                      ...putIf(nextAttemptTs, { nextPaymentAttemptAt: nextAttemptTs! }),
-                      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                    },
-                  }
-                : {
-                    subscription: {
-                      overdue: false,
-                      latestInvoice: {
-                        id: inv.id,
-                        status: inv.status,
-                        amountPaid: inv.amount_paid ?? null,
-                        hostedInvoiceUrl: inv.hosted_invoice_url ?? null,
-                      },
-                      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                    },
-                  };
-
-            await writeIndexAndOwner(uid, tenantId, subPatch);
-            break;
+            }
           }
-          
         }
-        try {
+      } catch (e) {
+        console.error("Failed to transfer subscription commission to agency:", e);
+      }
+      // ================= 追記ここまで =================
+
+      // このテナントで見つかったのでループ終了
+      foundUid = uid;
+      foundTenantId = tenantId;
+      break;
+    }
+  }
+
+  // 請求書メール通知（既存）
+  try {
     await sendInvoiceNotificationByCustomerId(customerId, inv, RESEND_API_KEY.value());
   } catch (e) {
     console.warn("[invoice mail] failed to send:", e);
   }
-      }
+
+  await docRef.set({ handled: true }, { merge: true });
+  res.sendStatus(200);
+  return;
+}
+
 
       /* ========== 5) Connect: アカウント状態 ========== */
 if (type === "account.updated") {
@@ -2405,6 +2512,8 @@ export const cancelTenantAdminInvite = functions.https.onCall(async (data, conte
 
 /* ===================== サブスク Checkout ===================== */
 
+/* ===================== サブスク Checkout ===================== */
+
 export const createSubscriptionCheckout = functions
   .region("us-central1")
   .runWith({ secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL"] })
@@ -2446,24 +2555,24 @@ export const createSubscriptionCheckout = functions
       return { alreadySubscribed: true, portalUrl: portal.url };
     }
 
-    // ③ このテナントがトライアル可かどうか判定（"none" なら無効化）
+    // ③ トライアル可否
     const tRef = tenantRefByUid(uid, tenantId);
     const tSnap = await tRef.get();
     const tData = tSnap.data() as any | undefined;
     const trialStatus: string =
       (tData?.trial?.status as string | undefined) ??
-      (tData?.trialStatus as string | undefined) ??
-      ""; // 未設定はトライアル可として扱う
-
+      (tData?.trialStatus as string | undefined) ?? "";
     const allowTrial = trialStatus !== "none";
 
     const successUrl = `${APP_BASE}#/store?tenantId=${tenantId}&event=initial_fee_paid`;
     const cancelUrl  = `${APP_BASE}#/store?tenantId=${tenantId}&event=initial_fee_canceled`;
 
-    // ④ subscription_data を組み立て（allowTrial のときだけ trial_period_days を付与）
+    // ★ transfer_group のヒント（実送金は webhook 側）
+    const transferGroup = `subtg_${tenantId}_${Date.now()}`;
+
+    // ④ subscription_data
     const subscriptionData: Stripe.Checkout.SessionCreateParams.SubscriptionData = {
-      metadata: { tenantId, plan, uid },
-      // trial_period_days は条件付きで付与
+      metadata: { tenantId, plan, uid, transfer_group: transferGroup },
       ...(allowTrial ? { trial_period_days: TRIAL_DAYS } : {}),
     };
 
@@ -2475,10 +2584,9 @@ export const createSubscriptionCheckout = functions
       allow_promotion_codes: true,
 
       // セッション自体にもメタデータ
-      metadata: { tenantId, plan, uid, trial_allowed: String(allowTrial) },
+      metadata: { tenantId, plan, uid, trial_allowed: String(allowTrial), transfer_group: transferGroup },
 
       subscription_data: subscriptionData,
-
       success_url: successUrl,
       cancel_url: cancelUrl,
     });
@@ -2486,6 +2594,7 @@ export const createSubscriptionCheckout = functions
     await upsertTenantIndex(uid, tenantId);
     return { url: session.url };
   });
+
 
 
 // Firestore へ保存する統一スキーマを生成

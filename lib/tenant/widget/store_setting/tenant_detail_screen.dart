@@ -249,7 +249,7 @@ class _AccountDetailScreenState extends State<tenantDetailScreen> {
           }
 
           return AlertDialog(
-            title: const Text('入金（Payout）履歴'),
+            title: const Text('入金履歴'),
             content: SizedBox(
               width: 700,
               height: 520,
@@ -1500,7 +1500,7 @@ class _AccountDetailScreenState extends State<tenantDetailScreen> {
                   children: [
                     _StripeRow(
                       icon: Icons.account_balance_wallet,
-                      title: '入金（Payout）履歴',
+                      title: '入金履歴',
                       subtitle: '接続アカウントへの入金と、その内訳明細を確認します。',
                       trailing: FilledButton(
                         onPressed: (_tenantId == null || _loadingPayouts)
@@ -1538,6 +1538,7 @@ class _AccountDetailScreenState extends State<tenantDetailScreen> {
                             : const Text('変更'),
                       ),
                     ),
+                    const SizedBox(height: 10),
                     _StripeRow(
                       icon: Icons.event_available,
                       title: '請求予定を確認',
@@ -1583,11 +1584,11 @@ class _AccountDetailScreenState extends State<tenantDetailScreen> {
                       icon: Icons.account_balance,
                       title: 'コネクトアカウント',
                       subtitle: 'チップ受け取り口座を確認する。',
-                      trailing: OutlinedButton(
-                        onPressed: (_tenantId == null || _openingConnectPortal)
+                      trailing: FilledButton(
+                        onPressed: (_tenantId == null || _loadingInvoices)
                             ? null
-                            : _openConnectPortal,
-                        child: _openingConnectPortal
+                            : () => _openConnectPortal,
+                        child: _loadingInvoices
                             ? const SizedBox(
                                 width: 16,
                                 height: 16,

@@ -1,5 +1,14 @@
 {
   "projects": {
     "default": "muscleshare-b34dd"
+  },
+  "targets": {
+    "muscleshare-b34dd": {
+      "hosting": {
+        "tipri-app": [
+          "tipri-app"
+        ]
+      }
+    }
   }
 }
