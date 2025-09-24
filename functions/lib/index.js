@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createConnectAccountLink = exports.createCustomerPortalSession = exports.createInitialFeeCheckout = exports.upsertConnectedAccount = exports.listInvoices = exports.changeSubscriptionPlan = exports.createSubscriptionCheckout = exports.cancelTenantAdminInvite = exports.acceptTenantAdminInvite = exports.inviteTenantAdmin = exports.stripeWebhook = exports.onTipSucceededSendMailV2 = exports.createStoreTipSessionPublic = exports.createTipSessionPublic = exports.setAdminByEmail = exports.agentLogin = exports.adminSetAgencyPassword = exports.RESEND_API_KEY = void 0;
+exports.createConnectAccountLink = exports.createCustomerPortalSession = exports.createInitialFeeCheckout = exports.upsertConnectedAccount = exports.upsertAgencyConnectedAccount = exports.listInvoices = exports.getConnectPayoutDetails = exports.listConnectPayouts = exports.getUpcomingInvoiceByCustomer = exports.cancelSubscription = exports.changeSubscriptionPlan = exports.createSubscriptionCheckout = exports.cancelTenantAdminInvite = exports.acceptTenantAdminInvite = exports.inviteTenantAdmin = exports.stripeWebhook = exports.onTipSucceededSendMailV2 = exports.createStoreTipSessionPublic = exports.createTipSessionPublic = exports.setAdminByEmail = exports.agentLogin = exports.adminSetAgencyPassword = exports.RESEND_API_KEY = void 0;
 exports.assertTenantAdmin = assertTenantAdmin;
 exports.sendInvoiceNotificationByCustomerId = sendInvoiceNotificationByCustomerId;
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -287,6 +287,29 @@ async function pickEffectiveRule(tenantId, at, uid) {
         effectiveFrom: null,
     };
 }
+// どこか共通 utils へ
+function deriveConnectStatus(acct) {
+    const r = acct.requirements;
+    // 完全に有効
+    if (acct.charges_enabled && acct.payouts_enabled)
+        return "active";
+    // 入力が必要（不足項目あり/期限切れ）
+    if ((r.past_due?.length ?? 0) > 0)
+        return "action_required";
+    if ((r.currently_due?.length ?? 0) > 0)
+        return "action_required";
+    // 申請中（審査待ち）
+    if ((r.pending_verification?.length ?? 0) > 0)
+        return "pending";
+    // 申請完了しているが、まだ有効化されていない（審査中等）
+    if (acct.details_submitted && !acct.payouts_enabled)
+        return "pending";
+    // Stripe が利用停止にしている等
+    if (r.disabled_reason)
+        return "disabled";
+    // どれにも当てはまらない場合は pending 扱い
+    return "pending";
+}
 function splitMinor(amountMinor, percent, fixedMinor) {
     const percentPart = Math.floor(amountMinor * (Math.max(0, percent) / 100));
     const store = Math.min(Math.max(0, amountMinor), Math.max(0, percentPart + Math.max(0, fixedMinor)));
@@ -399,14 +422,14 @@ exports.createTipSessionPublic = functions
     const tenantName = tDoc.data()?.name ?? "";
     const sub = (tDoc.data()?.subscription ?? {});
     const plan = (sub.plan ?? "A").toUpperCase();
-    const percent = typeof sub.feePercent === "number" ? sub.feePercent : plan === "B" ? 15 : plan === "C" ? 10 : 20;
+    const percent = typeof sub.feePercent === "number" ? sub.feePercent : plan === "B" ? 20 : plan === "C" ? 15 : 35;
     const appFee = calcApplicationFee(amount, { percent, fixed: 0 });
     const tipRef = tRef.collection("tips").doc();
     await tipRef.set({
         tenantId,
         employeeId,
         amount,
-        payerMessage: payerMessage,
+        payerMessage,
         currency: "JPY",
         status: "pending",
         recipient: { type: "employee", employeeId, employeeName },
@@ -414,20 +437,19 @@ exports.createTipSessionPublic = functions
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
     const stripe = stripeClient();
-    const FRONTEND_BASE_URL = requireEnv("FRONTEND_BASE_URL");
-    // ▼ ここがポイント：完了ページ(TipCompletePage)にそのまま着地
+    const FRONTEND_BASE_URL = requireEnv("FRONTEND_BASE_URL").replace(/\/+$/, "");
     const successUrl = `${FRONTEND_BASE_URL}#/p` +
         `?t=${encodeURIComponent(tenantId)}` +
         `&thanks=true` +
         `&amount=${encodeURIComponent(String(amount))}` +
         `&employeeName=${encodeURIComponent(employeeName)}` +
-        `&tenantName=${encodeURIComponent(tenantName)}&u=${uid}`;
+        `&tenantName=${encodeURIComponent(tenantName)}`;
     const cancelUrl = `${FRONTEND_BASE_URL}#/p` +
         `?t=${encodeURIComponent(tenantId)}` +
         `&canceled=true`;
+    // ---- Direct charges: 接続アカウントでセッション作成（stripeAccount: acctId）----
     const session = await stripe.checkout.sessions.create({
         mode: "payment",
-        payment_method_types: ["card", "link"],
         line_items: [
             {
                 price_data: {
@@ -450,9 +472,12 @@ exports.createTipSessionPublic = functions
             feePercentApplied: String(percent),
         },
         payment_intent_data: {
+            // アプリ手数料は Direct でも有効（プラットフォームに入る）
             application_fee_amount: appFee,
-            transfer_data: { destination: acctId },
         },
+    }, {
+        // ← これが Direct charges の肝
+        stripeAccount: acctId,
     });
     return { checkoutUrl: session.url, sessionId: session.id, tipDocId: tipRef.id };
 });
@@ -483,10 +508,9 @@ exports.createStoreTipSessionPublic = functions
     }
     const sub = (tDoc.data()?.subscription ?? {});
     const plan = (sub.plan ?? "A").toUpperCase();
-    const percent = typeof sub.feePercent === "number" ? sub.feePercent : (plan === "B" ? 15 : plan === "C" ? 10 : 20);
+    const percent = typeof sub.feePercent === "number" ? sub.feePercent : (plan === "B" ? 20 : plan === "C" ? 15 : 35);
     const appFee = calcApplicationFee(amount, { percent, fixed: 0 });
     const storeName = tDoc.data()?.name ?? tenantId;
-    const uid = tRef.parent.id;
     const tipRef = tRef.collection("tips").doc();
     await tipRef.set({
         tenantId,
@@ -498,24 +522,23 @@ exports.createStoreTipSessionPublic = functions
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
     const stripe = stripeClient();
-    // === ここで URL を関数内で完成させる ===
     const BASE = requireEnv("FRONTEND_BASE_URL").replace(/\/+$/, "");
     const successParams = new URLSearchParams({
         t: tenantId,
         thanks: "true",
-        tenantName: storeName, // 表示用（任意）
-        amount: String(amount), // 表示用（任意）
+        tenantName: storeName,
+        amount: String(amount),
     }).toString();
     const cancelParams = new URLSearchParams({
         t: tenantId,
         canceled: "true",
-        tenantName: storeName, // 表示用（任意）
+        tenantName: storeName,
     }).toString();
     const successUrl = `${BASE}#/p?${successParams}`;
     const cancelUrl = `${BASE}#/p?${cancelParams}`;
+    // ---- Direct charges: 接続アカウントでセッション作成（stripeAccount: acctId）----
     const session = await stripe.checkout.sessions.create({
         mode: "payment",
-        payment_method_types: ["card", "link"],
         line_items: [
             {
                 price_data: {
@@ -537,9 +560,11 @@ exports.createStoreTipSessionPublic = functions
             feePercentApplied: String(percent),
         },
         payment_intent_data: {
-            transfer_data: { destination: acctId },
             application_fee_amount: appFee,
         },
+    }, {
+        // ← これが Direct charges の肝
+        stripeAccount: acctId,
     });
     return { checkoutUrl: session.url, sessionId: session.id, tipDocId: tipRef.id };
 });
@@ -980,7 +1005,6 @@ async function sendInvoiceNotificationByCustomerId(customerId, inv, resendApiKey
     }
     catch { }
 }
-/* ===================== ここまで支払 ===================== */
 /* ===================== Stripe Webhook ===================== */
 exports.stripeWebhook = functions
     .region("us-central1")
@@ -1058,7 +1082,12 @@ exports.stripeWebhook = functions
         /* ========== 1) Checkout 完了 ========== */
         if (type === "checkout.session.completed") {
             const session = event.data.object;
-            // A. サブスク
+            // ===== Connect 文脈の決定 =====
+            // event.account があれば、その接続アカウントで作られた決済（Direct の可能性が高い）
+            const connectAcctId = event.account;
+            // PaymentIntent/PaymentMethod/Charge を取得する時にだけ使う（Subscriptionには使わない）
+            const requestOptionsPayment = connectAcctId ? { stripeAccount: connectAcctId } : undefined;
+            // ===== A. サブスク =====
             if (session.mode === "subscription") {
                 const tenantId = session.metadata?.tenantId;
                 const uidMeta = session.metadata?.uid;
@@ -1069,22 +1098,21 @@ exports.stripeWebhook = functions
                     console.error("subscription checkout completed but missing tenantId or subscriptionId");
                 }
                 else {
+                    // ★ Subscription は通常プラットフォーム側のオブジェクト。
+                    //   ここでは requestOptions を付けない（付けると No such subscription になり得る）
                     const sub = await stripe.subscriptions.retrieve(subscriptionId);
                     let feePercent;
                     if (plan) {
                         const planSnap = await db.collection("billingPlans").doc(String(plan)).get();
-                        feePercent = planSnap.exists
-                            ? planSnap.data()?.feePercent
-                            : undefined;
+                        feePercent = planSnap.exists ? planSnap.data()?.feePercent : undefined;
                     }
-                    // uid の確定
+                    // uid 確定
                     let uid = uidMeta;
                     if (!uid) {
                         const tRefIdx = await tenantRefByIndex(tenantId);
                         uid = tRefIdx.parent.id;
                     }
                     const periodEndTs = tsFromSec(sub.current_period_end);
-                    // ★ ここでは owner側のみ（下の subscription.updated でも反映されます）
                     await tenantRefByUid(uid, tenantId).set({
                         subscription: {
                             plan,
@@ -1092,7 +1120,7 @@ exports.stripeWebhook = functions
                             stripeCustomerId: customerId,
                             stripeSubscriptionId: sub.id,
                             ...putIf(periodEndTs, { currentPeriodEnd: periodEndTs, nextPaymentAt: periodEndTs }),
-                            overdue: sub.status === "past_due" || sub.status === "unpaid", // ★追加
+                            overdue: sub.status === "past_due" || sub.status === "unpaid",
                             ...(typeof feePercent === "number" ? { feePercent } : {}),
                         },
                     }, { merge: true });
@@ -1101,7 +1129,7 @@ exports.stripeWebhook = functions
                 res.sendStatus(200);
                 return;
             }
-            // B. 初期費用（mode=payment & kind=initial_fee）
+            // ===== B. 初期費用（mode=payment & kind=initial_fee） =====
             if (session.mode === "payment") {
                 let tenantId = session.metadata?.tenantId ??
                     session.client_reference_id;
@@ -1109,13 +1137,13 @@ exports.stripeWebhook = functions
                 let isInitialFee = false;
                 const paymentIntentId = session.payment_intent;
                 if (paymentIntentId) {
-                    const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
-                    const kind = pi.metadata?.kind ??
-                        session.metadata?.kind;
+                    // ★ Direct の場合に備えて requestOptionsPayment を付与
+                    const pi = await stripe.paymentIntents.retrieve(paymentIntentId, requestOptionsPayment);
+                    const kind = pi.metadata?.kind ?? session.metadata?.kind;
                     if (!tenantId)
-                        tenantId = pi.metadata?.tenantId;
+                        tenantId = pi.metadata?.tenantId ?? undefined;
                     if (!uidMeta)
-                        uidMeta = pi.metadata?.uid;
+                        uidMeta = pi.metadata?.uid ?? undefined;
                     isInitialFee = kind === "initial_fee";
                 }
                 if (isInitialFee && tenantId) {
@@ -1136,17 +1164,72 @@ exports.stripeWebhook = functions
                             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                         },
                         billing: {
-                            initialFee: {
-                                status: "paid"
-                            }
-                        }
+                            initialFee: { status: "paid" },
+                        },
                     }, { merge: true });
                     await docRef.set({ handled: true }, { merge: true });
+                    try {
+                        // 1) 代理店リンク情報の取得（tenant doc の agency）
+                        const tSnap = await tRef.get();
+                        const agency = (tSnap.data()?.agency ?? {});
+                        const linked = agency?.linked === true;
+                        const commissionPercent = Number(agency?.commissionPercent ?? 0);
+                        const agentId = agency?.agentId ?? undefined;
+                        // 2) 代理店の Connect アカウントIDを agencies/{agentId} から取得
+                        let agencyAccountId;
+                        if (linked && agentId) {
+                            const agentDoc = await admin.firestore().collection('agencies').doc(agentId).get();
+                            agencyAccountId = (agentDoc.exists ? agentDoc.data()?.stripeAccountId : undefined);
+                        }
+                        // 3) 送金実行条件チェック
+                        const totalMinor = (session.amount_total ?? 0); // JPY最小単位
+                        const pct = Math.max(0, Math.min(100, commissionPercent));
+                        const transferAmount = Math.floor(totalMinor * pct / 100);
+                        if (agencyAccountId && transferAmount > 0) {
+                            // PI を取って transfer_group を拾う（createInitialFeeCheckout で設定済み）
+                            const piId = session.payment_intent;
+                            let transferGroup = undefined;
+                            if (piId) {
+                                const pi = await stripe.paymentIntents.retrieve(piId);
+                                transferGroup = pi.transfer_group ?? undefined;
+                            }
+                            // 4) 代理店へ Transfer を作成
+                            const tr = await stripe.transfers.create({
+                                amount: transferAmount,
+                                currency: (session.currency ?? 'jpy'),
+                                destination: agencyAccountId,
+                                ...(transferGroup ? { transfer_group: transferGroup } : {}),
+                                metadata: {
+                                    purpose: 'initial_fee_agency_commission',
+                                    tenantId: tenantId,
+                                    agentId: agentId,
+                                    checkoutSessionId: session.id,
+                                },
+                            });
+                            // 5) Firestore へ記録（再実行防止のフラグにも使う）
+                            await tRef.set({
+                                billing: {
+                                    initialFee: {
+                                        agencyTransfer: {
+                                            id: tr.id,
+                                            amount: transferAmount,
+                                            currency: (session.currency ?? 'jpy').toUpperCase(),
+                                            destination: agencyAccountId,
+                                            created: admin.firestore.FieldValue.serverTimestamp(),
+                                        },
+                                    },
+                                },
+                            }, { merge: true });
+                        }
+                    }
+                    catch (e) {
+                        console.error('Failed to transfer commission to agency:', e);
+                    }
                     res.sendStatus(200);
                     return;
                 }
             }
-            // C. チップ（mode=payment の通常ルート）
+            // ===== C. チップ（mode=payment の通常ルート） =====
             const sid = session.id;
             const tenantIdMeta = session.metadata?.tenantId;
             const employeeId = session.metadata?.employeeId;
@@ -1185,7 +1268,6 @@ exports.stripeWebhook = functions
                     sessionId: sid,
                     amount: session.amount_total ?? 0,
                     currency: (session.currency ?? "jpy").toUpperCase(),
-                    status: "succeeded",
                     stripePaymentIntentId: payIntentId ?? "",
                     recipient,
                     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1208,21 +1290,17 @@ exports.stripeWebhook = functions
                         },
                     }, { merge: true });
                 }
+                // ===== 料金・決済手段の詳細を付与（必要なときだけ retrieve） =====
                 try {
                     if (payIntentId) {
-                        // 支払い詳細を取る：payment_method と latest_charge を展開
                         const pi = await stripe.paymentIntents.retrieve(payIntentId, {
-                            expand: [
-                                "payment_method",
-                                "latest_charge",
-                                "latest_charge.balance_transaction",
-                            ],
-                        }, requestOptions // ← Connect対応
-                        );
-                        const latestCharge = (typeof pi.latest_charge === "object"
-                            ? pi.latest_charge
-                            : null) || null;
-                        // ====== Stripe手数料など（既存ロジック） ======
+                            expand: ["payment_method", "latest_charge", "latest_charge.balance_transaction"],
+                        }, 
+                        // ★ Direct の場合のみ requestOptionsPayment を使う（Destination/Platform でも harmless）
+                        // @ts-ignore stripe-node 型では第3引数 requestOptions だが overload により OK
+                        requestOptionsPayment);
+                        const latestCharge = (typeof pi.latest_charge === "object" ? pi.latest_charge : null) || null;
+                        // Stripe手数料など
                         const bt = latestCharge?.balance_transaction;
                         const stripeFee = bt?.fee ?? 0;
                         const stripeFeeCurrency = bt?.currency?.toUpperCase() ?? (session.currency ?? "jpy").toUpperCase();
@@ -1231,20 +1309,16 @@ exports.stripeWebhook = functions
                         const storeCut = splitNow.storeAmount ?? 0;
                         const gross = (session.amount_total ?? 0);
                         const isStaff = !!employeeId;
-                        const toStore = isStaff
-                            ? storeCut
-                            : Math.max(0, gross - appFeeAmount - stripeFee);
-                        const toStaff = isStaff
-                            ? Math.max(0, gross - appFeeAmount - stripeFee - storeCut)
-                            : 0;
-                        // ====== 決済手段・カード要約の抽出 ======
+                        const toStore = isStaff ? storeCut : Math.max(0, gross - stripeFee);
+                        const toStaff = isStaff ? Math.max(0, gross - stripeFee - storeCut) : 0;
+                        // 決済手段・カード要約
                         let pm = null;
                         if (pi.payment_method && typeof pi.payment_method !== "string") {
                             pm = pi.payment_method;
                         }
                         else if (typeof pi.payment_method === "string") {
                             try {
-                                pm = await stripe.paymentMethods.retrieve(pi.payment_method, requestOptions);
+                                pm = await stripe.paymentMethods.retrieve(pi.payment_method, requestOptionsPayment);
                             }
                             catch {
                                 pm = null;
@@ -1281,15 +1355,13 @@ exports.stripeWebhook = functions
                             fees: {
                                 platform: appFeeAmount,
                                 stripe: {
-                                    amount: stripeFee,
+                                    amount: stripeFee - appFeeAmount,
                                     currency: stripeFeeCurrency,
                                     balanceTransactionId: bt?.id ?? null,
                                 },
                             },
-                            net: {
-                                toStore,
-                                toStaff,
-                            },
+                            status: "succeeded",
+                            net: { toStore, toStaff },
                             payment: paymentSummary,
                             feesComputedAt: admin.firestore.FieldValue.serverTimestamp(),
                         }, { merge: true });
@@ -1299,6 +1371,9 @@ exports.stripeWebhook = functions
                     console.error("Failed to enrich tip with stripe fee/payment details:", err);
                 }
             }
+            await docRef.set({ handled: true }, { merge: true });
+            res.sendStatus(200);
+            return;
         }
         /* ========== 2) Checkout その他 ========== */
         if (type === "checkout.session.expired" ||
@@ -1360,6 +1435,7 @@ exports.stripeWebhook = functions
                     ...(typeof feePercent === "number" ? { feePercent } : {}),
                     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                 },
+                status: plan == "" ? "nonactiva" : "active"
             };
             await writeIndexAndOwner(uid, tenantId, subPatch);
             // トライアル終了直後に再トライアル防止フラグを付与
@@ -1396,7 +1472,9 @@ exports.stripeWebhook = functions
                         ...putIf(periodEndTs, { currentPeriodEnd: periodEndTs, nextPaymentAt: periodEndTs }),
                         overdue: false,
                         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                        trial: { status: "none" },
                     },
+                    status: "nonactive"
                 };
                 await writeIndexAndOwner(uid, tenantId, patch);
             }
@@ -1491,25 +1569,35 @@ exports.stripeWebhook = functions
                 console.warn("[invoice mail] failed to send:", e);
             }
         }
-        /* ========== 5) Connect アカウント状態 ========== */
+        /* ========== 5) Connect: アカウント状態 ========== */
         if (type === "account.updated") {
             const acct = event.data.object;
             try {
                 const tRef = await tenantRefByStripeAccount(acct.id);
+                const reqs = acct.requirements;
+                const connectStatus = deriveConnectStatus(acct);
                 await tRef.set({
+                    stripeAccountId: acct.id,
                     connect: {
                         charges_enabled: !!acct.charges_enabled,
                         payouts_enabled: !!acct.payouts_enabled,
                         details_submitted: !!acct.details_submitted,
+                        // 申請状況の全体像を保持（フロントでそのまま見せられるように）
+                        requirements: {
+                            currently_due: reqs.currently_due ?? [],
+                            eventually_due: reqs.eventually_due ?? [],
+                            past_due: reqs.past_due ?? [],
+                            pending_verification: reqs.pending_verification ?? [],
+                            disabled_reason: reqs.disabled_reason ?? null,
+                        },
+                        status: connectStatus, // "active" | "action_required" | "pending" | "disabled"
                         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                     },
+                    // 現在の入金スケジュールを保存（毎月1日に固定している場合でも念のため保存）
                 }, { merge: true });
-                // インデックスにも反映
-                const tSnap = await tRef.get();
-                const tenantId = tSnap.id;
             }
-            catch {
-                console.warn("No tenant found in tenantStripeIndex for", acct.id);
+            catch (e) {
+                console.warn("No tenant found in tenantStripeIndex for", acct.id, e);
             }
         }
         /* ========== 6) 保険: PI から初期費用確定 ========== */
@@ -1581,7 +1669,7 @@ exports.stripeWebhook = functions
         return;
     }
 });
-// Secrets
+//=======================管理者追加============================
 const STRIPE_SECRET_KEY = (0, params_1.defineSecret)("STRIPE_SECRET_KEY");
 const FRONTEND_BASE_URL = (0, params_1.defineSecret)("FRONTEND_BASE_URL");
 exports.inviteTenantAdmin = (0, https_1.onCall)({
@@ -1852,10 +1940,11 @@ exports.createSubscriptionCheckout = functions
     const APP_BASE = process.env.FRONTEND_BASE_URL;
     const stripe = new stripe_1.default(STRIPE_KEY, { apiVersion: "2023-10-16" });
     const TRIAL_DAYS = 90;
+    // ① プラン・カスタマー解決
     const planDoc = await getPlanFromDb(plan);
     const purchaserEmail = email || context.auth?.token?.email;
     const customerId = await ensureCustomer(uid, tenantId, purchaserEmail, name);
-    // 進行中購読があればポータルへ
+    // ② 進行中購読があればポータルへ
     const subs = await stripe.subscriptions.list({ customer: customerId, status: "all", limit: 20 });
     const hasOngoing = subs.data.some((s) => ["active", "trialing", "past_due", "unpaid"].includes(s.status));
     if (hasOngoing) {
@@ -1865,27 +1954,87 @@ exports.createSubscriptionCheckout = functions
         });
         return { alreadySubscribed: true, portalUrl: portal.url };
     }
+    // ③ このテナントがトライアル可かどうか判定（"none" なら無効化）
+    const tRef = tenantRefByUid(uid, tenantId);
+    const tSnap = await tRef.get();
+    const tData = tSnap.data();
+    const trialStatus = tData?.trial?.status ??
+        tData?.trialStatus ??
+        ""; // 未設定はトライアル可として扱う
+    const allowTrial = trialStatus !== "none";
     const successUrl = `${APP_BASE}#/store?tenantId=${tenantId}&event=initial_fee_paid`;
     const cancelUrl = `${APP_BASE}#/store?tenantId=${tenantId}&event=initial_fee_canceled`;
+    // ④ subscription_data を組み立て（allowTrial のときだけ trial_period_days を付与）
+    const subscriptionData = {
+        metadata: { tenantId, plan, uid },
+        // trial_period_days は条件付きで付与
+        ...(allowTrial ? { trial_period_days: TRIAL_DAYS } : {}),
+    };
     const session = await stripe.checkout.sessions.create({
         mode: "subscription",
         customer: customerId,
         line_items: [{ price: planDoc.stripePriceId, quantity: 1 }],
         payment_method_collection: "always",
         allow_promotion_codes: true,
-        // ★ 追加：セッションにもメタデータを入れる
-        metadata: { tenantId, plan, uid },
-        subscription_data: {
-            trial_period_days: TRIAL_DAYS,
-            // ここにも残す（後続の customer.subscription.* で参照できる）
-            metadata: { tenantId, plan, uid },
-        },
+        // セッション自体にもメタデータ
+        metadata: { tenantId, plan, uid, trial_allowed: String(allowTrial) },
+        subscription_data: subscriptionData,
         success_url: successUrl,
         cancel_url: cancelUrl,
     });
     await upsertTenantIndex(uid, tenantId);
     return { url: session.url };
 });
+// Firestore へ保存する統一スキーマを生成
+function mapSubToRecord(sub) {
+    const firstItem = sub.items?.data?.[0];
+    const price = firstItem?.price;
+    const product = price?.product?.id ??
+        (typeof price?.product === "string" ? price?.product : null);
+    // number 型だけ保存（null で未設定を明確化）
+    const trialStart = typeof sub.trial_start === "number" ? sub.trial_start : null;
+    const trialEnd = typeof sub.trial_end === "number" ? sub.trial_end : null;
+    // 顧客ID
+    const customerId = (typeof sub.customer === "string" ? sub.customer : sub.customer?.id) ?? null;
+    // メタデータのプラン表記を最優先（なければ Price/Product 名から推定してもよい）
+    const planFromMeta = (sub.metadata?.plan || "").trim();
+    const normalizedPlan = planFromMeta || ""; // ここは任意。必要なら price.nickname などから推定してもOK
+    return {
+        stripeSubscriptionId: sub.id,
+        stripeCustomerId: customerId,
+        status: sub.status, // 'trialing' | 'active' | 'past_due' | 'canceled' | ...
+        // 期間系（epoch seconds）
+        currentPeriodStart: sub.current_period_start ?? null,
+        currentPeriodEnd: sub.current_period_end ?? null,
+        // トライアル系
+        trialStart,
+        trialEnd,
+        // キャンセル系
+        cancelAt: sub.cancel_at ?? null,
+        cancelAtPeriodEnd: !!sub.cancel_at_period_end,
+        // プラン/価格
+        plan: normalizedPlan || null,
+        priceId: price?.id ?? null,
+        productId: product ?? null,
+        // 参考情報
+        latestInvoiceId: (typeof sub.latest_invoice === "string"
+            ? sub.latest_invoice
+            : sub.latest_invoice?.id) ?? null,
+        collectionMethod: sub.collection_method ?? null,
+        // 常にサーバ時刻で上書き
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+}
+// Firestore 更新（merge）＋任意の追加フィールド（履歴等）
+async function writeSubscriptionState(opts) {
+    const { tenantRef, base, extra } = opts;
+    await tenantRef.set({
+        subscription: {
+            ...base,
+            ...(extra ?? {}),
+        },
+    }, { merge: true });
+}
 exports.changeSubscriptionPlan = functions
     .region("us-central1")
     .runWith({ secrets: ["STRIPE_SECRET_KEY"] })
@@ -1893,35 +2042,411 @@ exports.changeSubscriptionPlan = functions
     const uid = context.auth?.uid;
     if (!uid)
         throw new functions.https.HttpsError("unauthenticated", "Sign-in required");
-    const { subscriptionId, newPlan } = (data || {});
+    const { subscriptionId, newPlan, tenantId } = (data || {});
     if (!subscriptionId || !newPlan) {
         throw new functions.https.HttpsError("invalid-argument", "subscriptionId and newPlan are required.");
     }
+    const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY, { apiVersion: "2023-10-16" });
+    const newPlanDoc = await getPlanFromDb(newPlan);
+    // 現サブスク取得（プラットフォームオブジェクト）
+    const sub = (await stripe.subscriptions.retrieve(subscriptionId, {
+        expand: ["items.data.price.product"],
+    }));
+    // tenantId の突き合わせで安全性UP
+    if (tenantId) {
+        const tenantRef = tenantRefByUid(uid, tenantId);
+        const t = (await tenantRef.get()).data();
+        const savedSubId = t?.subscription?.stripeSubscriptionId;
+        if (savedSubId && savedSubId !== sub.id) {
+            throw new functions.https.HttpsError("permission-denied", "Subscription does not match tenant.");
+        }
+    }
+    const item = sub.items.data[0];
+    const trialEndParam = typeof sub.trial_end === "number" ? sub.trial_end : undefined;
+    // ★ 即日切替＆返金なし＆即課金。認証が必要なら 402 で止める。
+    const updated = await stripe.subscriptions.update(subscriptionId, {
+        items: [{ id: item.id, price: newPlanDoc.stripePriceId, quantity: item.quantity ?? 1 }],
+        billing_cycle_anchor: 'now',
+        proration_behavior: 'none',
+        trial_end: trialEndParam,
+        trial_from_plan: false,
+        cancel_at_period_end: false,
+        payment_behavior: 'error_if_incomplete',
+        metadata: { ...sub.metadata, plan: newPlan },
+        // SCA 判定用に invoice / PI を展開
+        expand: ['latest_invoice.payment_intent', 'items.data.price.product'],
+    });
+    // SCA / 未決済の検知
+    let requiresAction = false;
+    let hostedInvoiceUrl;
+    let paymentIntentClientSecret;
+    let paymentIntentNextActionUrl;
+    const li = updated.latest_invoice;
+    const pi = li?.payment_intent;
+    // Hosted Invoice Page（請求書ページ）
+    hostedInvoiceUrl = li?.hosted_invoice_url || undefined;
+    if (pi) {
+        paymentIntentClientSecret = pi.client_secret ?? undefined;
+        if (pi.status === 'requires_action' || pi.status === 'requires_confirmation') {
+            requiresAction = true;
+            // リダイレクト認証系が出る場合は next_action?.redirect_to_url?.url がある
+            paymentIntentNextActionUrl = pi.next_action?.redirect_to_url?.url;
+        }
+        // それ以外に 'requires_payment_method' 等でも未決済扱い
+        if (pi.status === 'requires_payment_method') {
+            requiresAction = true;
+        }
+    }
+    // Firestore 反映（成功時のみ。SCA未完了でもメタ更新はOKにするならここ調整）
+    if (tenantId) {
+        const tenantRef = tenantRefByUid(uid, tenantId);
+        const base = mapSubToRecord(updated);
+        const prevPlan = (sub.metadata?.plan || '').trim() || null;
+        await tenantRef.set({
+            subscription: {
+                ...base,
+                plan: newPlan,
+            },
+        }, { merge: true });
+    }
+    return {
+        ok: true,
+        subscription: updated.id,
+        requiresAction,
+        hostedInvoiceUrl,
+        paymentIntentClientSecret,
+        paymentIntentNextActionUrl,
+    };
+});
+exports.cancelSubscription = functions
+    .region("us-central1")
+    .runWith({ secrets: ["STRIPE_SECRET_KEY"] })
+    .https.onCall(async (data, context) => {
+    const uid = context.auth?.uid;
+    if (!uid) {
+        throw new functions.https.HttpsError("unauthenticated", "Sign-in required");
+    }
+    const { tenantId, agreeNoTrialResume } = (data || {});
+    if (!tenantId) {
+        throw new functions.https.HttpsError("invalid-argument", "tenantId is required.");
+    }
+    if (!agreeNoTrialResume) {
+        throw new functions.https.HttpsError("failed-precondition", "Must agree to no-trial-resume.");
+    }
     const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
     const stripe = new stripe_1.default(STRIPE_KEY, { apiVersion: "2023-10-16" });
-    // 新プランの Price を解決
-    const newPlanDoc = await getPlanFromDb(newPlan);
-    // 現在の購読取得
-    const sub = (await stripe.subscriptions.retrieve(subscriptionId));
-    const item = sub.items.data[0];
-    // trial_end は number のときだけ渡す（undefined なら Stripe が自動維持）
-    const trialEndParam = typeof sub.trial_end === "number" ? sub.trial_end : undefined;
-    const updated = await stripe.subscriptions.update(subscriptionId, {
-        items: [
-            {
-                id: item.id,
-                price: newPlanDoc.stripePriceId,
-                quantity: item.quantity ?? 1,
+    const tenantRef = tenantRefByUid(uid, tenantId);
+    const tSnap = await tenantRef.get();
+    if (!tSnap.exists) {
+        return { ok: false, code: "tenant_not_found", message: "Tenant doc not found." };
+    }
+    const t = tSnap.data();
+    const subId = t?.subscription?.stripeSubscriptionId;
+    const customerId = t?.subscription?.stripeCustomerId;
+    if (!subId || !customerId) {
+        // そもそも登録なし or 情報不足
+        await tenantRef.set({
+            subscription: {
+                ...(t?.subscription ?? {}),
+                status: "canceled",
+                cancelAtPeriodEnd: false,
+                plan: "none",
+                cancelAt: null,
+                canceledAt: Date.now(),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp?.() ?? new Date(),
             },
-        ],
-        proration_behavior: "none",
-        trial_end: trialEndParam, // ← 安全に
-        trial_from_plan: false,
-        metadata: { ...sub.metadata, plan: newPlan },
-    });
-    return { ok: true, subscription: updated.id };
+            status: "nonactive",
+        }, { merge: true });
+        return { ok: true, status: "no_subscription" };
+    }
+    try {
+        const sub = await stripe.subscriptions.retrieve(subId);
+        // すでに canceled
+        if (sub.status === "canceled") {
+            await tenantRef.set({
+                subscription: {
+                    ...(t?.subscription ?? {}),
+                    status: "canceled",
+                    cancelAtPeriodEnd: false,
+                    cancelAt: null,
+                    canceledAt: Date.now(),
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp?.() ?? new Date(),
+                },
+            }, { merge: true });
+            return { ok: true, status: "already_canceled" };
+        }
+        // すでに期末キャンセル予約あり
+        if (sub.cancel_at_period_end) {
+            await tenantRef.set({
+                subscription: {
+                    ...(t?.subscription ?? {}),
+                    status: sub.status,
+                    cancelAtPeriodEnd: true,
+                    cancelAt: sub.cancel_at ?? null,
+                    currentPeriodEnd: sub.current_period_end ?? null,
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp?.() ?? new Date(),
+                },
+            }, { merge: true });
+            return {
+                ok: true,
+                status: "already_cancel_at_period_end",
+                cancel_at: sub.cancel_at ?? null,
+            };
+        }
+        // trialing は即時停止 / それ以外は期末停止
+        if (sub.status === "trialing") {
+            const canceled = await stripe.subscriptions.cancel(sub.id);
+            await tenantRef.set({
+                subscription: {
+                    ...(t?.subscription ?? {}),
+                    status: canceled.status, // "canceled"
+                    cancelAtPeriodEnd: false,
+                    cancelAt: null,
+                    canceledAt: Date.now(),
+                    currentPeriodEnd: canceled.current_period_end ?? null,
+                    endedAt: canceled.ended_at ?? null,
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp?.() ?? new Date(),
+                    trial: {
+                        trialEnd: Date.now()
+                    }
+                },
+            }, { merge: true });
+            return { ok: true, status: "canceled_now" };
+        }
+        else {
+            const updated = await stripe.subscriptions.update(sub.id, {
+                cancel_at_period_end: true,
+            });
+            await tenantRef.set({
+                subscription: {
+                    ...(t?.subscription ?? {}),
+                    status: updated.status, // "active" 等
+                    cancelAtPeriodEnd: true,
+                    cancelAt: updated.cancel_at ?? null, // epoch seconds
+                    currentPeriodEnd: updated.current_period_end ?? null,
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp?.() ?? new Date(),
+                },
+            }, { merge: true });
+            return {
+                ok: true,
+                status: "cancel_at_period_end",
+                cancel_at: updated.cancel_at ?? null,
+            };
+        }
+    }
+    catch (err) {
+        // Stripe 例外を前面に
+        const reqId = err?.raw?.requestId || err?.raw?.request_id || err?.requestId;
+        console.error("cancelSubscription error", { err, requestId: reqId });
+        return {
+            ok: false,
+            code: "stripe_error",
+            message: err?.message ?? "Stripe error",
+            requestId: reqId ?? null,
+        };
+    }
 });
-/* ===================== 請求書一覧 ===================== */
+exports.getUpcomingInvoiceByCustomer = (0, https_1.onCall)({
+    region: "us-central1",
+    secrets: ["STRIPE_SECRET_KEY"],
+}, async (req) => {
+    if (!req.auth)
+        throw new https_1.HttpsError("unauthenticated", "Sign-in required");
+    const callerUid = req.auth.uid;
+    const { customerId, subscriptionId, // 任意：指定なければ自動解決
+    newPriceId, // 任意：プラン変更プレビュー
+     } = (req.data || {});
+    if (!customerId) {
+        throw new https_1.HttpsError("invalid-argument", "customerId is required");
+    }
+    const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY, {
+        apiVersion: "2023-10-16",
+    });
+    // --- 購読IDが無ければアクティブ系から自動解決 ---
+    let subId = subscriptionId;
+    if (!subId) {
+        const subs = await stripe.subscriptions.list({
+            customer: customerId,
+            status: "all",
+            limit: 20,
+        });
+        const pick = subs.data.find((s) => ["active", "trialing", "past_due", "unpaid"].includes(s.status));
+        if (!pick) {
+            // サブスクが無い＝upcomingが無い可能性が高い（都度課金のみなど）
+            // 以降は subscription を付けずに upcoming を試す（都度があれば返る）
+        }
+        else {
+            subId = pick.id;
+        }
+    }
+    // --- upcoming パラメータ ---
+    const params = {
+        customer: customerId,
+        ...(subId ? { subscription: subId } : {}),
+        expand: ["lines.data.price.product"],
+    };
+    // 価格変更プレビュー
+    if (newPriceId) {
+        if (!subId) {
+            return {
+                ok: false,
+                code: "no_subscription",
+                message: "Active subscription not found for preview.",
+            };
+        }
+        const sub = await stripe.subscriptions.retrieve(subId);
+        const item = sub.items.data[0];
+        if (!item?.id) {
+            return {
+                ok: false,
+                code: "no_subscription_item",
+                message: "Subscription item not found.",
+            };
+        }
+        params.subscription_items = [
+            { id: item.id, price: newPriceId, quantity: item.quantity ?? 1 },
+        ];
+    }
+    try {
+        const upcoming = await stripe.invoices.retrieveUpcoming(params);
+        const lines = upcoming.lines.data.map((l) => {
+            const price = l.price ?? undefined;
+            const product = price?.product ?? null;
+            return {
+                id: l.id,
+                description: l.description ?? null,
+                quantity: l.quantity ?? 1,
+                unit_amount: price?.unit_amount ?? null,
+                amount: l.amount ?? null,
+                currency: l.currency ?? upcoming.currency,
+                proration: !!l.proration,
+                price: {
+                    id: price?.id ?? null,
+                    nickname: price?.nickname ?? null,
+                    unit_amount: price?.unit_amount ?? null,
+                    recurring: price && "recurring" in price ? price.recurring ?? null : null,
+                },
+                product: product ? { id: product.id, name: product.name } : null,
+            };
+        });
+        return {
+            ok: true,
+            customerId,
+            subscriptionId: subId ?? null,
+            currency: upcoming.currency,
+            amount_due: upcoming.amount_due,
+            amount_remaining: upcoming.amount_remaining,
+            subtotal: upcoming.subtotal,
+            tax: upcoming.tax,
+            total: upcoming.total,
+            next_payment_attempt: upcoming.next_payment_attempt ?? null,
+            period_start: upcoming.period_start ?? null,
+            period_end: upcoming.period_end ?? null,
+            has_proration: lines.some((l) => l.proration),
+            lines,
+        };
+    }
+    catch (err) {
+        const code = err?.code || err?.raw?.code;
+        if (code === "invoice_upcoming_none") {
+            return { ok: true, none: true, customerId, subscriptionId: subId ?? null, lines: [] };
+        }
+        const requestId = err?.raw?.requestId || err?.raw?.request_id || err?.requestId || null;
+        console.error("getUpcomingInvoiceByCustomer error", { err, requestId });
+        throw new https_1.HttpsError("internal", err?.message || "Stripe error", { requestId, code: err?.code || null });
+    }
+});
+exports.listConnectPayouts = functions
+    .region("us-central1")
+    .runWith({ secrets: ["STRIPE_SECRET_KEY"] })
+    .https.onCall(async (data, context) => {
+    const uid = context.auth?.uid;
+    if (!uid)
+        throw new functions.https.HttpsError("unauthenticated", "Sign-in required");
+    const { tenantId, limit = 20 } = (data || {});
+    if (!tenantId)
+        throw new functions.https.HttpsError("invalid-argument", "tenantId required");
+    // Firestore からテナントの接続アカウントIDを解決
+    const tRef = tenantRefByUid(uid, tenantId);
+    const tDoc = await tRef.get();
+    if (!tDoc.exists)
+        throw new functions.https.HttpsError("not-found", "Tenant not found");
+    const acctId = tDoc.data()?.stripeAccountId;
+    if (!acctId)
+        throw new functions.https.HttpsError("failed-precondition", "Tenant not connected to Stripe");
+    const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY, { apiVersion: "2023-10-16" });
+    // 接続アカウント側の入金一覧
+    const payouts = await stripe.payouts.list({ limit: Math.max(1, Math.min(100, Number(limit) || 20)) }, { stripeAccount: acctId });
+    // 返却：UI で使う分だけ整形
+    return {
+        payouts: payouts.data.map(p => ({
+            id: p.id,
+            amount: p.amount,
+            currency: p.currency,
+            arrival_date: p.arrival_date, // epoch sec
+            created: p.created,
+            status: p.status, // paid / in_transit / pending / canceled / failed
+            method: p.method, // standard / instant
+            type: p.type, // bank_account, card, etc
+            statement_descriptor: p.statement_descriptor ?? null,
+        })),
+    };
+});
+exports.getConnectPayoutDetails = functions
+    .region("us-central1")
+    .runWith({ secrets: ["STRIPE_SECRET_KEY"] })
+    .https.onCall(async (data, context) => {
+    const uid = context.auth?.uid;
+    if (!uid)
+        throw new functions.https.HttpsError("unauthenticated", "Sign-in required");
+    const { tenantId, payoutId } = (data || {});
+    if (!tenantId || !payoutId) {
+        throw new functions.https.HttpsError("invalid-argument", "tenantId and payoutId required");
+    }
+    const tRef = tenantRefByUid(uid, tenantId);
+    const tDoc = await tRef.get();
+    if (!tDoc.exists)
+        throw new functions.https.HttpsError("not-found", "Tenant not found");
+    const acctId = tDoc.data()?.stripeAccountId;
+    if (!acctId)
+        throw new functions.https.HttpsError("failed-precondition", "Tenant not connected to Stripe");
+    const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY, { apiVersion: "2023-10-16" });
+    // 入金本体
+    const payout = await stripe.payouts.retrieve(payoutId, { stripeAccount: acctId });
+    // この入金に含まれる明細（売上・返金・手数料など）を取得
+    // balance_transactions.list は payout フィルタで絞れます
+    const txns = await stripe.balanceTransactions.list({ payout: payoutId, limit: 100 }, { stripeAccount: acctId });
+    // 合計の確認（サマリ）
+    const gross = txns.data.reduce((s, t) => s + (t.amount ?? 0), 0);
+    const fees = txns.data.reduce((s, t) => s + (t.fee ?? 0), 0);
+    const net = txns.data.reduce((s, t) => s + (t.net ?? 0), 0);
+    return {
+        payout: {
+            id: payout.id,
+            amount: payout.amount,
+            currency: payout.currency,
+            arrival_date: payout.arrival_date,
+            created: payout.created,
+            status: payout.status,
+            method: payout.method,
+            type: payout.type,
+            statement_descriptor: payout.statement_descriptor ?? null,
+        },
+        summary: { gross, fees, net, currency: payout.currency },
+        lines: txns.data.map(t => ({
+            id: t.id,
+            type: t.type, // charge/refund/adjustment/transfer/application_fee…
+            amount: t.amount,
+            fee: t.fee,
+            net: t.net,
+            currency: t.currency,
+            description: t.description ?? null,
+            available_on: t.available_on,
+            created: t.created,
+            source: typeof t.source === "string" ? t.source : t.source?.id ?? null,
+        })),
+    };
+});
 exports.listInvoices = functions
     .region("us-central1")
     .runWith({ secrets: ["STRIPE_SECRET_KEY"] })
@@ -1939,25 +2464,206 @@ exports.listInvoices = functions
     const t = (await tenantRef.get()).data();
     const customerId = t?.subscription?.stripeCustomerId;
     if (!customerId)
-        return { invoices: [] };
-    const resp = await stripe.invoices.list({
+        return { invoices: [], one_time: [], history: [] };
+    const limitClamped = Math.min(Math.max(limit ?? 12, 1), 50);
+    // 1) expand は price まで（product まで広げると階層オーバー）
+    const invoicesPromise = stripe.invoices.list({
         customer: customerId,
-        limit: Math.min(Math.max(limit ?? 12, 1), 50),
+        limit: limitClamped,
+        expand: ["data.lines.data.price"], // ← ここを浅く
     });
-    const invoices = resp.data.map((inv) => ({
-        id: inv.id,
-        number: inv.number,
-        amount_due: inv.amount_due,
-        amount_paid: inv.amount_paid,
-        currency: inv.currency,
-        status: inv.status,
-        hosted_invoice_url: inv.hosted_invoice_url,
-        invoice_pdf: inv.invoice_pdf,
-        period_start: inv.lines?.data?.[0]?.period?.start ?? inv.created,
-        period_end: inv.lines?.data?.[0]?.period?.end ?? inv.created,
-        created: inv.created,
-    }));
-    return { invoices };
+    // 2) いわゆる都度払い（Checkout mode=payment 等）。invoice 付きは除外
+    const paymentIntentsPromise = stripe.paymentIntents.list({
+        customer: customerId,
+        limit: limitClamped,
+        expand: ["data.latest_charge"],
+    });
+    const [invResp, piResp] = await Promise.all([invoicesPromise, paymentIntentsPromise]);
+    // --- 任意: product 名が欲しい場合は個別に取得（重複排除） ---
+    const productIds = new Set();
+    for (const inv of invResp.data) {
+        for (const li of inv.lines?.data ?? []) {
+            const price = li.price;
+            if (!price)
+                continue;
+            const p = price.product;
+            const productId = typeof p === "string" ? p : p?.id;
+            if (productId)
+                productIds.add(productId);
+        }
+    }
+    const productsById = {};
+    if (productIds.size > 0) {
+        // API に ids フィルタは無いので retrieve をまとめて実行
+        // 数が多い時は上限を決める（例: 25）
+        const ids = Array.from(productIds).slice(0, 25);
+        const prods = await Promise.all(ids.map((id) => stripe.products.retrieve(id)));
+        for (const p of prods)
+            productsById[p.id] = p;
+    }
+    const invoices = invResp.data.map((inv) => {
+        // 表示用に「最初の行」の price/product を軽く展開（必要に応じて拡張）
+        const firstLine = inv.lines?.data?.[0];
+        const price = firstLine?.price ?? null;
+        const productId = price && price.product
+            ? (typeof price.product === "string" ? price.product : price.product.id)
+            : null;
+        return {
+            kind: "invoice",
+            id: inv.id,
+            number: inv.number,
+            amount_due: inv.amount_due,
+            amount_paid: inv.amount_paid,
+            currency: inv.currency,
+            status: inv.status,
+            hosted_invoice_url: inv.hosted_invoice_url ?? null,
+            invoice_pdf: inv.invoice_pdf ?? null,
+            description: firstLine?.description ?? inv.description ?? null,
+            period_start: firstLine?.period?.start ?? inv.created,
+            period_end: firstLine?.period?.end ?? inv.created,
+            created: inv.created,
+            // 追加情報（あってもなくてもOK）
+            first_line_price_id: price?.id ?? null,
+            first_line_product_id: productId,
+            first_line_product_name: productId ? productsById[productId]?.name ?? null : null,
+        };
+    });
+    const oneTime = piResp.data
+        .filter((pi) => !pi.invoice) // 請求書に紐づく支払いは重複するので除外
+        .map((pi) => {
+        const charge = pi.latest_charge ?? null;
+        return {
+            kind: "payment_intent",
+            id: pi.id,
+            amount: pi.amount,
+            currency: pi.currency,
+            status: pi.status,
+            description: pi.description ?? null,
+            receipt_url: charge?.receipt_url ?? null,
+            charge_id: charge?.id ?? null,
+            created: pi.created,
+        };
+    });
+    // タイムライン（UIで「すべて」タブ用）
+    const history = [
+        ...invoices.map((x) => ({
+            type: "invoice",
+            id: x.id,
+            amount: x.amount_paid ?? x.amount_due,
+            currency: x.currency,
+            status: x.status,
+            url: x.hosted_invoice_url ?? x.invoice_pdf ?? null,
+            description: x.description,
+            created: x.created,
+        })),
+        ...oneTime.map((x) => ({
+            type: "payment_intent",
+            id: x.id,
+            amount: x.amount,
+            currency: x.currency,
+            status: x.status,
+            url: x.receipt_url,
+            description: x.description,
+            created: x.created,
+        })),
+    ].sort((a, b) => b.created - a.created);
+    return { invoices, one_time: oneTime, history };
+});
+exports.upsertAgencyConnectedAccount = (0, https_1.onCall)({ region: "us-central1", memory: "256MiB", secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL"] }, async (req) => {
+    if (!req.auth)
+        throw new https_1.HttpsError("unauthenticated", "auth required");
+    const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY, { apiVersion: "2023-10-16" });
+    const agentId = req.data?.agentId?.trim();
+    const form = (req.data?.account || {});
+    if (!agentId)
+        throw new https_1.HttpsError("invalid-argument", "agentId required");
+    const aRef = db.collection("agencies").doc(agentId);
+    const aDoc = await aRef.get();
+    if (!aDoc.exists)
+        throw new https_1.HttpsError("not-found", "agency not found");
+    const data = aDoc.data() || {};
+    let acctId = data.stripeAccountId ?? undefined;
+    // 毎月1日固定
+    const FORCE_MONTHLY_FIRST = {
+        interval: "monthly",
+        monthly_anchor: 1,
+    };
+    const country = form.country || "JP";
+    // 作成
+    if (!acctId) {
+        const created = await stripe.accounts.create({
+            type: "custom",
+            country,
+            email: form.email,
+            business_type: form.businessType || "individual",
+            capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
+            settings: { payouts: { schedule: FORCE_MONTHLY_FIRST } },
+        });
+        acctId = created.id;
+        await aRef.set({
+            stripeAccountId: acctId,
+            connect: {
+                charges_enabled: created.charges_enabled,
+                payouts_enabled: created.payouts_enabled,
+            },
+        }, { merge: true });
+    }
+    // 更新
+    const upd = {};
+    if (form.businessType)
+        upd.business_type = form.businessType;
+    if (form.businessProfile)
+        upd.business_profile = form.businessProfile;
+    if (form.individual)
+        upd.individual = form.individual;
+    if (form.company)
+        upd.company = form.company;
+    if (form.bankAccountToken)
+        upd.external_account = form.bankAccountToken;
+    if (form.tosAccepted) {
+        upd.tos_acceptance = {
+            date: Math.floor(Date.now() / 1000),
+            ip: req.rawRequest.headers["x-forwarded-for"]?.split(",")[0] || req.rawRequest.ip,
+            user_agent: req.rawRequest.get("user-agent") || undefined,
+        };
+    }
+    upd.settings = {
+        ...(upd.settings || {}),
+        payouts: { ...(upd.settings?.payouts || {}), schedule: FORCE_MONTHLY_FIRST },
+    };
+    const updated = await stripe.accounts.update(acctId, upd);
+    // 追加情報が必要ならオンボーディング URL
+    const due = updated.requirements?.currently_due ?? [];
+    const pastDue = updated.requirements?.past_due ?? [];
+    const needsHosted = due.length > 0 || pastDue.length > 0;
+    let onboardingUrl;
+    if (needsHosted) {
+        const BASE = process.env.FRONTEND_BASE_URL;
+        const link = await stripe.accountLinks.create({
+            account: acctId,
+            type: "account_onboarding",
+            refresh_url: `${BASE}#/agents/${encodeURIComponent(agentId)}?onboarding=refresh`,
+            return_url: `${BASE}#/agents/${encodeURIComponent(agentId)}?onboarding=return`,
+        });
+        onboardingUrl = link.url;
+    }
+    // Firestore 反映
+    await aRef.set({
+        connect: {
+            charges_enabled: updated.charges_enabled,
+            payouts_enabled: updated.payouts_enabled,
+            requirements: updated.requirements || null,
+        },
+        payoutSchedule: { interval: "monthly", monthly_anchor: 1 },
+    }, { merge: true });
+    return {
+        accountId: acctId,
+        chargesEnabled: updated.charges_enabled,
+        payoutsEnabled: updated.payouts_enabled,
+        onboardingUrl,
+        payoutSchedule: { interval: "monthly", monthly_anchor: 1 },
+        due,
+    };
 });
 /* ===================== Connect: Custom（uid/{tenantId}） ===================== */
 exports.upsertConnectedAccount = (0, https_1.onCall)({
@@ -1973,40 +2679,27 @@ exports.upsertConnectedAccount = (0, https_1.onCall)({
     const form = (req.data?.account || {});
     if (!tenantId)
         throw new https_1.HttpsError("invalid-argument", "tenantId required");
-    // テナント実体をオーナー配下から取得（オーナー=uid 前提）
     const tRef = tenantRefByUid(uid, tenantId);
     const tDoc = await tRef.get();
     if (!tDoc.exists)
         throw new https_1.HttpsError("not-found", "tenant not found");
-    // メンバー権限チェック（members: string[] or memberUids: string[] どちらでも可）
     const data = tDoc.data() || {};
     const members = (data.members ?? data.memberUids ?? []);
     if (!Array.isArray(members) || !members.includes(uid)) {
         throw new https_1.HttpsError("permission-denied", "not a tenant member");
     }
-    // 受け取る入金スケジュール（任意）
-    const schIn = (req.data?.payoutSchedule || {});
-    // Stripe クライアント
+    // ★★★ ここから：入金スケジュールは常に「毎月1日」に固定 ★★★
+    // Stripe の型: Stripe.AccountUpdateParams.Settings.Payouts.Schedule
+    const FORCE_MONTHLY_FIRST = {
+        interval: "monthly",
+        monthly_anchor: 1,
+        // delay_days は固定化しない（必要なら 'minimum' などに固定可）
+        // delay_days: "minimum",
+    };
+    // ★★★ ここまで固定設定 ★★★
     const stripe = stripeClient();
-    // 既存アカウントID
     let acctId = data.stripeAccountId;
     const country = form.country || "JP";
-    // 入金スケジュールオブジェクトを構築（指定があるときのみ）
-    const schedule = {};
-    if (schIn.interval)
-        schedule.interval = schIn.interval;
-    if (schIn.interval === "weekly" && schIn.weeklyAnchor) {
-        schedule.weekly_anchor = schIn.weeklyAnchor;
-    }
-    if (schIn.interval === "monthly" &&
-        typeof schIn.monthlyAnchor === "number") {
-        schedule.monthly_anchor = schIn.monthlyAnchor;
-    }
-    if (schIn.delayDays !== undefined) {
-        schedule.delay_days = schIn.delayDays;
-    }
-    const hasSchedule = Object.keys(schedule).length > 0 &&
-        typeof schedule.interval !== "undefined";
     // まだ Connect アカウントがない場合は作成（Custom）
     if (!acctId) {
         const created = await stripe.accounts.create({
@@ -2018,8 +2711,8 @@ exports.upsertConnectedAccount = (0, https_1.onCall)({
                 card_payments: { requested: true },
                 transfers: { requested: true },
             },
-            // 作成時点でスケジュールを入れたい場合
-            settings: hasSchedule ? { payouts: { schedule } } : undefined,
+            // ★ 作成時点で「毎月1日」を強制
+            settings: { payouts: { schedule: FORCE_MONTHLY_FIRST } },
         });
         acctId = created.id;
         await tRef.set({
@@ -2029,10 +2722,9 @@ exports.upsertConnectedAccount = (0, https_1.onCall)({
                 payouts_enabled: created.payouts_enabled,
             },
         }, { merge: true });
-        // テナントインデックスにも反映
         await upsertTenantIndex(uid, tenantId, acctId);
     }
-    // 更新パラメータを組み立て
+    // 更新パラメータ（フォームは受けるがスケジュールは強制上書き）
     const upd = {};
     if (form.businessType)
         upd.business_type = form.businessType;
@@ -2052,26 +2744,22 @@ exports.upsertConnectedAccount = (0, https_1.onCall)({
             user_agent: req.rawRequest.get("user-agent") || undefined,
         };
     }
-    // 入金スケジュールの更新（指定があるときのみ）
-    if (hasSchedule) {
-        upd.settings = {
-            ...(upd.settings || {}),
-            payouts: {
-                ...(upd.settings?.payouts || {}),
-                schedule,
-            },
-        };
-    }
-    // Stripe アカウント更新
+    // ★ 更新時も必ず「毎月1日」で上書き
+    upd.settings = {
+        ...(upd.settings || {}),
+        payouts: {
+            ...(upd.settings?.payouts || {}),
+            schedule: FORCE_MONTHLY_FIRST,
+        },
+    };
     const updated = await stripe.accounts.update(acctId, upd);
-    // 追加提出が必要なら hosted onboarding へ
+    // onboarding 必要判定
     const due = updated.requirements?.currently_due ?? [];
     const pastDue = updated.requirements?.past_due ?? [];
     const needsHosted = due.length > 0 || pastDue.length > 0;
     let onboardingUrl;
     if (needsHosted) {
         const BASE = process.env.FRONTEND_BASE_URL;
-        // refresh/return は絶対URL必須
         const link = await stripe.accountLinks.create({
             account: acctId,
             type: "account_onboarding",
@@ -2087,10 +2775,13 @@ exports.upsertConnectedAccount = (0, https_1.onCall)({
             payouts_enabled: updated.payouts_enabled,
             requirements: updated.requirements || null,
         },
-        payoutSchedule: updated.settings?.payouts?.schedule ?? null,
+        // ★ 返ってきた値ではなく、方針として固定の値を保存
+        payoutSchedule: {
+            interval: "monthly",
+            monthly_anchor: 1,
+        },
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
-    // インデックスの保守
     await upsertTenantIndex(uid, tenantId, acctId);
     return {
         accountId: acctId,
@@ -2098,7 +2789,11 @@ exports.upsertConnectedAccount = (0, https_1.onCall)({
         payoutsEnabled: updated.payouts_enabled,
         due,
         onboardingUrl,
-        payoutSchedule: updated.settings?.payouts?.schedule ?? null,
+        // フロントにも固定値を返す
+        payoutSchedule: {
+            interval: "monthly",
+            monthly_anchor: 1,
+        },
     };
 });
 /* ===================== 初期費用 Checkout ===================== */
@@ -2136,6 +2831,61 @@ async function getOrCreateInitialFeePrice(stripe, currency = "jpy", unitAmount =
     });
     return price.id;
 }
+// export const createInitialFeeCheckout = functions
+//   .region("us-central1")
+//   .runWith({
+//     secrets: ["STRIPE_SECRET_KEY", "FRONTEND_BASE_URL", "INITIAL_FEE_PRICE_ID"],
+//   })
+//   .https.onCall(async (data, context) => {
+//     const uid = context.auth?.uid;
+//     if (!uid) {
+//       throw new functions.https.HttpsError("unauthenticated", "Sign-in required.");
+//     }
+//     const { tenantId, email, name } = (data || {}) as {
+//       tenantId?: string;
+//       email?: string;
+//       name?: string;
+//     };
+//     if (!tenantId) {
+//       throw new functions.https.HttpsError("invalid-argument", "tenantId is required.");
+//     }
+//     const STRIPE_KEY = process.env.STRIPE_SECRET_KEY!;
+//     const APP_BASE = process.env.FRONTEND_BASE_URL!;
+//     const stripe = new Stripe(STRIPE_KEY, { apiVersion: "2023-10-16" });
+//     const tRef = tenantRefByUid(uid, tenantId);
+//     const tSnap = await tRef.get();
+//     if (tSnap.exists && tSnap.data()?.billing?.initialFee?.status === "paid") {
+//       return { alreadyPaid: true };
+//     }
+//     const purchaserEmail = email || (context.auth?.token?.email as string | undefined);
+//     const customerId = await ensureCustomer(uid, tenantId, purchaserEmail, name);
+//     const priceId = await getOrCreateInitialFeePrice(stripe);
+//     const successUrl = `${APP_BASE}#/store?tenantId=${tenantId}&event=initial_fee_paid`
+//     const cancelUrl = `${APP_BASE}#/store?tenantId=${tenantId}&event=initial_fee_canceled`
+//     const session = await stripe.checkout.sessions.create({
+//       mode: "payment",
+//       customer: customerId,
+//       line_items: [{ price: priceId, quantity: 1 }],
+//       client_reference_id: tenantId,
+//       payment_intent_data: { metadata: { tenantId, kind: "initial_fee", uid } },
+//       success_url: successUrl,
+//       cancel_url: cancelUrl,
+//     });
+//     await tRef.set(
+//       {
+//         billing: {
+//           initialFee: {
+//             status: "checkout_open",
+//             lastSessionId: session.id,
+//             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+//           },
+//         },
+//       },
+//       { merge: true }
+//     );
+//     await upsertTenantIndex(uid, tenantId);
+//     return { url: session.url };
+//   });
 exports.createInitialFeeCheckout = functions
     .region("us-central1")
     .runWith({
@@ -2143,9 +2893,8 @@ exports.createInitialFeeCheckout = functions
 })
     .https.onCall(async (data, context) => {
     const uid = context.auth?.uid;
-    if (!uid) {
+    if (!uid)
         throw new functions.https.HttpsError("unauthenticated", "Sign-in required.");
-    }
     const { tenantId, email, name } = (data || {});
     if (!tenantId) {
         throw new functions.https.HttpsError("invalid-argument", "tenantId is required.");
@@ -2163,12 +2912,17 @@ exports.createInitialFeeCheckout = functions
     const priceId = await getOrCreateInitialFeePrice(stripe);
     const successUrl = `${APP_BASE}#/store?tenantId=${tenantId}&event=initial_fee_paid`;
     const cancelUrl = `${APP_BASE}#/store?tenantId=${tenantId}&event=initial_fee_canceled`;
+    // ★ 後続の transfer と結びつけるための transfer_group を付与
+    const transferGroup = `initial_fee:${tenantId}`;
     const session = await stripe.checkout.sessions.create({
         mode: "payment",
         customer: customerId,
         line_items: [{ price: priceId, quantity: 1 }],
         client_reference_id: tenantId,
-        payment_intent_data: { metadata: { tenantId, kind: "initial_fee", uid } },
+        payment_intent_data: {
+            metadata: { tenantId, kind: "initial_fee", uid },
+            transfer_group: transferGroup, // ← 追加
+        },
         success_url: successUrl,
         cancel_url: cancelUrl,
     });
