@@ -474,14 +474,17 @@ class _StoreQrTabState extends State<StoreQrTab> {
 
   // ---------- オンボーディング ----------
   Future<void> startOnboarding(String tenantId, String tenantName) async {
+    final size = MediaQuery.of(context).size;
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       isDismissible: false,
       enableDrag: false,
       useRootNavigator: true,
+      useSafeArea: true, // ノッチ/セーフエリア考慮
       barrierColor: Colors.black38,
       backgroundColor: Colors.white,
+      constraints: BoxConstraints(minWidth: size.width, maxWidth: size.width),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),

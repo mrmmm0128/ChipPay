@@ -1111,7 +1111,7 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                 // ==== 3ボタンを同一モーダルで並べる ====
                 _actionCard(
                   title: 'サポート料金(初回のみ)',
-                  description: 'ポスターの手配等、1か月間のサポートを行います。',
+                  description: '初回限定で9800円でポスターの手配等、1か月間のサポートを行います。',
                   trailing: _statusPill(initialFeePaid),
                   child: FilledButton.icon(
                     onPressed: (initialFeePaid || _creatingInitial)
@@ -1183,9 +1183,11 @@ class OnboardingSheetState extends State<OnboardingSheet> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
-                          Text(
-                            "※stripeの振込手数料＋決済手数料（元金の3.6%）が差し引かれます。",
-                            style: TextStyle(fontSize: 10),
+                          Expanded(
+                            child: Text(
+                              "※stripeの振込手数料＋決済手数料（元金の3.6%）が差し引かれます。",
+                              style: TextStyle(fontSize: 10),
+                            ),
                           ),
                         ],
                       ),
@@ -1497,14 +1499,14 @@ class OnboardingSheetState extends State<OnboardingSheet> {
         title: 'Aプラン',
         monthly: 1980,
         feePct: 35,
-        features: ['月額1980円で今すぐ開始', '決済手数料は35%'],
+        features: ['月額1980円で手軽に今すぐ開始'],
       ),
       _Plan(
         code: 'B',
         title: 'Bプラン',
         monthly: 7960,
         feePct: 25,
-        features: ["Aの内容", '月額7960円で手数料25%', '公式ライン案内', "チップとともにコメントの送信"],
+        features: ['公式ライン案内', "チップとともにコメントの送信"],
       ),
       _Plan(
         code: 'C',
@@ -1512,8 +1514,8 @@ class OnboardingSheetState extends State<OnboardingSheet> {
         monthly: 19600,
         feePct: 15,
         features: [
-          '月額19600円で手数料15%',
-          "ABの内容",
+          '公式ライン案内',
+          "チップとともにコメントの送信",
           'Googleレビュー導線の設置',
           "オリジナルポスター作成",
           "お客様への感謝動画",
@@ -1670,10 +1672,26 @@ class OnboardingSheetState extends State<OnboardingSheet> {
       );
     }
 
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      children: plans.map(item).toList(),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth > 600) {
+          // PC表示 → 横並び
+          return IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (int i = 0; i < plans.length; i++) ...[
+                  Expanded(child: item(plans[i])),
+                  if (i < plans.length - 1) const SizedBox(width: 10),
+                ],
+              ],
+            ),
+          );
+        } else {
+          // モバイル表示 → 縦並び
+          return Column(children: plans.map((p) => item(p)).toList());
+        }
+      },
     );
   }
 }
