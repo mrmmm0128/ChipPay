@@ -331,7 +331,7 @@ class _AccountDetailScreenState extends State<tenantDetailScreen> {
       final fn = FirebaseFunctions.instanceFor(
         region: 'us-central1',
       ).httpsCallable('cancelSubscription');
-      final res = await fn.call({'agreeNoTrialResume': true});
+      final res = await fn.call({'agreeNoTrialResume': true, 'tenantId': tid});
 
       final data = (res.data as Map?) ?? const {};
       final status = (data['status'] ?? '').toString();
@@ -342,7 +342,7 @@ class _AccountDetailScreenState extends State<tenantDetailScreen> {
           msg = '現在アクティブなサブスクリプションはありません。';
           break;
         case 'canceled_now':
-          msg = '解約しました（トライアル中のため即時反映）。';
+          msg = '解約しました。';
           break;
         case 'cancel_at_period_end':
           final cancelAt = data['cancel_at'];
@@ -353,8 +353,11 @@ class _AccountDetailScreenState extends State<tenantDetailScreen> {
             msg = '解約を受け付けました。次回更新で停止します。';
           }
           break;
+        case "already_cancel_at_period_end":
+          msg = '解約済みです。';
+          break;
         default:
-          msg = '解約リクエストを送信しました。';
+          msg = '解約処理を実行しました。';
       }
 
       if (!mounted) return;
@@ -363,8 +366,7 @@ class _AccountDetailScreenState extends State<tenantDetailScreen> {
       final code = e.code;
       final friendly = switch (code) {
         'unauthenticated' => 'ログイン情報が無効です。再ログインしてお試しください。',
-        'invalid-argument' => '必要な情報が不足しています（tenantId）。',
-        'failed-precondition' => '「トライアル再開不可」に同意してください。',
+
         'permission-denied' => '権限がありません。',
         _ => '解約に失敗: ${e.code} ${e.message ?? ''}',
       };
@@ -396,8 +398,9 @@ class _AccountDetailScreenState extends State<tenantDetailScreen> {
       if (args is Map &&
           args['tenantId'] is String &&
           (args['tenantId'] as String).isNotEmpty) {
-        _tenantId = args['tenantId'] as String;
-        setState(() {});
+        setState(() {
+          _tenantId = args['tenantId'] as String;
+        });
         _loadTenantName();
         _loadAgencyLink(); // 代理店情報も読む
       } else {
@@ -448,7 +451,7 @@ class _AccountDetailScreenState extends State<tenantDetailScreen> {
       // customerId を Firestore から解決
       final customerId = await _resolveStripeCustomerId();
       if (customerId == null || customerId.isEmpty) {
-        throw 'StripeのカスタマーIDを確認できませんでした';
+        throw 'カスタマーIDが見つかりませんでした。運営にお問い合わせお願いします。';
       }
 
       await FirebaseAuth.instance.currentUser?.getIdToken(true);
@@ -1293,6 +1296,7 @@ class _AccountDetailScreenState extends State<tenantDetailScreen> {
       ).showSnackBar(const SnackBar(content: Text('店舗が見つかりません')));
       return;
     }
+    print(_tenantId);
 
     setState(() => _openingConnectPortal = true);
     try {
@@ -1585,10 +1589,10 @@ class _AccountDetailScreenState extends State<tenantDetailScreen> {
                       title: 'コネクトアカウント',
                       subtitle: 'チップ受け取り口座を確認する。',
                       trailing: FilledButton(
-                        onPressed: (_tenantId == null || _loadingInvoices)
+                        onPressed: (_tenantId == null || _openingConnectPortal)
                             ? null
-                            : () => _openConnectPortal,
-                        child: _loadingInvoices
+                            : _openConnectPortal,
+                        child: _openingConnectPortal
                             ? const SizedBox(
                                 width: 16,
                                 height: 16,
@@ -1635,10 +1639,9 @@ class _AccountDetailScreenState extends State<tenantDetailScreen> {
                           if (cancelAtPeriodEnd) {
                             if (cancelAt != null) {
                               subtitle =
-                                  '解約予定日: ${_fmtYMD(DateTime.fromMillisecondsSinceEpoch(cancelAt * 1000))}（一度解約するとトライアルは再開できません）';
+                                  '解約予定日: ${_fmtYMD(DateTime.fromMillisecondsSinceEpoch(cancelAt * 1000))}';
                             } else {
-                              subtitle =
-                                  '解約は次回更新時に停止します（キャンセル予約中）。一度解約するとトライアルは再開できません。';
+                              subtitle = '解約は次回更新時に停止します（キャンセル予約中）。';
                             }
                           } else {
                             if (status != 'trialing' &&

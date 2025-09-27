@@ -4,6 +4,8 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:yourpay/tenant/newTenant/onboardingSheet.dart';
+// 1) 先頭の import に追加
+import 'dart:math' as math;
 
 class TenantSwitcherBar extends StatefulWidget {
   final String? currentTenantId;
@@ -32,7 +34,7 @@ class TenantSwitcherBar extends StatefulWidget {
     this.onChangedEx, // ★追加
     this.currentTenantId,
     this.currentTenantName,
-    this.padding = const EdgeInsets.fromLTRB(16, 8, 16, 6),
+    this.padding = const EdgeInsets.fromLTRB(10, 4, 10, 4),
   });
 
   @override
@@ -825,13 +827,12 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                       }
                     },
                     decoration: InputDecoration(
-                      labelText: '店舗を選択',
                       labelStyle: const TextStyle(color: Colors.black87),
                       floatingLabelStyle: const TextStyle(color: Colors.black),
                       filled: true,
                       fillColor: Colors.white,
                       contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12,
+                        horizontal: 18,
                         vertical: 8,
                       ),
                       border: OutlineInputBorder(
@@ -844,10 +845,11 @@ class _TenantSwitcherBarState extends State<TenantSwitcherBar> {
                       ),
                     ),
                     menuMaxHeight: 320,
+
                     alignment: Alignment.centerLeft,
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 4),
 
                 // 選択中のときだけ補助ボタンを表示
                 if (selectedRow != null && selectedIsDraft)

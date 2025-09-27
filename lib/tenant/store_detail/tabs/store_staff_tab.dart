@@ -26,6 +26,7 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
   final uid = FirebaseAuth.instance.currentUser?.uid;
   bool _addingEmp = false;
   bool _connected = false;
+  bool _loggingOut = false;
 
   // 公開ページのベースURL（末尾スラなし）
   String get _publicBase {
@@ -57,6 +58,25 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
       }
     } catch (e) {
       if (mounted) setState(() => _connected = false);
+    }
+  }
+
+  Future<void> logout() async {
+    if (_loggingOut) return;
+    setState(() => _loggingOut = true);
+    try {
+      await FirebaseAuth.instance.signOut();
+      if (!mounted) return;
+
+      // 画面スタックを全消しして /login (BootGate) へ
+      Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('ログアウトに失敗: $e')));
+    } finally {
+      if (mounted) setState(() => _loggingOut = false);
     }
   }
 
@@ -434,7 +454,54 @@ class _StoreStaffTabState extends State<StoreStaffTab> {
               ],
             ),
           )
-        : Scaffold(body: Center(child: Text("新規登録を完了すると、スタッフを追加することができます。")));
+        : Scaffold(
+            body: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Center(child: Text("サブスクリプションを登録してください")),
+                  const SizedBox(height: 30),
+                  Container(
+                    margin: const EdgeInsets.symmetric(
+                      vertical: 8,
+                      horizontal: 16,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      border: Border.all(color: Colors.black26),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(999),
+                      onTap: logout,
+                      child: const Padding(
+                        padding: EdgeInsets.symmetric(
+                          vertical: 12,
+                          horizontal: 20,
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.logout, color: Colors.black87, size: 18),
+                            SizedBox(width: 8),
+                            Text(
+                              'ログアウト',
+                              style: TextStyle(
+                                color: Colors.black87,
+                                fontWeight: FontWeight.w700,
+                                fontFamily: "LINEseed",
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
   }
 }
 

@@ -616,7 +616,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
             return _PosterOption.remote(
               d.id,
               (m['url'] ?? '') as String,
-              label: (m['name'] ?? 'ポスター') as String,
+              label: (""),
             );
           }),
         ];
@@ -636,6 +636,11 @@ class _StoreQrTabState extends State<StoreQrTab> {
         final currentPosterId = options.any((o) => o.id == _selectedPosterId)
             ? _selectedPosterId
             : (options.isNotEmpty ? options.first.id : null);
+
+        final shouldDrawQr =
+            (_connected == true) &&
+            _publicStoreUrl != null &&
+            _publicStoreUrl!.isNotEmpty;
 
         Widget paperSelector() => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -736,13 +741,13 @@ class _StoreQrTabState extends State<StoreQrTab> {
         Widget posterPicker() => Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'ポスターを選択',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                color: black78,
-                fontFamily: "LINEseed",
-              ),
-            ),
+            // Text(
+            //   'ポスターを選択',
+            //   style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            //     color: black78,
+            //     fontFamily: "LINEseed",
+            //   ),
+            // ),
             const SizedBox(height: 8),
             SizedBox(
               height: 108,
@@ -754,6 +759,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
                   final opt = options[i];
                   final selected =
                       (currentPosterId != null && opt.id == currentPosterId);
+
                   return GestureDetector(
                     onTap: () => setState(() => _selectedPosterId = opt.id),
                     child: Column(
@@ -771,7 +777,8 @@ class _StoreQrTabState extends State<StoreQrTab> {
                           clipBehavior: Clip.antiAlias,
                           child: opt.isAsset
                               ? Image.asset(opt.assetPath!, fit: BoxFit.cover)
-                              : Image.network(
+                              : isC
+                              ? Image.network(
                                   opt.url!,
                                   fit: BoxFit.cover,
                                   loadingBuilder: (ctx, child, progress) =>
@@ -785,7 +792,8 @@ class _StoreQrTabState extends State<StoreQrTab> {
                                   errorBuilder: (ctx, err, st) => const Center(
                                     child: Icon(Icons.broken_image),
                                   ),
-                                ),
+                                )
+                              : Center(child: Text("使用不可")),
                         ),
                         const SizedBox(height: 6),
                         SizedBox(
@@ -908,29 +916,38 @@ class _StoreQrTabState extends State<StoreQrTab> {
         );
 
         Widget connectNotice() => (!_connected!)
-            ? Card(
-                elevation: 4,
-                shadowColor: Colors.black26,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: ListTile(
-                  leading: const CircleAvatar(
-                    backgroundColor: Colors.amber,
-                    foregroundColor: Colors.black,
-                    child: Icon(Icons.info_outline),
-                  ),
+            ? Column(
+                children: [
+                  Card(
+                    elevation: 4,
+                    shadowColor: Colors.black26,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: ListTile(
+                      leading: const CircleAvatar(
+                        backgroundColor: Colors.amber,
+                        foregroundColor: Colors.black,
+                        child: Icon(Icons.info_outline),
+                      ),
 
-                  trailing: FilledButton(
-                    style: primary,
-                    onPressed: () =>
-                        startOnboarding(widget.tenantId, widget.tenantName!),
-                    child: const Text(
-                      'コネクトアカウント作成未完了',
-                      style: TextStyle(fontFamily: 'LINEseed'),
+                      trailing: FilledButton(
+                        style: primary,
+                        onPressed: () => startOnboarding(
+                          widget.tenantId,
+                          widget.tenantName!,
+                        ),
+                        child: const Text(
+                          'コネクトアカウント作成未完了',
+                          style: TextStyle(fontFamily: 'LINEseed'),
+                        ),
+                      ),
                     ),
                   ),
-                ),
+                  Text(
+                    "コネクトアカウントを作成し、チップを受け取る準備を完了しましょう\n QRコードが表示され、お客様がチップ送信ページに遷移可能に",
+                  ),
+                ],
               )
             : const SizedBox.shrink();
 
@@ -966,13 +983,17 @@ class _StoreQrTabState extends State<StoreQrTab> {
                   );
                   final posterWidget = selected.isAsset
                       ? Image.asset(selected.assetPath!, fit: BoxFit.cover)
-                      : Image.network(selected.url!, fit: BoxFit.cover);
+                      : isC
+                      ? Image.network(selected.url!, fit: BoxFit.cover)
+                      : null;
 
                   final left = _qrPos.dx * w - boxSidePx / 2;
                   final top = _qrPos.dy * h - boxSidePx / 2;
 
                   final showQr =
-                      _publicStoreUrl != null && _publicStoreUrl!.isNotEmpty;
+                      (_connected == true) &&
+                      _publicStoreUrl != null &&
+                      _publicStoreUrl!.isNotEmpty;
 
                   // ★ ここを必ず return する！
                   return Stack(
@@ -1088,7 +1109,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
                         const SizedBox(height: 16),
                         qrControls(),
                         const SizedBox(height: 12),
-                        urlButton(context),
+                        if (_connected!) ...[urlButton(context)],
                       ],
                     ),
                   ),
@@ -1103,7 +1124,9 @@ class _StoreQrTabState extends State<StoreQrTab> {
                       )
                     : Expanded(
                         child: Center(
-                          child: Text("初期登録を終えると、QRコードを含んだポスターを作成することができます。"),
+                          child: Text(
+                            "コネクトアカウントを作成すると、QRコードを含んだポスターを作成することができます",
+                          ),
                         ),
                       ),
               ],
@@ -1135,7 +1158,7 @@ class _StoreQrTabState extends State<StoreQrTab> {
                 const SizedBox(height: 16),
                 previewPane(),
                 const SizedBox(height: 12),
-                urlButton(context),
+                if (_connected!) ...[urlButton(context)],
                 const SizedBox(height: 16),
                 qrControls(),
               ],

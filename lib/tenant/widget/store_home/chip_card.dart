@@ -197,6 +197,7 @@ class _MetricCardMini extends StatelessWidget {
                               style: const TextStyle(
                                 color: Colors.black87,
                                 fontWeight: FontWeight.w600,
+                                fontSize: 13,
                               ),
                               overflow: TextOverflow.ellipsis,
                             ),

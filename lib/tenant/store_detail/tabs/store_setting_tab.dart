@@ -357,10 +357,10 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
     DocumentReference<Map<String, dynamic>> tenantRef,
   ) async {
     final percentText = _storePercentCtrl.text.trim();
-    final fixedText = _storeFixedCtrl.text.trim();
+    // final fixedText = _storeFixedCtrl.text.trim();
 
     double p = double.tryParse(percentText.replaceAll('％', '')) ?? 0.0;
-    int f = int.tryParse(fixedText.replaceAll('円', '')) ?? 0;
+    //int f = int.tryParse(fixedText.replaceAll('円', '')) ?? 0;
 
     if (p.isNaN || p < 0) p = 0;
     if (p > 100) p = 100;
@@ -457,7 +457,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
 
       final sub = (tData?['subscription'] as Map<String, dynamic>?) ?? {};
       final subId = sub['stripeSubscriptionId'] as String?;
-      final status = (sub['status'] as String?) ?? '';
+      //final status = (sub['status'] as String?) ?? '';
 
       // サブスク未契約 → Checkout へ
       if (subId == null || subId.isEmpty) {
@@ -1261,8 +1261,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                       final ts = pending['effectiveFrom'];
                                       if (ts is Timestamp) eff = ts.toDate();
                                       eff ??= _firstDayOfNextMonth();
-                                      final ym =
-                                          '${eff.year}/${eff.month.toString()}';
+
                                       return Container(
                                         width: double.infinity,
                                         padding: const EdgeInsets.all(12),
@@ -1287,7 +1286,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
                                             const SizedBox(width: 8),
                                             Expanded(
                                               child: Text(
-                                                'この変更は「今月分（$ym）の明細」から自動適用されます。',
+                                                'この変更は「今月分の明細」から自動適用されます。',
                                                 style: const TextStyle(
                                                   color: Colors.black87,
                                                   fontFamily: "LINEseed",
@@ -1698,7 +1697,7 @@ class _StoreSettingsTabState extends State<StoreSettingsTab> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Text("新規登録を完了してください"),
+                  const Text("サブスクリプションを登録してください"),
                   const SizedBox(height: 30),
                   Container(
                     margin: const EdgeInsets.symmetric(

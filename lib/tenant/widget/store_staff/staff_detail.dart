@@ -420,11 +420,6 @@ class _StaffDetailScreenState extends State<StaffDetailScreen> {
                         const SizedBox(height: 8),
                         Center(child: QrImageView(data: tipUrl, size: 180)),
                         const SizedBox(height: 8),
-                        SelectableText(
-                          tipUrl,
-                          style: const TextStyle(color: Colors.black87),
-                        ),
-                        const SizedBox(height: 8),
                         Wrap(
                           spacing: 8,
                           children: [
